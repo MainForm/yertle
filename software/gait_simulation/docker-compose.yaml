@@ -1,0 +1,31 @@
+services:
+  # Interactive development container for running and debugging Yertle.
+  yertle-dev:
+    # Start this service only when the development profile is enabled.
+    profiles:
+      - dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # The project directory is mounted at /app below.
+    working_dir: /app
+    # Keep the container in an interactive Bash shell instead of starting the UI.
+    command: /bin/bash
+    environment:
+      # Forward the host display so GUI applications can open windows.
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      # Avoid creating __pycache__ files in the host-mounted source tree.
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      # Mount the source tree so edits in VS Code are available immediately.
+      - ./workspace:/app
+      # Share the host X11 socket with GUI applications in the container.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    # Provide additional shared memory for GUI and graphics workloads.
+    shm_size: 512m
+    # Keep standard input and a TTY available for the interactive shell.
+    stdin_open: true
+    tty: true
+    # Use a minimal init process to handle signals and child processes cleanly.
+    init: true
