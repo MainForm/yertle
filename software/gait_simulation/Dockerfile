@@ -5,7 +5,8 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    VIRTUAL_ENV=/opt/venv
+    VIRTUAL_ENV=/opt/venv \
+    HOME=/home/ubuntu
 
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
@@ -44,6 +45,10 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
         "numpy>=1.24" \
         "pybullet>=3.2" \
         "ikpy>=3.3" \
-        "keyboard>=0.13"
+        "keyboard>=0.13" \
+    && chown -R ubuntu:ubuntu "${VIRTUAL_ENV}" /app
+
+# Ubuntu 24.04 provides the non-root ubuntu user with UID and GID 1000.
+USER ubuntu
 
 CMD ["/bin/bash"]

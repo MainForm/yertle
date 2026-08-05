@@ -45,16 +45,16 @@ runs until you press `Ctrl+C`.
 
 The Compose configuration forwards the host's `DISPLAY` variable and mounts the
 X11 socket into the container. If the container cannot open a GUI window, allow
-the container's root user to access the X server before starting it:
+your local user to access the X server before starting it:
 
 ```bash
-xhost +local:root
+xhost +SI:localuser:$(whoami)
 ```
 
 Revoke the permission when you are finished:
 
 ```bash
-xhost -local:root
+xhost -SI:localuser:$(whoami)
 ```
 
 ## Installed Python Libraries
