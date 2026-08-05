@@ -6,6 +6,8 @@ from pathlib import Path
 import pybullet as p
 import pybullet_data
 
+from .urdf_manager import URDFManager
+from .urdf_object import URDFObject
 
 class Simulation:
     # ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ class Simulation:
 
         self._fps = fps
         self._closed = False
+
+        self._urdf_manager = URDFManager(self._physics_client)
 
         p.setAdditionalSearchPath(
             pybullet_data.getDataPath(),
@@ -67,7 +71,6 @@ class Simulation:
         self._ensure_open()
         return self._physics_client
 
-
     def step(self) -> None:
         """Advance the physics world by one configured time step."""
         p.stepSimulation(physicsClientId=self._physics_client)
@@ -81,10 +84,37 @@ class Simulation:
         """Invalidate all objects and close the owned PyBullet world."""
         if self._closed:
             return
+        
+        self._urdf_manager.close()
 
         if p.isConnected(self._physics_client):
             p.disconnect(self._physics_client)
         self._closed = True
+
+    # URDF Management methods
+
+    def load_urdf(
+        self,
+        path: str | Path,
+        base_position: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        base_orientation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+        use_fixed_base: bool = False,
+        global_scaling: float = 1.0,
+    ) -> URDFObject:
+        """Load a general URDF object and transfer ownership to Simulation."""
+        self._ensure_open()
+        return self._urdf_manager.load(
+            path,
+            base_position,
+            base_orientation,
+            use_fixed_base,
+            global_scaling,
+        )
+
+    def remove_urdf(self, obj: URDFObject) -> None:
+        """Remove one object owned by this simulation."""
+        self._ensure_open()
+        self._urdf_manager.remove(obj)
 
     # endregion
     # ---------------------------------------------------------------------------

@@ -8,10 +8,12 @@ def main() -> None:
     try:
         with Simulation(fps=240, use_gui=True) as simulation:
 
+            simulation.load_urdf("plane.urdf", use_fixed_base=True)
+
             print("Simulation is running. Press Ctrl+C to stop.")
             while simulation.is_running():
                 simulation.step()
-                
+
     except KeyboardInterrupt:
         print("Stopping the simulation.")
 
