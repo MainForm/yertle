@@ -24,6 +24,12 @@ parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--video_length", type=int, default=400)
+parser.add_argument("--keyboard", action="store_true", help="Control vx, vy, and yaw from this terminal.")
+parser.add_argument("--vx", type=float, default=0.0)
+parser.add_argument("--vy", type=float, default=0.0)
+parser.add_argument("--yaw-rate", dest="yaw_rate", type=float, default=0.0)
+parser.add_argument("--step-v", type=float, default=0.05)
+parser.add_argument("--step-yaw", type=float, default=0.10)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.video:
@@ -42,16 +48,70 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover
+    msvcrt = None
+
+
+VX_RANGE = (-0.5, 0.3)
+VY_RANGE = (-0.2, 0.2)
+YAW_RANGE = (-1.0, 1.0)
+
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-Play-v0", YertleFlatEnvCfg_PLAY, YertleFlatPPORunnerCfg),
     "rough": ("Isaac-Velocity-Rough-Yertle-Play-v0", YertleRoughEnvCfg_PLAY, YertleRoughPPORunnerCfg),
 }
 
 
+def clamp(value, lo, hi):
+    return max(lo, min(hi, value))
+
+
+def read_key():
+    if msvcrt is None or not msvcrt.kbhit():
+        return None
+    key = msvcrt.getwch()
+    if key in ("\x00", "\xe0") and msvcrt.kbhit():
+        key += msvcrt.getwch()
+    return key.lower()
+
+
+def update_from_keyboard(command, step_v, step_yaw):
+    key = read_key()
+    if key is None:
+        return False, False
+    if key == "w": command[0] = clamp(command[0] + step_v, *VX_RANGE)
+    elif key == "s": command[0] = clamp(command[0] - step_v, *VX_RANGE)
+    elif key == "q": command[1] = clamp(command[1] + step_v, *VY_RANGE)
+    elif key == "e": command[1] = clamp(command[1] - step_v, *VY_RANGE)
+    elif key == "a": command[2] = clamp(command[2] + step_yaw, *YAW_RANGE)
+    elif key == "d": command[2] = clamp(command[2] - step_yaw, *YAW_RANGE)
+    elif key == " ": command[:] = [0.0, 0.0, 0.0]
+    elif key in ("x", "\x1b"): return False, True
+    else: return False, False
+    return True, False
+
+
+def apply_command(base_env, command_tensor):
+    term = base_env.command_manager.get_term("base_velocity")
+    term.vel_command_b[:, :] = command_tensor
+    term.is_standing_env[:] = False
+    if hasattr(term, "is_heading_env"):
+        term.is_heading_env[:] = False
+    term.time_left[:] = 1.0e6
+
+
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.keyboard:
+        env_cfg.commands.base_velocity.resampling_time_range = (1.0e6, 1.0e6)
+        env_cfg.commands.base_velocity.rel_standing_envs = 0.0
+        env_cfg.commands.base_velocity.rel_heading_envs = 0.0
+        env_cfg.commands.base_velocity.heading_command = False
+        env_cfg.commands.base_velocity.debug_vis = False
     agent_cfg = RunnerCfg()
 
     env = gym.make(TASK, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -66,6 +126,7 @@ def main():
         )
         print(f"PLAY_VIDEO_DIR {video_folder}", flush=True)
 
+    base_env = env.unwrapped
     env = RslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
@@ -77,8 +138,22 @@ def main():
         obs = obs[0]
 
     print("PLAY_START", flush=True)
+    command = [clamp(args_cli.vx, *VX_RANGE), clamp(args_cli.vy, *VY_RANGE), clamp(args_cli.yaw_rate, *YAW_RANGE)]
+    command_tensor = torch.tensor(command, device=base_env.device, dtype=torch.float32).repeat(base_env.num_envs, 1)
+    if args_cli.keyboard:
+        apply_command(base_env, command_tensor)
+        print("W/S: vx, Q/E: vy, A/D: yaw, Space: stop, X: quit", flush=True)
+        print(f"COMMAND vx={command[0]:.2f} vy={command[1]:.2f} yaw={command[2]:.2f}", flush=True)
     with torch.inference_mode():
         for _ in range(args_cli.steps):
+            if args_cli.keyboard:
+                changed, should_quit = update_from_keyboard(command, args_cli.step_v, args_cli.step_yaw)
+                if should_quit:
+                    break
+                command_tensor[:] = torch.tensor(command, device=base_env.device, dtype=torch.float32)
+                apply_command(base_env, command_tensor)
+                if changed:
+                    print(f"COMMAND vx={command[0]:.2f} vy={command[1]:.2f} yaw={command[2]:.2f}", flush=True)
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
             if isinstance(obs, tuple):
