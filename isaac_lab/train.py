@@ -26,6 +26,13 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument("--num_envs", type=int, default=4096)
 parser.add_argument("--max_iterations", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0)
+parser.add_argument("--checkpoint", default=None, help="Optional compatible 55-D model_*.pt to resume.")
+parser.add_argument("--enable-disturbance", action="store_true")
+parser.add_argument("--force-body-weight", type=float, default=1.0)
+parser.add_argument("--push-duration", type=float, default=0.10)
+parser.add_argument("--push-interval-min", type=float, default=3.0)
+parser.add_argument("--push-interval-max", type=float, default=6.0)
+parser.add_argument("--perturbed-env-fraction", type=float, default=0.30)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -41,6 +48,7 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 # Make the repo root importable so `import isaac_lab` works, then register tasks.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import isaac_lab  # noqa: F401,E402  (registers the gym task)
+from isaac_lab.disturbance_cfg import TimedPlanarForceImpulse  # noqa: E402
 from isaac_lab.flat_env_cfg import YertleFlatEnvCfg  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
@@ -54,6 +62,17 @@ _TASKS = {
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.task == "flat" and args_cli.enable_disturbance:
+        env_cfg.sim.physx.enable_external_forces_every_iteration = True
+        env_cfg.events.base_external_force_torque = None
+        env_cfg.events.planar_force_impulse = TimedPlanarForceImpulse.event_cfg(
+            control_dt=env_cfg.decimation * env_cfg.sim.dt,
+            enabled=True,
+            force_body_weight=args_cli.force_body_weight,
+            duration_s=args_cli.push_duration,
+            interval_s=(args_cli.push_interval_min, args_cli.push_interval_max),
+            perturbed_env_fraction=args_cli.perturbed_env_fraction,
+        )
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
 
@@ -71,12 +90,18 @@ def main():
     env = RslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    if args_cli.checkpoint:
+        runner.load(args_cli.checkpoint, load_optimizer=True, map_location=agent_cfg.device)
+        print(f"RESUME_CHECKPOINT {args_cli.checkpoint}", flush=True)
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
     print(f"TRAIN_START task={TASK} num_envs={args_cli.num_envs} iters={args_cli.max_iterations}", flush=True)
     print(f"TRAIN_LOGDIR {log_dir}", flush=True)
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    runner.learn(
+        num_learning_iterations=agent_cfg.max_iterations,
+        init_at_random_ep_len=args_cli.checkpoint is None,
+    )
     print("TRAIN_DONE", flush=True)
 
     env.close()

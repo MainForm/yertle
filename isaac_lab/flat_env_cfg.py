@@ -6,11 +6,11 @@ Yertle's (base_link, feet = ``*_shin``) and tuning for a small robot.
 """
 
 import math
-
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
+from .disturbance_cfg import TimedPlanarForceImpulse
 from .flat_env_cfg_reward import configure_rewards
 from .gait_scheduler import GaitScheduler
 from . import phase_generator
@@ -69,10 +69,13 @@ class YertleFlatEnvCfg(LocomotionVelocityRoughEnvCfg):
         policy.gait_mode_one_hot = ObsTerm(func=phase_generator.gait_mode_one_hot, params={"command_name": "base_velocity"})
         policy.gait_frequency_hz = ObsTerm(func=phase_generator.gait_frequency, params={"command_name": "base_velocity"})
         policy.gait_duty_factor = ObsTerm(func=phase_generator.gait_duty_factor, params={"command_name": "base_velocity"})
+        # Automatic disturbance defaults to disabled inside the event term.
+        self.events.planar_force_impulse = TimedPlanarForceImpulse.event_cfg(
+            control_dt=self.decimation * self.sim.dt,
+        )
 
         # --- terminations ---
         self.terminations.base_contact.params["sensor_cfg"].body_names = _BASE
-
 
 @configclass
 class YertleFlatEnvCfg_PLAY(YertleFlatEnvCfg):
