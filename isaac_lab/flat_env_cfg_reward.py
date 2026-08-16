@@ -13,6 +13,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity import mdp
 from isaaclab_tasks.manager_based.locomotion.velocity.config.spot.mdp.rewards import GaitReward
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
+from . import phase_generator
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
 SHOULDER_NAMES = ("lf_shoulder", "rf_shoulder", "lb_shoulder", "rb_shoulder")
@@ -58,6 +59,10 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.feet_contact_forces = RewTerm(func=mdp.contact_forces, weight=-0.01, params={"threshold": 5.0, "sensor_cfg": CONTACT_SENSOR})
     rewards.diagonal_trot_gait = RewTerm(func=GaitReward, weight=0.25, params={"std": 0.1, "max_err": 0.2, "velocity_threshold": 0.05, "synced_feet_pair_names": (("lf_shin", "rb_shin"), ("rf_shin", "lb_shin")), "asset_cfg": SceneEntityCfg("robot"), "sensor_cfg": SceneEntityCfg("contact_forces")})
+    rewards.diagonal_trot_gait = None
+    rewards.phase_contact_schedule = RewTerm(func=phase_generator.phase_contact_schedule, weight=0.20, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+    rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
+    rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
 
 
 def air_time_variance_penalty(env, sensor_cfg: SceneEntityCfg, max_time: float = 0.5):

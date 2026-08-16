@@ -7,10 +7,13 @@ Yertle's (base_link, feet = ``*_shin``) and tuning for a small robot.
 
 import math
 
+from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
 from .flat_env_cfg_reward import configure_rewards
+from .gait_scheduler import GaitScheduler
+from . import phase_generator
 from .yertle_cfg import YERTLE_CFG
 
 _BASE = "base_link"
@@ -33,7 +36,8 @@ class YertleFlatEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.curriculum.terrain_levels = None
 
         # --- command ranges: Yertle has ~20 cm legs, so slower than a Go2 ---
-        self.commands.base_velocity.ranges.lin_vel_x = (-0.3, 0.5)
+        self.commands.base_velocity.class_type = GaitScheduler
+        self.commands.base_velocity.ranges.lin_vel_x = (-0.50, 0.30)
         self.commands.base_velocity.ranges.lin_vel_y = (-0.2, 0.2)
         self.commands.base_velocity.ranges.ang_vel_z = (-1.0, 1.0)
         self.commands.base_velocity.ranges.heading = (-math.pi, math.pi)
@@ -58,6 +62,13 @@ class YertleFlatEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # --- rewards (Yertle terms and their weights live in a focused module) ---
         configure_rewards(self)
+
+        # --- phase observations: the generator only calculates these terms ---
+        policy = self.observations.policy
+        policy.phase_sin_cos = ObsTerm(func=phase_generator.phase_clock_sin_cos, params={"command_name": "base_velocity"})
+        policy.gait_mode_one_hot = ObsTerm(func=phase_generator.gait_mode_one_hot, params={"command_name": "base_velocity"})
+        policy.gait_frequency_hz = ObsTerm(func=phase_generator.gait_frequency, params={"command_name": "base_velocity"})
+        policy.gait_duty_factor = ObsTerm(func=phase_generator.gait_duty_factor, params={"command_name": "base_velocity"})
 
         # --- terminations ---
         self.terminations.base_contact.params["sensor_cfg"].body_names = _BASE

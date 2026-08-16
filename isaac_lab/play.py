@@ -44,6 +44,7 @@ from isaaclab_rl.rsl_rl import RslRlVecEnvWrapper  # noqa: E402
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import isaac_lab  # noqa: F401,E402  (registers tasks)
+from isaac_lab import phase_generator  # noqa: E402
 from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
@@ -57,6 +58,7 @@ except ImportError:  # pragma: no cover
 VX_RANGE = (-0.5, 0.3)
 VY_RANGE = (-0.2, 0.2)
 YAW_RANGE = (-1.0, 1.0)
+GAIT_MODE_NAMES = ("walk", "trot", "bound")
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-Play-v0", YertleFlatEnvCfg_PLAY, YertleFlatPPORunnerCfg),
@@ -102,6 +104,16 @@ def apply_command(base_env, command_tensor):
     term.time_left[:] = 1.0e6
 
 
+def gait_status(base_env):
+    phase, mode_ids, frequencies, duties, _ = phase_generator._gait_state(base_env, "base_velocity")
+    mode_id = int(mode_ids[0].item())
+    label = GAIT_MODE_NAMES[mode_id]
+    if mode_id == 2:
+        direction = "front->rear" if base_env.command_manager.get_command("base_velocity")[0, 0].item() > 0.0 else "rear->front"
+        label = f"bound ({direction})"
+    return f"GAIT mode={label} frequency={frequencies[0].item():.2f}Hz duty={duties[0].item():.2f} phase={phase[0].item():.2f}"
+
+
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
@@ -144,6 +156,8 @@ def main():
         apply_command(base_env, command_tensor)
         print("W/S: vx, Q/E: vy, A/D: yaw, Space: stop, X: quit", flush=True)
         print(f"COMMAND vx={command[0]:.2f} vy={command[1]:.2f} yaw={command[2]:.2f}", flush=True)
+        if args_cli.task == "flat":
+            print(gait_status(base_env), flush=True)
     with torch.inference_mode():
         for _ in range(args_cli.steps):
             if args_cli.keyboard:
@@ -154,6 +168,8 @@ def main():
                 apply_command(base_env, command_tensor)
                 if changed:
                     print(f"COMMAND vx={command[0]:.2f} vy={command[1]:.2f} yaw={command[2]:.2f}", flush=True)
+                    if args_cli.task == "flat":
+                        print(gait_status(base_env), flush=True)
             actions = policy(obs)
             obs, _, _, _ = env.step(actions)
             if isinstance(obs, tuple):
