@@ -59,7 +59,7 @@ class URDFManager:
         self._ensure_open()
         body_id = obj.body_id
         if self._objects.get(body_id) is not obj:
-            raise ValueError("This URDF object is not registered with this Simulation.")
+            raise ValueError("This URDF object is not registered with this Simulator.")
 
         p.removeBody(body_id, physicsClientId=self._physics_client)
         del self._objects[body_id]

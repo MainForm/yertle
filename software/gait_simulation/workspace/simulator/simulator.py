@@ -1,4 +1,4 @@
-"""PyBullet simulation lifecycle and public object-management API."""
+"""PyBullet simulator lifecycle and public object-management API."""
 
 import time
 from pathlib import Path
@@ -9,7 +9,7 @@ import pybullet_data
 from .urdf_manager import URDFManager
 from .urdf_object import URDFObject
 
-class Simulation:
+class Simulator:
     # ---------------------------------------------------------------------------
     # region Context Management
 
@@ -41,7 +41,7 @@ class Simulation:
 
 
     # __enter__ and __exit__ support the with statement.
-    def __enter__(self) -> "Simulation":
+    def __enter__(self) -> "Simulator":
         self._ensure_open()
         return self
 
@@ -57,7 +57,7 @@ class Simulation:
 
     def _ensure_open(self) -> None:
         if not self.is_running():
-            raise RuntimeError("Simulation is already closed.")
+            raise RuntimeError("Simulator is already closed.")
 
     # endregion
     # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ class Simulation:
         use_fixed_base: bool = False,
         global_scaling: float = 1.0,
     ) -> URDFObject:
-        """Load a general URDF object and transfer ownership to Simulation."""
+        """Load a general URDF object and transfer ownership to Simulator."""
         self._ensure_open()
         return self._urdf_manager.load(
             path,

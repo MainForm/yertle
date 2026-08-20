@@ -1,8 +1,8 @@
-# Simulation Class Diagram
+# Simulator Class Diagram
 
 ```mermaid
 classDiagram
-    class Simulation {
+    class Simulator {
         -int physics_client
         -int fps
         -bool closed
@@ -35,11 +35,11 @@ classDiagram
         +get_base_pose() tuple
     }
 
-    Simulation "1" *-- "1" URDFManager : owns
+    Simulator "1" *-- "1" URDFManager : owns
     URDFManager "1" *-- "0..*" URDFObject : manages
-    Simulation ..> URDFObject : returns and removes
+    Simulator ..> URDFObject : returns and removes
 ```
 
-`Simulation` owns the PyBullet connection and delegates URDF lifecycle
+`Simulator` owns the PyBullet connection and delegates URDF lifecycle
 operations to `URDFManager`. The manager creates and tracks each `URDFObject`,
 while `URDFObject` acts as a handle to a body loaded in the simulation.

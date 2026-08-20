@@ -20,6 +20,8 @@ services:
     volumes:
       # Mount the source tree so edits in VS Code are available immediately.
       - ./workspace:/app
+      # Mount the robot URDF and its mesh assets as read-only simulation resources.
+      - ../../simulation:/app/simulation:ro
       # Share the host X11 socket with GUI applications in the container.
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     # Provide additional shared memory for GUI and graphics workloads.
