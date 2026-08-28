@@ -61,44 +61,15 @@ class URDFObject:
         if not self._is_valid:
             raise RuntimeError("This URDF object has already been removed or invalidated.")
 
-    # joint methods
-    def _get_all_joint_info(self) -> list[Sequence]:
-        self._ensure_valid()
+    def _ensure_joint_index(self, index):
+        if index not in [info[0] for info in self._joints_info]:
+            raise ValueError(f"Invalid joint index: {index}")
 
-        joints_info : list[Sequence] = []
-        joints_count = p.getNumJoints(
-            self._body_id,
-            physicsClientId=self._physics_client,
-        )
+    def _ensure_motor_index(self, index):
+        if index not in [info[0] for info in self._joints_info if info[2] == p.JOINT_REVOLUTE]:
+            raise ValueError(f"Invalid motor index: {index}")
 
-        for joint_index in range(joints_count):
-            joint_info = p.getJointInfo(
-                self._body_id,
-                joint_index,
-                physicsClientId=self._physics_client,
-            )
-
-            joints_info.append(joint_info)
-
-        return joints_info
-
-    def get_motor_indices(self) -> tuple[int, ...]:
-        self._ensure_valid()
-        return tuple(
-            joint[0]
-            for joint in self._joints_info
-            if joint[2] == p.JOINT_REVOLUTE
-        )
-
-    def get_motor_angle_limits(self) -> dict[int, tuple[float, float]]:
-        # 0 : joint index, 8 : joint min limit, 9 : joint max limit
-        return {
-            info[0]: (info[8], info[9]) 
-            for info in self._joints_info 
-            if info[2] == p.JOINT_REVOLUTE
-        }
-
-    def _validated_angles(
+    def _ensure_motor_angles(
         self,
         target_joint_angles: Sequence[tuple[int, float]],  # int : joint index, float : joint target angle
     ) -> list[tuple[int,float]]:
@@ -125,7 +96,51 @@ class URDFObject:
                 raise ValueError(f"target_angle({target_angle}) is not included in "
                                  f" limit_range(min : {min_limit}, max : {max_limit})")
 
-        return input_joint_angles
+        return input_joint_angles        
+    
+    # joint methods
+    def _get_all_joint_info(self) -> list[Sequence]:
+        self._ensure_valid()
+
+        joints_info : list[Sequence] = []
+        joints_count = p.getNumJoints(
+            self._body_id,
+            physicsClientId=self._physics_client,
+        )
+
+        for joint_index in range(joints_count):
+            joint_info = p.getJointInfo(
+                self._body_id,
+                joint_index,
+                physicsClientId=self._physics_client,
+            )
+
+            joints_info.append(joint_info)
+
+        return joints_info
+
+    def get_joint_state(self,joint_index) -> list:
+        self._ensure_valid()
+        self._ensure_joint_index(joint_index)
+
+        return p.getJointState(self._body_id, joint_index)
+
+    def get_motor_indices(self) -> tuple[int, ...]:
+        self._ensure_valid()
+        return tuple(
+            joint[0]
+            for joint in self._joints_info
+            if joint[2] == p.JOINT_REVOLUTE
+        )
+
+    def get_motor_angle_limits(self) -> dict[int, tuple[float, float]]:
+        # 0 : joint index, 8 : joint min limit, 9 : joint max limit
+        return {
+            info[0]: (info[8], info[9]) 
+            for info in self._joints_info 
+            if info[2] == p.JOINT_REVOLUTE
+        }
+
 
 
     def reset_motor_angle(
@@ -143,17 +158,34 @@ class URDFObject:
             physicsClientId=self._physics_client,
         )
 
+    def set_motor_angle(self, index, angle, force):
+        self._ensure_valid()
+        self._ensure_motor_index(index)
+        self._ensure_motor_angles([(
+            index, angle
+        )])
+
+        p.setJointMotorControl2(
+            bodyUniqueId=self._body_id,
+            jointIndex=index,
+            controlMode=p.POSITION_CONTROL,
+            targetPosition=angle,
+            force=force,
+            physicsClientId=self._physics_client,
+        )
+
     def set_multiple_motors_angle(
         self, 
         motor_controls : Sequence[tuple[int,float,float]] # int : motor_index, float : target_angle, float : force
     ) -> None:
+        self._ensure_valid()
 
         motor_indices = self.get_motor_indices()
 
         if len(motor_indices) != len(motor_controls):
             raise ValueError(f"motor_controls counts{len(motor_controls)} is not match with count of loaded urdf model{len(motor_indices)}")
         
-        self._validated_angles([
+        self._ensure_motor_angles([
             (motor_index, target_angle) 
             for motor_index, target_angle, _ in motor_controls
         ])
