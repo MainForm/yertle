@@ -149,7 +149,7 @@ class URDFObject:
         target_angle : float
     ) -> None:
         
-        self._validated_angles([(motor_index, target_angle)])
+        self._ensure_motor_angles([(motor_index, target_angle)])
 
         p.resetJointState(
             self._body_id,
