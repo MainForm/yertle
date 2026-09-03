@@ -39,6 +39,7 @@ WORKDIR /app
 # - pybullet: Robot physics and gait simulation
 # - ikpy: Inverse kinematics calculations for robot joints
 # - keyboard: Keyboard controls for the simulation
+# - matplotlib: Plotting and visualizing simulation data
 RUN python3 -m venv "${VIRTUAL_ENV}" \
     && python -m pip install --upgrade pip \
     && python -m pip install \
@@ -46,6 +47,7 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
         "pybullet>=3.2" \
         "ikpy>=3.3" \
         "keyboard>=0.13" \
+        "matplotlib>=3.8" \
     && chown -R ubuntu:ubuntu "${VIRTUAL_ENV}" /app
 
 # Ubuntu 24.04 provides the non-root ubuntu user with UID and GID 1000.

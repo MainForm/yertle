@@ -1,4 +1,24 @@
 services:
+  # Run the forward-gait plots and animation directly.
+  show-forward-gait-plot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: python gait_visualization/foward_gait.py
+    environment:
+      # Forward the host display so Matplotlib can open its GUI windows.
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      # Mount the source tree so the service always runs the current script.
+      - ./workspace:/app
+      # Share the host X11 socket with Matplotlib.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    shm_size: 512m
+    init: true
+
   # Interactive development container for running and debugging Yertle.
   yertle-dev:
     # Start this service only when the development profile is enabled.
