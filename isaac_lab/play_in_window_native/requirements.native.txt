@@ -1,0 +1,3 @@
+--extra-index-url https://pypi.nvidia.com
+isaacsim[all,extscache]==5.1.0
+h5py==3.11.0

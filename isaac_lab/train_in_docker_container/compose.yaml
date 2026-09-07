@@ -1,0 +1,119 @@
+name: yertle-isaaclab
+
+x-yertle-image: &yertle-image
+  image: yertle-isaaclab:sim5.1.0-lab2.3.2
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    args:
+      ISAAC_SIM_IMAGE: ${ISAAC_SIM_IMAGE:-nvcr.io/nvidia/isaac-sim:5.1.0}
+      ISAACLAB_VERSION: ${ISAACLAB_VERSION:-2.3.2}
+
+x-yertle-environment: &yertle-environment
+  ACCEPT_EULA: Y
+  PRIVACY_CONSENT: Y
+  YERTLE_SOURCE_DIR: /workspace/yertle
+  YERTLE_PROJECT_DIR: /workspace/yertle/isaac_lab
+  YERTLE_ARTIFACTS_DIR: /workspace/yertle-artifacts
+  YERTLE_REPOSITORY_URL: ${YERTLE_REPOSITORY_URL:-https://github.com/MainForm/yertle.git}
+  YERTLE_GIT_REF: ${YERTLE_GIT_REF:-feature/isaac-lab-rl-locomotion}
+
+x-yertle-volumes: &yertle-volumes
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/source:/workspace/yertle:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/artifacts:/workspace/yertle-artifacts:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/cache/kit:/isaac-sim/kit/cache:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/cache/ov:/root/.cache/ov:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/cache/pip:/root/.cache/pip:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/cache/glcache:/root/.cache/nvidia/GLCache:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/cache/computecache:/root/.nv/ComputeCache:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/logs:/root/.nvidia-omniverse/logs:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/data:/root/.local/share/ov/data:rw
+  - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/documents:/root/Documents:rw
+
+services:
+  source-init:
+    <<: *yertle-image
+    environment: *yertle-environment
+    volumes:
+      - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/source:/workspace/yertle:rw
+    gpus: all
+    ipc: host
+    entrypoint: ["/usr/local/bin/yertle-source-init"]
+    restart: "no"
+
+  container:
+    <<: *yertle-image
+    depends_on:
+      source-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *yertle-environment
+      TRAIN_TASK: ${TRAIN_TASK:-flat}
+      TRAIN_NUM_ENVS: ${TRAIN_NUM_ENVS:-1024}
+      TRAIN_MAX_ITERATIONS: ${TRAIN_MAX_ITERATIONS:-2000}
+      TRAIN_EXTRA_ARGS: ${TRAIN_EXTRA_ARGS:-}
+    volumes: *yertle-volumes
+    gpus: all
+    ipc: host
+    init: true
+    stop_grace_period: 2m
+    # Keep the GPU-enabled development container available for VS Code.
+    command: ["sleep", "infinity"]
+
+  train:
+    <<: *yertle-image
+    depends_on:
+      source-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *yertle-environment
+      TRAIN_TASK: ${TRAIN_TASK:-flat}
+      TRAIN_NUM_ENVS: ${TRAIN_NUM_ENVS:-1024}
+      TRAIN_MAX_ITERATIONS: ${TRAIN_MAX_ITERATIONS:-2000}
+      TRAIN_EXTRA_ARGS: ${TRAIN_EXTRA_ARGS:-}
+    volumes: *yertle-volumes
+    gpus: all
+    ipc: host
+    init: true
+    stop_grace_period: 2m
+    # Preserve the completed training container for log/result inspection.
+    command:
+      - bash
+      - -lc
+      - /usr/local/bin/yertle-train; train_status=$$?; echo "Training exited with status $${train_status}; keeping container running."; exec sleep infinity
+
+  play:
+    <<: *yertle-image
+    depends_on:
+      source-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *yertle-environment
+      PLAY_TASK: ${PLAY_TASK:-flat}
+      PLAY_CHECKPOINT: ${PLAY_CHECKPOINT:-}
+      PLAY_NUM_ENVS: ${PLAY_NUM_ENVS:-1}
+      PLAY_STEPS: ${PLAY_STEPS:-600}
+      PLAY_RENDERING_MODE: ${PLAY_RENDERING_MODE:-performance}
+      PLAY_HEADLESS: ${PLAY_HEADLESS:-1}
+      PLAY_VIDEO: ${PLAY_VIDEO:-0}
+      PLAY_VIDEO_LENGTH: ${PLAY_VIDEO_LENGTH:-400}
+      PLAY_EXTRA_ARGS: ${PLAY_EXTRA_ARGS:-}
+    volumes: *yertle-volumes
+    gpus: all
+    ipc: host
+    init: true
+    stop_grace_period: 2m
+    # Keep the completed playback container available for log/video inspection.
+    command:
+      - bash
+      - -lc
+      - /usr/local/bin/yertle-play; play_status=$$?; echo "Playback exited with status $${play_status}; keeping container running."; exec sleep infinity
+
+  sync-source:
+    <<: *yertle-image
+    profiles: ["maintenance"]
+    environment: *yertle-environment
+    volumes:
+      - ${YERTLE_HOST_ROOT:-${HOME}/Desktop/yertle-isaaclab}/source:/workspace/yertle:rw
+    entrypoint: ["/usr/local/bin/yertle-source-sync"]
+    restart: "no"

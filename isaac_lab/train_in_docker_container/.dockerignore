@@ -1,0 +1,6 @@
+# The image contains only the pinned Isaac Lab installation and deployment
+# scripts. The editable Yertle repository is cloned into a host bind mount at
+# runtime, so never send a local checkout or generated runs to Docker build.
+*
+!docker/
+!docker/**
