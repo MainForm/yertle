@@ -32,10 +32,10 @@ cmake --version
 ninja --version
 ```
 
-## Build the STM32F103RE FreeRTOS firmware image
+## Build the NUCLEO-F103RB FreeRTOS firmware image
 
-The build produces a base STM32F103RE image using the official Cortex-M3
-FreeRTOS port, STM32 startup code and a 512 KB flash / 64 KB RAM linker script.
+The build produces a base NUCLEO-F103RB image using the official Cortex-M3
+FreeRTOS port, STM32 startup code and a 128 KB flash / 20 KB RAM linker script.
 It currently runs a scheduler smoke-test task only; HAL/LL, servo UART, Mowibox
 and robot-control tasks are added in later steps.
 
@@ -48,17 +48,25 @@ The same build can be run manually in the development shell:
 
 ```powershell
 docker compose exec freertos-dev bash
-cmake -S . -B build/stm32f103re -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103re-gcc.cmake
-cmake --build build/stm32f103re --target firmware
+cmake -S . -B build/stm32f103rb -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103rb-gcc.cmake
+cmake --build build/stm32f103rb --target firmware
 ```
 
 Generated firmware artifacts:
 
 ```text
-build/stm32f103re/firmware/yertle_f103        # ELF
-build/stm32f103re/firmware/yertle_f103.bin    # flash image
-build/stm32f103re/firmware/yertle_f103.map    # linker map
+build/stm32f103rb/firmware/yertle_f103rb      # ELF
+build/stm32f103rb/firmware/yertle_f103rb.bin  # flash image
+build/stm32f103rb/firmware/yertle_f103rb.map  # linker map
 ```
+
+## Flash verification shell
+
+The base image exposes a small FreeRTOS shell on `USART2`, 115200 baud, 8N1.
+On a NUCLEO-F103RB, this is normally connected to the ST-Link Virtual COM port;
+on a standalone STM32F103RE board, connect a 3.3 V USB-UART adapter to PA2 (TX),
+PA3 (RX), and GND. After flashing the BIN at `0x08000000` and resetting, open
+the serial port and use `help`, `status`, `heap`, or `reboot`.
 
 Stop the persistent development container when it is not needed:
 

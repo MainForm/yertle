@@ -23,6 +23,6 @@ services:
     init: true
     command: >-
       bash -lc
-      "cmake -S . -B build/stm32f103re -G Ninja
-      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103re-gcc.cmake
-      && cmake --build build/stm32f103re --target firmware"
+      "cmake -S . -B build/stm32f103rb -G Ninja
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103rb-gcc.cmake
+      && cmake --build build/stm32f103rb --target firmware"

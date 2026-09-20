@@ -1,30 +1,33 @@
 set(STM32F1_DEVICE_DIR ${CMAKE_SOURCE_DIR}/third_party/cmsis-device-f1)
 set(CMSIS_CORE_DIR ${CMAKE_SOURCE_DIR}/third_party/CMSIS_5/CMSIS/Core/Include)
-set(STM32F103RE_LINKER_SCRIPT
-    ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/linker/STM32F103XE_FLASH.ld)
+set(STM32F103RB_LINKER_SCRIPT
+    ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/linker/STM32F103XB_FLASH.ld)
 
-add_executable(yertle_f103
+add_executable(yertle_f103rb
     src/main.c
+    src/debug_uart.c
+    src/rtos_shell.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/system_stm32f1xx.c
-    ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/startup_stm32f103xe.s)
+    ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/startup_stm32f103xb.s)
 
-target_compile_definitions(yertle_f103 PRIVATE STM32F103xE)
-target_include_directories(yertle_f103 PRIVATE
+target_compile_definitions(yertle_f103rb PRIVATE STM32F103xB)
+target_include_directories(yertle_f103rb PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${STM32F1_DEVICE_DIR}/Include
     ${CMSIS_CORE_DIR})
-target_link_libraries(yertle_f103 PRIVATE freertos_kernel)
-target_link_options(yertle_f103 PRIVATE
+target_link_libraries(yertle_f103rb PRIVATE freertos_kernel)
+target_link_options(yertle_f103rb PRIVATE
     -nostartfiles
     --specs=nano.specs
     --specs=nosys.specs
     -Wl,--gc-sections
-    -Wl,-T,${STM32F103RE_LINKER_SCRIPT}
-    -Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/yertle_f103.map)
+    -Wl,-T,${STM32F103RB_LINKER_SCRIPT}
+    -Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/yertle_f103rb.map)
 
-add_custom_command(TARGET yertle_f103 POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:yertle_f103>
-            ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103.bin
-    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103.bin
-    COMMENT "Generating yertle_f103.bin")
+add_custom_command(TARGET yertle_f103rb POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:yertle_f103rb>
+            ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103rb.bin
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103rb.bin
+    COMMENT "Generating yertle_f103rb.bin")
 
-add_custom_target(firmware DEPENDS yertle_f103)
+add_custom_target(firmware DEPENDS yertle_f103rb)

@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- * The startup template leaves the MCU on its reset HSI clock (8 MHz).
+ * The NUCLEO-F103RB startup template leaves the MCU on its reset HSI clock (8 MHz).
  * Change this together with a real board clock-initialisation routine when
  * moving to the planned 72 MHz configuration.
  */
@@ -12,7 +12,8 @@
 #define configTICK_RATE_HZ                      ( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES                     8
 #define configMINIMAL_STACK_SIZE                 128
-#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 16 * 1024 ) )
+/* F103RB has 20 KB SRAM; leave headroom for the MSP/interrupt stack. */
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 8 * 1024 ) )
 #define configMAX_TASK_NAME_LEN                  16
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_PREEMPTION                     1
