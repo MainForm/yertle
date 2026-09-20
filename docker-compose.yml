@@ -1,0 +1,28 @@
+services:
+  freertos-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yertle-freertos-dev:bookworm-arm-none-eabi
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    stdin_open: true
+    tty: true
+    init: true
+    command: sleep infinity
+
+  freertos-build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yertle-freertos-dev:bookworm-arm-none-eabi
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    init: true
+    command: >-
+      bash -lc
+      "cmake -S . -B build/stm32f103re -G Ninja
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103re-gcc.cmake
+      && cmake --build build/stm32f103re --target kernel"

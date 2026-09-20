@@ -1,0 +1,15 @@
+# CMake/Ninja build artifacts
+/build/
+/cmake-build-*/
+
+# IDE and editor state
+/.vscode/
+/.idea/
+
+# Firmware outputs
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
