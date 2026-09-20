@@ -14,7 +14,6 @@ target_compile_definitions(freertos_config INTERFACE projCOVERAGE_TEST=0)
 
 add_subdirectory(third_party/FreeRTOS-Kernel)
 
-# This initial target validates the ARM Cortex-M3 FreeRTOS kernel build.
-# A board-specific firmware ELF will be added after startup, linker and HAL files
-# have been selected for the actual STM32F103RE board.
 add_custom_target(kernel DEPENDS freertos_kernel)
+
+add_subdirectory(firmware)

@@ -32,15 +32,16 @@ cmake --version
 ninja --version
 ```
 
-## Build the STM32F103 FreeRTOS kernel
+## Build the STM32F103RE FreeRTOS firmware image
 
-The first build compiles the official FreeRTOS kernel for Cortex-M3 into a
-static library. It intentionally does not create a flashable firmware image
-yet: that needs the chosen board's startup file, linker script and HAL source.
+The build produces a base STM32F103RE image using the official Cortex-M3
+FreeRTOS port, STM32 startup code and a 512 KB flash / 64 KB RAM linker script.
+It currently runs a scheduler smoke-test task only; HAL/LL, servo UART, Mowibox
+and robot-control tasks are added in later steps.
 
 ```powershell
 cd C:\Users\ik\Desktop\yertle-RTOS\freeRTOS
-docker compose run --rm freertos-build
+docker compose run --rm f103-build
 ```
 
 The same build can be run manually in the development shell:
@@ -48,7 +49,15 @@ The same build can be run manually in the development shell:
 ```powershell
 docker compose exec freertos-dev bash
 cmake -S . -B build/stm32f103re -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103re-gcc.cmake
-cmake --build build/stm32f103re --target kernel
+cmake --build build/stm32f103re --target firmware
+```
+
+Generated firmware artifacts:
+
+```text
+build/stm32f103re/firmware/yertle_f103        # ELF
+build/stm32f103re/firmware/yertle_f103.bin    # flash image
+build/stm32f103re/firmware/yertle_f103.map    # linker map
 ```
 
 Stop the persistent development container when it is not needed:

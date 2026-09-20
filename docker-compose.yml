@@ -12,7 +12,7 @@ services:
     init: true
     command: sleep infinity
 
-  freertos-build:
+  f103-build:
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,4 +25,4 @@ services:
       bash -lc
       "cmake -S . -B build/stm32f103re -G Ninja
       -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103re-gcc.cmake
-      && cmake --build build/stm32f103re --target kernel"
+      && cmake --build build/stm32f103re --target firmware"
