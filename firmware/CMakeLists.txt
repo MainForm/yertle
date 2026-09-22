@@ -5,8 +5,8 @@ set(STM32F103RB_LINKER_SCRIPT
 
 add_executable(yertle_f103rb
     src/main.c
-    src/debug_uart.c
-    src/rtos_shell.c
+    src/host_uart.c
+    src/host_protocol.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/system_stm32f1xx.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/startup_stm32f103xb.s)
 

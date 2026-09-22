@@ -1,8 +1,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "debug_uart.h"
-#include "rtos_shell.h"
+#include "host_uart.h"
+#include "host_protocol.h"
 
 /* Required by newlib-nano when the vendor startup invokes __libc_init_array. */
 void _init(void)
@@ -18,27 +18,12 @@ void _fini(void)
  * table, linker script and scheduler can link together.  Hardware drivers and
  * the actual servo tasks are added after this base image is flashed/verified.
  */
-static void startup_task(void *argument)
-{
-    (void) argument;
-
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-}
-
 int main(void)
 {
-    debug_uart_init();
+    host_uart_init();
 
-    (void) xTaskCreate(startup_task,
-                       "startup",
-                       configMINIMAL_STACK_SIZE,
-                       NULL,
-                       tskIDLE_PRIORITY + 1U,
-                       NULL);
-    (void) xTaskCreate(rtos_shell_task,
-                       "shell",
+    (void) xTaskCreate(host_protocol_task,
+                       "host-proto",
                        configMINIMAL_STACK_SIZE * 2U,
                        NULL,
                        tskIDLE_PRIORITY + 1U,
