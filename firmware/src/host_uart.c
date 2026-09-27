@@ -2,12 +2,55 @@
 
 #include "stm32f1xx.h"
 
+#include "board_clock.h"
+
 #define HOST_UART_BAUD 115200U
+#define HOST_RX_CAPACITY 256U
+
+static uint8_t rx_buffer[HOST_RX_CAPACITY];
+static volatile uint16_t rx_head;
+static volatile uint16_t rx_tail;
+static volatile bool rx_discontinuity;
+static volatile bool rx_resync;
+
+/* ISR owns production; the task disables this IRQ briefly while consuming. */
+void USART2_IRQHandler(void)
+{
+    const uint32_t status = USART2->SR;
+    if ((status & (USART_SR_RXNE | USART_SR_ORE | USART_SR_FE | USART_SR_NE |
+                   USART_SR_PE)) == 0U) {
+        return;
+    }
+
+    /* Reading SR then DR clears STM32F1 RXNE and receive error flags. */
+    const uint8_t byte = (uint8_t) USART2->DR;
+    if ((status & (USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE)) != 0U) {
+        rx_tail = rx_head;
+        rx_discontinuity = true;
+        rx_resync = true;
+        return;
+    }
+    if (rx_resync) {
+        if (byte == 0U) {
+            rx_resync = false;
+        }
+        return;
+    }
+
+    const uint16_t next = (uint16_t) ((rx_head + 1U) % HOST_RX_CAPACITY);
+    if (next == rx_tail) {
+        rx_tail = rx_head;
+        rx_discontinuity = true;
+        rx_resync = byte != 0U;
+        return;
+    }
+    rx_buffer[rx_head] = byte;
+    __DMB();
+    rx_head = next;
+}
 
 void host_uart_init(void)
 {
-    SystemCoreClockUpdate();
-
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
     RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
 
@@ -18,8 +61,18 @@ void host_uart_init(void)
     GPIOA->CRL = (GPIOA->CRL & ~(GPIO_CRL_MODE3 | GPIO_CRL_CNF3)) |
                  GPIO_CRL_CNF3_0;
 
-    USART2->BRR = (SystemCoreClock + (HOST_UART_BAUD / 2U)) / HOST_UART_BAUD;
-    USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+    USART2->BRR = (board_apb1_clock_hz() + (HOST_UART_BAUD / 2U)) / HOST_UART_BAUD;
+    rx_head = 0U;
+    rx_tail = 0U;
+    rx_discontinuity = false;
+    rx_resync = false;
+    NVIC_DisableIRQ(USART2_IRQn);
+    NVIC_ClearPendingIRQ(USART2_IRQn);
+    NVIC_SetPriority(USART2_IRQn, 5U);
+    USART2->CR3 = USART_CR3_EIE;
+    USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE |
+                  USART_CR1_RXNEIE | USART_CR1_PEIE;
+    NVIC_EnableIRQ(USART2_IRQn);
 }
 
 void host_uart_write_bytes(const uint8_t *data, size_t length)
@@ -31,12 +84,21 @@ void host_uart_write_bytes(const uint8_t *data, size_t length)
     }
 }
 
-bool host_uart_try_read(uint8_t *byte)
+bool host_uart_try_read(uint8_t *byte, bool *discontinuity)
 {
-    if ((USART2->SR & USART_SR_RXNE) == 0U) {
+    if ((byte == NULL) || (discontinuity == NULL)) {
         return false;
     }
-
-    *byte = (uint8_t) USART2->DR;
-    return true;
+    NVIC_DisableIRQ(USART2_IRQn);
+    __DMB();
+    *discontinuity = rx_discontinuity;
+    rx_discontinuity = false;
+    const bool available = rx_tail != rx_head;
+    if (available) {
+        *byte = rx_buffer[rx_tail];
+        rx_tail = (uint16_t) ((rx_tail + 1U) % HOST_RX_CAPACITY);
+    }
+    __DMB();
+    NVIC_EnableIRQ(USART2_IRQn);
+    return available;
 }

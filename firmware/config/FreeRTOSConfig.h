@@ -4,11 +4,10 @@
 #include <stdint.h>
 
 /*
- * The NUCLEO-F103RB startup template leaves the MCU on its reset HSI clock (8 MHz).
- * Change this together with a real board clock-initialisation routine when
- * moving to the planned 72 MHz configuration.
+ * board_clock_init() uses HSI/2 * 16 = 64 MHz.  This avoids an external-clock
+ * dependency and gives USART1 an exact divisor for the 1 Mbps servo bus.
  */
-#define configCPU_CLOCK_HZ                      ( ( uint32_t ) 8000000 )
+#define configCPU_CLOCK_HZ                      ( ( uint32_t ) 64000000 )
 #define configTICK_RATE_HZ                      ( ( TickType_t ) 1000 )
 #define configMAX_PRIORITIES                     8
 #define configMINIMAL_STACK_SIZE                 128
@@ -42,6 +41,7 @@
 #define xPortSysTickHandler                      SysTick_Handler
 
 #define INCLUDE_vTaskDelay                       1
+#define INCLUDE_xTaskDelayUntil                  1
 #define INCLUDE_vTaskDelete                      1
 #define INCLUDE_vTaskSuspend                     1
 #define INCLUDE_xTaskGetCurrentTaskHandle        1

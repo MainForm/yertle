@@ -3,6 +3,10 @@
 
 #include "host_uart.h"
 #include "host_protocol.h"
+#include "actuator_task.h"
+#include "board_clock.h"
+#include "motor_device.h"
+#include "sensor_task.h"
 
 /* Required by newlib-nano when the vendor startup invokes __libc_init_array. */
 void _init(void)
@@ -14,20 +18,42 @@ void _fini(void)
 }
 
 /*
- * First target-image smoke test.  It proves startup, the STM32F103RB vector
- * table, linker script and scheduler can link together.  Hardware drivers and
- * the actual servo tasks are added after this base image is flashed/verified.
+ * Application startup. Hardware drivers and shared RTOS objects are created
+ * before the scheduler so no task can observe a partially initialized device.
  */
 int main(void)
 {
-    host_uart_init();
+    BaseType_t created;
 
-    (void) xTaskCreate(host_protocol_task,
-                       "host-proto",
-                       configMINIMAL_STACK_SIZE * 2U,
-                       NULL,
-                       tskIDLE_PRIORITY + 1U,
-                       NULL);
+    board_clock_init();
+    host_uart_init();
+    configASSERT(motor_device_init());
+    configASSERT(actuator_task_init());
+    configASSERT(sensor_task_init());
+
+    created = xTaskCreate(host_protocol_task,
+                          "host-proto",
+                          configMINIMAL_STACK_SIZE * 2U,
+                          NULL,
+                          tskIDLE_PRIORITY + 3U,
+                          NULL);
+    configASSERT(created == pdPASS);
+
+    created = xTaskCreate(actuator_task,
+                          "actuator",
+                          configMINIMAL_STACK_SIZE * 2U,
+                          NULL,
+                          tskIDLE_PRIORITY + 4U,
+                          NULL);
+    configASSERT(created == pdPASS);
+
+    created = xTaskCreate(sensor_task,
+                          "sensors",
+                          configMINIMAL_STACK_SIZE * 2U,
+                          NULL,
+                          tskIDLE_PRIORITY + 2U,
+                          NULL);
+    configASSERT(created == pdPASS);
 
     vTaskStartScheduler();
 

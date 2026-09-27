@@ -34,13 +34,12 @@ ninja --version
 
 ## Build the NUCLEO-F103RB FreeRTOS firmware image
 
-The build produces a base NUCLEO-F103RB image using the official Cortex-M3
-FreeRTOS port, STM32 startup code and a 128 KB flash / 20 KB RAM linker script.
-It starts the FreeRTOS host-protocol task. Its explicit safety state machine is
-`BOOT → DISARMED`, with `ARMED` and `FAULT` as the remaining runtime states.
-Timeouts and recoverable safety limits transition directly to `DISARMED` while
-requesting a safe stop. HAL/LL, servo UART, Mowibox and robot-control tasks are
-added later.
+The build produces a NUCLEO-F103RB image using the official Cortex-M3 FreeRTOS
+port, STM32 startup code and a 128 KB flash / 20 KB RAM linker script. It runs
+the host protocol/FSM, actuator and sensor tasks. USART2 remains the ST-LINK
+host link; USART1 drives the FE-URT UART interface at 1 Mbps. The Mowibox pure-C
+protocol layer builds and parses STS3215 packets, while the project-specific
+driver serializes bus access with a FreeRTOS mutex.
 
 ```powershell
 cd C:\Users\ik\Desktop\yertle-RTOS\freeRTOS
@@ -83,17 +82,29 @@ For an isolated one-off shell instead, use:
 docker compose run --rm freertos-dev bash
 ```
 
-## Intended source layout
+## Source layout
 
 ```text
 freeRTOS/
 ├─ Dockerfile
 ├─ docker-compose.yml
-├─ firmware/          # STM32F103 FreeRTOS application (next step)
-├─ third_party/       # FreeRTOS-Kernel, Mowibox, STM32 HAL, etc.
+├─ firmware/          # STM32F103 FreeRTOS application and board drivers
+├─ third_party/       # FreeRTOS, CMSIS and Mowibox STS3215 protocol
 └─ build/             # generated; ignored by Docker build context
 ```
 
-The image contains only generic ARM tooling. Mowibox and the F103 servo-UART
-adapter are deliberately not included yet; they will be added to `firmware/`
-and `third_party/` as source code.
+The Mowibox HAL/RS485 transport is intentionally not compiled. The FE-URT
+module exposes separate UART TX/RX pins, so this firmware uses its own
+CMSIS-based USART1 transport and reuses only Mowibox's hardware-independent
+packet protocol.
+
+## Motor interface wiring
+
+| NUCLEO-F103RB | FE-URT UART side | Purpose |
+|---|---|---|
+| PA9 / USART1_TX | RX | F103 to servo adapter |
+| PA10 / USART1_RX | TX | Servo adapter to F103 |
+| GND | GND | Common signal ground |
+
+The servo supply must come from the external servo power source, not from the
+Nucleo 3.3 V rail. Verify the FE-URT UART logic voltage before connecting it.

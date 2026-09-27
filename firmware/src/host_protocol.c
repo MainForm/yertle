@@ -44,7 +44,8 @@ enum error_code {
 
 enum event_code {
     EVENT_STATE_CHANGED = 1U,
-    EVENT_HOST_LINK_CHANGED = 2U
+    EVENT_HOST_LINK_CHANGED = 2U,
+    EVENT_UNSAFE_REPORTED = 3U
 };
 
 enum state_cause {
@@ -53,7 +54,7 @@ enum state_cause {
     STATE_CAUSE_DISARM_COMMAND = 3U,
     STATE_CAUSE_STOP_COMMAND = 4U,
     STATE_CAUSE_HEARTBEAT_TIMEOUT = 5U,
-    STATE_CAUSE_SAFETY_LIMIT = 7U,
+    STATE_CAUSE_HEARTBEAT_REARM = 6U,
     STATE_CAUSE_FAULT = 8U,
     STATE_CAUSE_FAULT_RESET = 10U
 };
@@ -66,6 +67,7 @@ typedef struct {
     host_fsm_state_t state;
     TickType_t last_host_tick;
     TickType_t last_f103_heartbeat_tick;
+    host_unsafe_reason_t last_reported_unsafe_reason;
     uint16_t tx_sequence;
 } protocol_context_t;
 
@@ -76,7 +78,7 @@ static volatile host_unsafe_reason_t requested_unsafe_reason = HOST_UNSAFE_NONE;
 static volatile bool fault_clearable = false;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
-static volatile bool clear_unsafe_after_safe_stop = false;
+static volatile bool stop_latched = false;
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t length)
 {
@@ -256,8 +258,19 @@ static bool can_arm(const protocol_context_t *context)
 {
     return context->host_connected && (context->state == HOST_FSM_DISARMED) &&
            (pending_safety_action == HOST_SAFETY_ACTION_NONE) &&
-           (requested_unsafe_reason == HOST_UNSAFE_NONE) &&
            (requested_fault_reason == HOST_FAULT_NONE);
+}
+
+static bool can_auto_arm_from_heartbeat(const protocol_context_t *context)
+{
+    return can_arm(context) && !stop_latched;
+}
+
+static void try_auto_arm_from_heartbeat(protocol_context_t *context)
+{
+    if (can_auto_arm_from_heartbeat(context)) {
+        transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_HEARTBEAT_REARM, true);
+    }
 }
 
 static bool validate_frame(const uint8_t *raw, size_t raw_length,
@@ -315,6 +328,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             break;
         }
         context->last_host_tick = xTaskGetTickCount();
+        try_auto_arm_from_heartbeat(context);
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
         break;
     case MESSAGE_ARM:
@@ -323,6 +337,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         } else if (!can_arm(context)) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
         } else {
+            stop_latched = false;
             transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_ARM_COMMAND, true);
             send_result(context, MESSAGE_ACK, type, sequence, 0U);
         }
@@ -336,6 +351,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         break;
     case MESSAGE_STOP:
         if (context->state != HOST_FSM_FAULT) {
+            stop_latched = true;
             transition_state(context, HOST_FSM_DISARMED, STATE_CAUSE_STOP_COMMAND, true);
             request_safe_stop();
         }
@@ -373,7 +389,15 @@ void host_protocol_task(void *argument)
     transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_BOOT_COMPLETE, false);
 
     for (;;) {
-        while (host_uart_try_read(&byte)) {
+        for (;;) {
+            bool discontinuity = false;
+            const bool available = host_uart_try_read(&byte, &discontinuity);
+            if (discontinuity) {
+                context.encoded_length = 0U;
+            }
+            if (!available) {
+                break;
+            }
             if (byte == 0U) {
                 if (context.encoded_length > 0U) {
                     size_t decoded_length = 0U;
@@ -394,20 +418,19 @@ void host_protocol_task(void *argument)
         if (safe_stop_completed) {
             safe_stop_completed = false;
             pending_safety_action = HOST_SAFETY_ACTION_NONE;
-            if (clear_unsafe_after_safe_stop) {
-                requested_unsafe_reason = HOST_UNSAFE_NONE;
-                clear_unsafe_after_safe_stop = false;
-            }
         }
 
         if ((requested_fault_reason != HOST_FAULT_NONE) && (context.state != HOST_FSM_FAULT)) {
             transition_state(&context, HOST_FSM_FAULT, STATE_CAUSE_FAULT, true);
             request_safe_stop();
-        } else if ((requested_unsafe_reason != HOST_UNSAFE_NONE) &&
-                   (context.state == HOST_FSM_ARMED)) {
-            transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_SAFETY_LIMIT, true);
-            clear_unsafe_after_safe_stop = true;
-            request_safe_stop();
+        }
+
+        if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
+            context.last_reported_unsafe_reason = requested_unsafe_reason;
+            const uint8_t payload[] = {
+                EVENT_UNSAFE_REPORTED, (uint8_t) requested_unsafe_reason
+            };
+            send_frame(&context, MESSAGE_EVENT, payload, sizeof(payload));
         }
 
         if (context.host_connected &&
@@ -442,6 +465,11 @@ void host_protocol_latch_unsafe(host_unsafe_reason_t reason)
     if (reason != HOST_UNSAFE_NONE) {
         requested_unsafe_reason = reason;
     }
+}
+
+void host_protocol_clear_unsafe(void)
+{
+    requested_unsafe_reason = HOST_UNSAFE_NONE;
 }
 
 void host_protocol_latch_fault(host_fault_reason_t reason)
