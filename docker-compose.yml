@@ -21,8 +21,4 @@ services:
     volumes:
       - ./:/workspace
     init: true
-    command: >-
-      bash -lc
-      "cmake -S . -B build/stm32f103rb -G Ninja
-      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/stm32f103rb-gcc.cmake
-      && cmake --build build/stm32f103rb --target firmware"
+    command: ["bash", "scripts/build-f103.sh"]

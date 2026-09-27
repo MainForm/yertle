@@ -33,7 +33,7 @@ int main(void)
 
     created = xTaskCreate(host_protocol_task,
                           "host-proto",
-                          configMINIMAL_STACK_SIZE * 2U,
+                          configMINIMAL_STACK_SIZE * 3U,
                           NULL,
                           tskIDLE_PRIORITY + 3U,
                           NULL);

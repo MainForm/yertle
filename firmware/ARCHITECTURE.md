@@ -24,6 +24,15 @@ next zero delimiter. RX is interrupt-driven; host TX remains polling.
 
 ## Motor stack
 
+USART1 RX is interrupt-driven. `USART1_IRQHandler` reads SR/DR and produces
+bytes into a 256-byte ring (255 usable); it calls no FreeRTOS API.
+`sensor_task -> motor_device_read_feedback -> motor_uart_read_frame` consumes
+that ring and parses replies in task context. When no bytes are available the
+reader sleeps for one tick, retaining the bus mutex so another request cannot
+interrupt the response sequence. Overflow/UART errors invalidate the current
+transaction; the next request flushes the ring and clears the error latch.
+USART1 TX remains polling. No new task is introduced.
+
 ```text
 actuator_task ------- write/torque ----+
                                        |

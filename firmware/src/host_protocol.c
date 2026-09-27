@@ -8,6 +8,8 @@
 #include "task.h"
 
 #include "host_uart.h"
+#include "motor_uart.h"
+#include "uart_diagnostics.h"
 
 #define YERTLE_PROTOCOL_VERSION              1U
 #define YERTLE_PROTOCOL_MAX_PAYLOAD          64U
@@ -25,11 +27,16 @@ enum message_type {
     MESSAGE_DISARM = 0x04U,
     MESSAGE_STOP = 0x05U,
     MESSAGE_RESET_FAULT = 0x07U,
+    MESSAGE_GET_UART_STATS = 0x08U,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
     MESSAGE_EVENT = 0x83U,
-    MESSAGE_F103_HEARTBEAT = 0x84U
+    MESSAGE_F103_HEARTBEAT = 0x84U,
+    MESSAGE_UART_STATS = 0x85U,
+    MESSAGE_UART_ISR_STATS = 0x86U,
+    MESSAGE_MOTOR_DIAGNOSTICS = 0x87U,
+    MESSAGE_MOTOR_TRACE = 0x88U
 };
 
 enum error_code {
@@ -194,6 +201,12 @@ static void send_result(protocol_context_t *context, uint8_t result_type,
     send_frame(context, result_type, payload, sizeof(payload));
 }
 
+static void send_diagnostic_frame(void *context, uint8_t type,
+                                  const uint8_t *payload, uint16_t length)
+{
+    send_frame((protocol_context_t *) context, type, payload, length);
+}
+
 static void send_hello_ack(protocol_context_t *context)
 {
     const uint8_t payload[] = {
@@ -316,6 +329,10 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
 
     switch (type) {
+    case MESSAGE_GET_UART_STATS:
+        /* Read-only diagnostic: does not refresh the control lease or ARM. */
+        uart_diagnostics_send(context, send_diagnostic_frame);
+        break;
     case MESSAGE_HELLO:
         context->last_host_tick = xTaskGetTickCount();
         set_host_connected(context, true);

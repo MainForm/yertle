@@ -7,6 +7,7 @@
 #include "semphr.h"
 
 #include "motor_uart.h"
+#include "uart_diagnostics.h"
 #include "sts3215_protocol.h"
 #include "sts3215_regs.h"
 
@@ -37,6 +38,7 @@ static bool take_bus(void)
 static motor_device_status_t send_broadcast(int16_t frame_length)
 {
     if (frame_length <= 0) {
+        motor_diagnostics_record(DIAG_BUILD_FAILED);
         return MOTOR_DEVICE_PROTOCOL_ERROR;
     }
     motor_uart_discard_rx();
@@ -50,6 +52,7 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
     const int16_t frame_length = STS3215_BuildSyncRead(
         tx_frame, sizeof(tx_frame), reg, data_length, motor_ids, YERTLE_MOTOR_COUNT);
     if (frame_length <= 0) {
+        motor_diagnostics_record(DIAG_BUILD_FAILED);
         return 0U;
     }
 
@@ -71,13 +74,18 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
             STS3215_ParseReply(rx_frame, (uint16_t) received_length, &reply);
         if ((parse_status != STS3215_OK) &&
             (parse_status != STS3215_ERR_SERVO_FAULT)) {
+            motor_diagnostics_record(parse_status == STS3215_ERR_BAD_CHECKSUM
+                ? DIAG_BAD_CHECKSUM : DIAG_PARSE_ERROR);
             continue;
         }
 
         const int index = motor_index_from_id(reply.id);
         if ((index < 0) || (reply.data_len < data_length)) {
+            motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
             continue;
         }
+        motor_diagnostics_record(parse_status == STS3215_ERR_SERVO_FAULT
+            ? DIAG_SERVO_FAULT : DIAG_VALID_REPLY);
 
         motor_feedback_t *motor = &feedback->motor[index];
         motor->id = reply.id;
@@ -184,6 +192,7 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)
     const uint8_t current_mask = read_sync_block(
         STS3215_REG_CURRENT_CURRENT, 2U, feedback, true);
     feedback->valid_mask = motion_mask & current_mask;
+    motor_diagnostics_masks(motion_mask, current_mask);
 
     for (uint8_t index = 0U; index < YERTLE_MOTOR_COUNT; ++index) {
         feedback->motor[index].valid =

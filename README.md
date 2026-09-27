@@ -46,6 +46,23 @@ cd C:\Users\ik\Desktop\yertle-RTOS\freeRTOS
 docker compose run --rm f103-build
 ```
 
+The service prints `BUILD SUCCESS` only after configure/build succeed and the
+ELF and BIN files are nonempty. It reports ARM image memory usage, the BIN
+size and modification time. Failures print `BUILD FAILED` with the failing
+stage and return a nonzero exit code. `ninja: no work to do` is a valid
+incremental build. These checks do not test execution on the physical board.
+
+In VS Code, open this directory and press `Ctrl+Shift+B` to run
+`F103: build and verify`. This task runs Compose in the foreground, streams
+image/firmware progress into the same terminal, and waits for the final result.
+The equivalent shell command is `docker compose run --build --rm f103-build`.
+The Docker extension's detached Compose Up command only starts a container;
+use the build task when you want its firmware logs and exit result inline.
+
+Each `f103-build` run replaces `build/logs/f103-build-latest.log`, while also
+streaming the same output to its container log. Open that file directly to
+inspect the latest build progress and result.
+
 The same build can be run manually in the development shell:
 
 ```powershell

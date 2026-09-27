@@ -3,6 +3,7 @@
 #include "stm32f1xx.h"
 
 #include "board_clock.h"
+#include "uart_diagnostics.h"
 
 #define HOST_UART_BAUD 115200U
 #define HOST_RX_CAPACITY 256U
@@ -12,45 +13,69 @@ static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 static volatile bool rx_discontinuity;
 static volatile bool rx_resync;
+static volatile uart_stats_t *diagnostics;
+#define stats (*diagnostics)
+
+void host_uart_get_stats(uart_stats_t *output)
+{
+    NVIC_DisableIRQ(USART2_IRQn);
+    __DMB();
+    *output = stats;
+    NVIC_EnableIRQ(USART2_IRQn);
+}
 
 /* ISR owns production; the task disables this IRQ briefly while consuming. */
 void USART2_IRQHandler(void)
 {
+    const uint32_t timing_start = DWT->CYCCNT;
     const uint32_t status = USART2->SR;
     if ((status & (USART_SR_RXNE | USART_SR_ORE | USART_SR_FE | USART_SR_NE |
                    USART_SR_PE)) == 0U) {
+        uart_isr_timing_finish(&stats, timing_start);
         return;
     }
 
     /* Reading SR then DR clears STM32F1 RXNE and receive error flags. */
     const uint8_t byte = (uint8_t) USART2->DR;
+    ++stats.rx_interrupts;
+    if ((status & USART_SR_RXNE) != 0U) { ++stats.rx_bytes; }
     if ((status & (USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE)) != 0U) {
         rx_tail = rx_head;
+        ++stats.rx_errors;
         rx_discontinuity = true;
         rx_resync = true;
+        uart_isr_timing_finish(&stats, timing_start);
         return;
     }
     if (rx_resync) {
         if (byte == 0U) {
             rx_resync = false;
         }
+        uart_isr_timing_finish(&stats, timing_start);
         return;
     }
 
     const uint16_t next = (uint16_t) ((rx_head + 1U) % HOST_RX_CAPACITY);
     if (next == rx_tail) {
+        ++stats.rx_overflows;
         rx_tail = rx_head;
         rx_discontinuity = true;
         rx_resync = byte != 0U;
+        uart_isr_timing_finish(&stats, timing_start);
         return;
     }
     rx_buffer[rx_head] = byte;
     __DMB();
     rx_head = next;
+    const uint32_t used = (rx_head + HOST_RX_CAPACITY - rx_tail) % HOST_RX_CAPACITY;
+    if (used > stats.rx_peak) { stats.rx_peak = used; }
+    uart_isr_timing_finish(&stats, timing_start);
 }
 
 void host_uart_init(void)
 {
+    diagnostics = uart_diagnostics_port(1U);
+    uart_isr_timing_init(&stats);
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
     RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
 
@@ -81,6 +106,7 @@ void host_uart_write_bytes(const uint8_t *data, size_t length)
         while ((USART2->SR & USART_SR_TXE) == 0U) {
         }
         USART2->DR = data[index];
+        ++stats.tx_bytes;
     }
 }
 

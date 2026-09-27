@@ -1,0 +1,20 @@
+#ifndef UART_STATS_H
+#define UART_STATS_H
+#include <stdint.h>
+#include "stm32f1xx.h"
+/* Cumulative since boot; 32-bit counters wrap. Bytes are UART register traffic. */
+typedef struct {
+    uint32_t tx_bytes;
+    uint32_t rx_bytes;
+    uint32_t rx_interrupts;
+    uint32_t rx_errors;
+    uint32_t rx_overflows;
+    uint32_t rx_peak;
+    uint32_t timeouts;
+    uint32_t isr_calls;
+    uint64_t isr_cycles;
+    uint32_t isr_max_cycles;
+    uint32_t isr_timing_enabled;
+} uart_stats_t;
+
+#endif

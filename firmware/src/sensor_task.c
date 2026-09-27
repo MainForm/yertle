@@ -37,7 +37,8 @@ void sensor_task(void *argument)
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;) {
-        motor_feedback_set_t sample;
+        motor_feedback_set_t sample = { 0 };
+        /* Driver reads USART1's ISR ring while this sensor task owns the bus. */
         (void) motor_device_read_feedback(&sample);
         sample.sequence = ++feedback_sequence;
 
