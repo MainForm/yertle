@@ -14,14 +14,12 @@ static uint8_t rx_buffer[MOTOR_RX_CAPACITY];
 static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 static volatile bool rx_failed;
-static volatile uart_stats_t *diagnostics;
+static volatile uart_isr_stats_t *diagnostics;
 #define stats (*diagnostics)
 
 void motor_uart_get_stats(uart_stats_t *output)
 {
-    taskENTER_CRITICAL();
-    *output = stats;
-    taskEXIT_CRITICAL();
+    uart_diagnostics_get_stats(0U, output);
 }
 
 void USART1_IRQHandler(void)
@@ -70,7 +68,7 @@ static bool wait_for_flag(uint32_t flag, uint32_t timeout_ms)
 
     while ((USART1->SR & flag) == 0U) {
         if ((xTaskGetTickCount() - start) >= timeout) {
-            ++stats.timeouts;
+            uart_diagnostics_timeout(0U);
             return false;
         }
     }
@@ -100,7 +98,7 @@ static bool read_byte(uint8_t *byte, TickType_t start, TickType_t timeout,
             return true;
         }
         if ((xTaskGetTickCount() - start) >= timeout) {
-            ++stats.timeouts;
+            uart_diagnostics_timeout(0U);
             motor_diagnostics_record(timeout_reason);
             return false;
         }
@@ -163,7 +161,7 @@ bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
             return false;
         }
         USART1->DR = data[index];
-        ++stats.tx_bytes;
+        uart_diagnostics_tx_byte(0U);
     }
     const bool completed = wait_for_flag(USART_SR_TC, timeout_ms);
     if (!completed) motor_diagnostics_record(DIAG_TX_TIMEOUT);

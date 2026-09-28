@@ -7,23 +7,30 @@
 GET_UART_STATS additionally returns UART_RX_ERRORS (0x89), a 64-byte payload:
 u32 uptime_ms, then USART1 and USART2 each with seven u32 fields (ORE count,
 FE count, NE count, PE count, last error SR, last error DR byte, last error
-DWT cycle32), followed by u32 diagnostic snapshot maximum masked-body cycles.
+DWT cycle32), followed by u32 diagnostic snapshot maximum unmasked elapsed cycles.
 All fields are little-endian. Counts accumulate since boot and wrap at 32 bits.
 One error event may set multiple flags, so their sum need not equal rx_errors.
 The SR/DR/cycle values are historical, captured in the ISR before clearing flags;
 they do not describe the current UART state. DR data on errors is not reliable.
 DWT cycle32 wraps and is not a timestamp in milliseconds.
 
-Snapshot timing measures the bounded copy/register-read body inside its critical
-section; it excludes entry/exit, final accounting, other critical sections and
-interrupt entry latency. It helps assess diagnostic-induced masking, but is not
-a complete worst-case IRQ-latency measurement. DWT availability is carried by
+Diagnostic copies and measurement hooks no longer mask interrupts. Snapshot
+timing includes preemption during the copy, not an interrupt blackout or pure
+CPU cost. Update firmware and PC client together: the final 0x89 field now has
+this meaning rather than masked-body time. DWT availability is carried by
 UART_ISR_STATS. No ISR RTOS API, printing or motor control change was added.
+ISR-owned RX counters and task-owned TX/timeout counters are separate. The
+host task reads independent aligned 32-bit fields; snapshots are not globally
+simultaneous. ISR cycle accumulation uses two 32-bit words, read high/low/high
+with up to three retries and a last-good fallback. Motor diagnostic writes are
+serialized by the existing bus mutex; trace/last-error tuples are best-effort
+and must not be used as coherent safety decisions. Existing RX-ring consumption
+and reset IRQ protection is unchanged; this is not a fully lock-free RX ring.
 Measurement storage/serialization remains in src/uart_diagnostics.c. Existing
 0x85..0x88 layouts remain unchanged. Actual failure cause requires board tests.
 
-GET_UART_STATS now sends four responses: 0x85 UART_STATS, 0x86 UART_ISR_STATS,
-0x87 MOTOR_DIAGNOSTICS and 0x88 MOTOR_TRACE. Existing 0x85/0x86 formats remain
+GET_UART_STATS sends five responses: 0x85 UART_STATS, 0x86 UART_ISR_STATS,
+0x87 MOTOR_DIAGNOSTICS, 0x88 MOTOR_TRACE and 0x89 UART_RX_ERRORS. Existing 0x85/0x86 formats remain
 unchanged. No extra request or automatic motor motion is introduced.
 Measurement storage, ISR accounting and diagnostic serialization are separated
 into src/uart_diagnostics.c. Control/driver code calls measurement hooks only.

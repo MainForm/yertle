@@ -13,15 +13,12 @@ static volatile uint16_t rx_head;
 static volatile uint16_t rx_tail;
 static volatile bool rx_discontinuity;
 static volatile bool rx_resync;
-static volatile uart_stats_t *diagnostics;
+static volatile uart_isr_stats_t *diagnostics;
 #define stats (*diagnostics)
 
 void host_uart_get_stats(uart_stats_t *output)
 {
-    NVIC_DisableIRQ(USART2_IRQn);
-    __DMB();
-    *output = stats;
-    NVIC_EnableIRQ(USART2_IRQn);
+    uart_diagnostics_get_stats(1U, output);
 }
 
 /* ISR owns production; the task disables this IRQ briefly while consuming. */
@@ -107,7 +104,7 @@ void host_uart_write_bytes(const uint8_t *data, size_t length)
         while ((USART2->SR & USART_SR_TXE) == 0U) {
         }
         USART2->DR = data[index];
-        ++stats.tx_bytes;
+        uart_diagnostics_tx_byte(1U);
     }
 }
 

@@ -5,16 +5,18 @@
 #include "host_uart.h"
 #include "motor_uart.h"
 
-static volatile uart_stats_t ports[2];
-static uint32_t reasons[DIAG_REASON_COUNT];
-static uint32_t last_reason = 0xffffffffU;
-static uint32_t masks;
-static uint8_t tx_preview[16], rx_preview[16];
-static uint32_t tx_length, rx_length;
+static volatile uart_isr_stats_t ports[2];
+static volatile uint32_t tx_bytes[2], timeouts[2];
+static uint64_t last_cycles[2]; /* Sole reader's cache; bounded retry fallback. */
+static volatile uint32_t reasons[DIAG_REASON_COUNT];
+static volatile uint32_t last_reason = 0xffffffffU;
+static volatile uint32_t masks;
+static volatile uint8_t tx_preview[16], rx_preview[16];
+static volatile uint32_t tx_length, rx_length;
 static uint32_t snapshot_max_cycles;
 
 /* Called only by the owning UART ISR; no RTOS calls or output here. */
-void uart_diagnostics_rx_error(volatile uart_stats_t *s, uint32_t status, uint8_t byte)
+void uart_diagnostics_rx_error(volatile uart_isr_stats_t *s, uint32_t status, uint8_t byte)
 {
     if (status & USART_SR_ORE) ++s->ore_errors;
     if (status & USART_SR_FE) ++s->fe_errors;
@@ -25,9 +27,41 @@ void uart_diagnostics_rx_error(volatile uart_stats_t *s, uint32_t status, uint8_
     s->last_error_cycle = DWT->CYCCNT;
 }
 
-volatile uart_stats_t *uart_diagnostics_port(unsigned port) { return &ports[port]; }
+volatile uart_isr_stats_t *uart_diagnostics_port(unsigned port) { return &ports[port]; }
+void uart_diagnostics_tx_byte(unsigned port) { ++tx_bytes[port]; }
+void uart_diagnostics_timeout(unsigned port) { ++timeouts[port]; }
 
-void uart_isr_timing_init(volatile uart_stats_t *s)
+void uart_diagnostics_get_stats(unsigned port, uart_stats_t *o)
+{
+    volatile uart_isr_stats_t *s = &ports[port];
+    o->tx_bytes = tx_bytes[port]; o->timeouts = timeouts[port];
+    o->rx_bytes = s->rx_bytes; o->rx_interrupts = s->rx_interrupts;
+    o->rx_errors = s->rx_errors; o->rx_overflows = s->rx_overflows;
+    o->rx_peak = s->rx_peak; o->isr_calls = s->isr_calls;
+    /* Task cannot run halfway through its UART ISR on this single-core MCU.
+     * If an ISR rolls low over between loads, retry high/low/high. Never mask
+     * IRQs or wait on a writer flag; retain the last sample after 3 retries. */
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        uint32_t high = s->cycles_high;
+        uint32_t low = s->cycles_low;
+        if (high == s->cycles_high) {
+            last_cycles[port] = ((uint64_t) high << 32U) | low;
+            break;
+        }
+    }
+    o->isr_cycles = last_cycles[port];
+    o->isr_max_cycles = s->isr_max_cycles;
+    o->isr_timing_enabled = s->isr_timing_enabled;
+    o->ore_errors = s->ore_errors; o->fe_errors = s->fe_errors;
+    o->ne_errors = s->ne_errors; o->pe_errors = s->pe_errors;
+    /* Last-error tuple and trace are advisory: updates may occur between
+     * individual loads. They are not a coherent packet/fault decision. */
+    o->last_error_sr = s->last_error_sr;
+    o->last_error_byte = s->last_error_byte;
+    o->last_error_cycle = s->last_error_cycle;
+}
+
+void uart_isr_timing_init(volatile uart_isr_stats_t *s)
 {
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
@@ -37,47 +71,42 @@ void uart_isr_timing_init(volatile uart_stats_t *s)
     s->isr_timing_enabled = DWT->CYCCNT != before;
 }
 
-void uart_isr_timing_finish(volatile uart_stats_t *s, uint32_t start)
+void uart_isr_timing_finish(volatile uart_isr_stats_t *s, uint32_t start)
 {
     const uint32_t elapsed = DWT->CYCCNT - start;
     ++s->isr_calls;
     if (s->isr_timing_enabled) {
-        s->isr_cycles += elapsed;
+        uint32_t low = s->cycles_low;
+        s->cycles_low = low + elapsed;
+        if (s->cycles_low < low) ++s->cycles_high;
         if (elapsed > s->isr_max_cycles) s->isr_max_cycles = elapsed;
     }
 }
 
 void motor_diagnostics_record(enum motor_diag_reason reason)
 {
-    taskENTER_CRITICAL();
     if (reason < DIAG_REASON_COUNT) { ++reasons[reason]; last_reason = reason; }
-    taskEXIT_CRITICAL();
 }
 
 void motor_diagnostics_tx(const uint8_t *data, size_t length)
 {
-    taskENTER_CRITICAL();
     tx_length = (uint32_t) length;
     rx_length = 0U;
-    memset(tx_preview, 0, sizeof(tx_preview));
-    memset(rx_preview, 0, sizeof(rx_preview));
-    memcpy(tx_preview, data, length < sizeof(tx_preview) ? length : sizeof(tx_preview));
-    taskEXIT_CRITICAL();
+    for (unsigned i = 0; i < 16; ++i) {
+        tx_preview[i] = i < length ? data[i] : 0U;
+        rx_preview[i] = 0U;
+    }
 }
 
 void motor_diagnostics_rx_byte(uint8_t byte)
 {
-    taskENTER_CRITICAL();
     if (rx_length < sizeof(rx_preview)) rx_preview[rx_length] = byte;
     ++rx_length;
-    taskEXIT_CRITICAL();
 }
 
 void motor_diagnostics_masks(uint8_t motion, uint8_t current)
 {
-    taskENTER_CRITICAL();
     masks = motion | ((uint32_t) current << 8U);
-    taskEXIT_CRITICAL();
 }
 
 static void pack(uint8_t *output, uint32_t value)
@@ -87,19 +116,19 @@ static void pack(uint8_t *output, uint32_t value)
 
 void uart_diagnostics_send(void *context, uart_diag_sender_t send)
 {
-    /* Copy all diagnostics before sending; never hold IRQ masking over TX. */
+    /* Non-blocking SPSC reads. UART IRQs remain enabled throughout the copy.
+     * Counters/trace can represent slightly different instants. */
     uart_stats_t snapshot[2];
     uint32_t counters[DIAG_REASON_COUNT], last, valid, sr, txlen, rxlen, uptime;
     uint8_t tx[16], rx[16];
     uint32_t registers[5];
-    taskENTER_CRITICAL();
     const uint32_t snapshot_start = DWT->CYCCNT;
     host_uart_get_stats(&snapshot[1]);
     motor_uart_get_stats(&snapshot[0]);
-    memcpy(counters, reasons, sizeof(counters));
+    for (unsigned i = 0; i < DIAG_REASON_COUNT; ++i) counters[i] = reasons[i];
     last = last_reason; valid = masks; sr = USART1->SR;
     txlen = tx_length; rxlen = rx_length;
-    memcpy(tx, tx_preview, sizeof(tx)); memcpy(rx, rx_preview, sizeof(rx));
+    for (unsigned i = 0; i < 16; ++i) { tx[i] = tx_preview[i]; rx[i] = rx_preview[i]; }
     uptime = (uint32_t) (xTaskGetTickCount() * portTICK_PERIOD_MS);
     registers[0] = USART1->BRR; registers[1] = USART1->CR1;
     registers[2] = USART1->CR3; registers[3] = GPIOA->CRH;
@@ -107,7 +136,6 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
                     ((unsigned) USART1_IRQn % 32U)) & 1U;
     const uint32_t snapshot_cycles = DWT->CYCCNT - snapshot_start;
     if (snapshot_cycles > snapshot_max_cycles) snapshot_max_cycles = snapshot_cycles;
-    taskEXIT_CRITICAL();
     uint8_t payload[64];
     pack(payload, uptime);
     for (unsigned p = 0; p < 2; ++p) {
