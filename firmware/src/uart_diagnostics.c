@@ -11,6 +11,19 @@ static uint32_t last_reason = 0xffffffffU;
 static uint32_t masks;
 static uint8_t tx_preview[16], rx_preview[16];
 static uint32_t tx_length, rx_length;
+static uint32_t snapshot_max_cycles;
+
+/* Called only by the owning UART ISR; no RTOS calls or output here. */
+void uart_diagnostics_rx_error(volatile uart_stats_t *s, uint32_t status, uint8_t byte)
+{
+    if (status & USART_SR_ORE) ++s->ore_errors;
+    if (status & USART_SR_FE) ++s->fe_errors;
+    if (status & USART_SR_NE) ++s->ne_errors;
+    if (status & USART_SR_PE) ++s->pe_errors;
+    s->last_error_sr = status;
+    s->last_error_byte = byte;
+    s->last_error_cycle = DWT->CYCCNT;
+}
 
 volatile uart_stats_t *uart_diagnostics_port(unsigned port) { return &ports[port]; }
 
@@ -80,6 +93,7 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     uint8_t tx[16], rx[16];
     uint32_t registers[5];
     taskENTER_CRITICAL();
+    const uint32_t snapshot_start = DWT->CYCCNT;
     host_uart_get_stats(&snapshot[1]);
     motor_uart_get_stats(&snapshot[0]);
     memcpy(counters, reasons, sizeof(counters));
@@ -91,6 +105,8 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     registers[2] = USART1->CR3; registers[3] = GPIOA->CRH;
     registers[4] = (NVIC->ISER[(unsigned) USART1_IRQn / 32U] >>
                     ((unsigned) USART1_IRQn % 32U)) & 1U;
+    const uint32_t snapshot_cycles = DWT->CYCCNT - snapshot_start;
+    if (snapshot_cycles > snapshot_max_cycles) snapshot_max_cycles = snapshot_cycles;
     taskEXIT_CRITICAL();
     uint8_t payload[64];
     pack(payload, uptime);
@@ -119,4 +135,13 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     memcpy(&payload[12], tx, 16); memcpy(&payload[28], rx, 16);
     for (unsigned i = 0; i < 5; ++i) pack(&payload[44 + i * 4], registers[i]);
     send(context, 0x88U, payload, 64U);
+    pack(payload, uptime);
+    for (unsigned p = 0; p < 2; ++p) {
+        const uart_stats_t *s = &snapshot[p];
+        const uint32_t fields[] = {s->ore_errors, s->fe_errors, s->ne_errors,
+            s->pe_errors, s->last_error_sr, s->last_error_byte, s->last_error_cycle};
+        for (unsigned i = 0; i < 7; ++i) pack(&payload[4 + p * 28 + i * 4], fields[i]);
+    }
+    pack(&payload[60], snapshot_max_cycles);
+    send(context, 0x89U, payload, 64U);
 }

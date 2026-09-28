@@ -13,6 +13,7 @@ typedef void (*uart_diag_sender_t)(void *, uint8_t, const uint8_t *, uint16_t);
 volatile uart_stats_t *uart_diagnostics_port(unsigned port);
 void uart_isr_timing_init(volatile uart_stats_t *s);
 void uart_isr_timing_finish(volatile uart_stats_t *s, uint32_t start);
+void uart_diagnostics_rx_error(volatile uart_stats_t *s, uint32_t status, uint8_t byte);
 void motor_diagnostics_record(enum motor_diag_reason reason);
 void motor_diagnostics_tx(const uint8_t *data, size_t length);
 void motor_diagnostics_rx_byte(uint8_t byte);

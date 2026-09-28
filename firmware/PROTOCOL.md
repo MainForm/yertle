@@ -2,6 +2,26 @@
 
 ## Motor transaction diagnostics
 
+### UART receive-error detail (0x89)
+
+GET_UART_STATS additionally returns UART_RX_ERRORS (0x89), a 64-byte payload:
+u32 uptime_ms, then USART1 and USART2 each with seven u32 fields (ORE count,
+FE count, NE count, PE count, last error SR, last error DR byte, last error
+DWT cycle32), followed by u32 diagnostic snapshot maximum masked-body cycles.
+All fields are little-endian. Counts accumulate since boot and wrap at 32 bits.
+One error event may set multiple flags, so their sum need not equal rx_errors.
+The SR/DR/cycle values are historical, captured in the ISR before clearing flags;
+they do not describe the current UART state. DR data on errors is not reliable.
+DWT cycle32 wraps and is not a timestamp in milliseconds.
+
+Snapshot timing measures the bounded copy/register-read body inside its critical
+section; it excludes entry/exit, final accounting, other critical sections and
+interrupt entry latency. It helps assess diagnostic-induced masking, but is not
+a complete worst-case IRQ-latency measurement. DWT availability is carried by
+UART_ISR_STATS. No ISR RTOS API, printing or motor control change was added.
+Measurement storage/serialization remains in src/uart_diagnostics.c. Existing
+0x85..0x88 layouts remain unchanged. Actual failure cause requires board tests.
+
 GET_UART_STATS now sends four responses: 0x85 UART_STATS, 0x86 UART_ISR_STATS,
 0x87 MOTOR_DIAGNOSTICS and 0x88 MOTOR_TRACE. Existing 0x85/0x86 formats remain
 unchanged. No extra request or automatic motor motion is introduced.

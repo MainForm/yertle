@@ -42,6 +42,7 @@ void USART2_IRQHandler(void)
     if ((status & (USART_SR_ORE | USART_SR_FE | USART_SR_NE | USART_SR_PE)) != 0U) {
         rx_tail = rx_head;
         ++stats.rx_errors;
+        uart_diagnostics_rx_error(&stats, status, byte);
         rx_discontinuity = true;
         rx_resync = true;
         uart_isr_timing_finish(&stats, timing_start);
