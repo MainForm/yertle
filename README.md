@@ -112,12 +112,33 @@ freeRTOS/
 
 The Mowibox HAL/RS485 transport is intentionally not compiled. The FE-URT
 module exposes separate UART TX/RX pins, so this firmware uses its own
-CMSIS-based USART1 transport and reuses only Mowibox's hardware-independent
-packet protocol.
+F103 DMA port of Mowibox's transport pattern and its original hardware-independent
+packet protocol. The G4-specific `sts3215_hal.c` is NOT linked unchanged.
+RX DMA1 Channel5 is armed before TX DMA1 Channel4. Task-owned mutex/parsing,
+50 Hz feedback, 1 Mbps motor bus and 115200 host link remain unchanged.
+
+## 60-second DMA comparison
+
+Flash `build/stm32f103rb/firmware/yertle_f103rb.bin` at 0x08000000 and use the
+rebuilt pc-connect client from its own directory:
+
+```powershell
+.\measure-uart.ps1 -Port COM10
+```
+
+Replace COM10 with ST-LINK VCP, not the servo module USB. Keep the already-working
+UART wiring and disconnect servo-module USB/other bus masters. No ARM/heartbeat
+or motion commands are sent by the monitor. Existing baseline logs are untouched.
+The terminal must show `MOTOR transport=Mowibox-pattern F103 DMA port`.
+Summary adds complete six-servo SyncRead and full two-block feedback cycle
+percentages. RX IRQ counts are now IDLE/error events, not byte interrupts; motor
+ISR time now includes UART plus TX/RX DMA handler bodies. Compare error deltas,
+valid responses/timeouts and complete-cycle rates, NOT IRQ count per byte.
+This build/test does not verify physical board execution or certify safety.
 
 ## Motor interface wiring
 
-| NUCLEO-F103RB | FE-URT UART side | Purpose |
+| NUCLEO-F103RB | Peer signal direction (not printed module pin name) | Purpose |
 |---|---|---|
 | PA9 / USART1_TX | RX | F103 to servo adapter |
 | PA10 / USART1_RX | TX | Servo adapter to F103 |
@@ -125,3 +146,5 @@ packet protocol.
 
 The servo supply must come from the external servo power source, not from the
 Nucleo 3.3 V rail. Verify the FE-URT UART logic voltage before connecting it.
+The generic RX/TX directions above are not the FE-URT-2 header labels. Retain the
+confirmed working FE-URT-2 hookup; a DMA firmware change does not require rewiring.

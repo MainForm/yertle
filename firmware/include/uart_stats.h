@@ -19,7 +19,8 @@ typedef struct {
     uint32_t last_error_sr, last_error_byte, last_error_cycle;
 } uart_stats_t;
 
-/* Sole writer: owning UART ISR (initialization occurs before IRQ enable).
+/* Sole writer: owning UART ISR, or equal-priority UART/DMA ISRs in DMA mode
+ * (initialization occurs before transfer enable).
  * Aligned 32-bit volatile loads/stores are indivisible on Cortex-M3.
  * Task-owned TX/timeout counters deliberately do not live here. */
 typedef struct {

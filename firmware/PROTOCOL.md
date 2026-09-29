@@ -1,5 +1,26 @@
 # Yertle PC/RPi host protocol v1
 
+## DMA transport measurement (0x8A)
+
+GET_UART_STATS also returns MOTOR_TRANSPORT_STATS, 64 bytes of little-endian
+u32 words: uptime_ms, mode (1 = F103 DMA port of Mowibox pattern), TX starts,
+TX wire completions observed by task, UART IDLE events, RX buffer-full events,
+TX DMA errors, RX DMA errors, SyncRead attempts, complete six-ID SyncReads,
+feedback cycle attempts, complete two-block/six-ID feedback cycles, RX buffer
+capacity (256), three reserved zero words. No new request is needed.
+Each counter has one serialized writer (bus task or equal-priority ISRs).
+Complete SyncRead means all IDs 1..6 parsed; complete feedback means both
+motion/current blocks for all six. Counts are since boot; PC summary subtracts
+first/last samples and prints the actual MCU span. Boundary snapshots can catch
+an in-progress transaction, so attempts/completions are not an atomic pair.
+DMA full is fatal, not circular ring overflow. In DMA mode UART_STATS RX bytes
+count bytes moved to memory, including discarded data and stop residue, not DR
+reads by CPU. rx_interrupts counts UART IDLE/error events; UART_ISR_STATS port1
+aggregates USART1 plus DMA1 Channel4/5 handler bodies. DMA errors are distinct
+from UART Overrun/Framing/Noise/Parity flags. Do not interpret error-events per
+DMA byte as corrupted byte count, bit error rate or packet failure rate.
+USART2 semantics remain unchanged. All six diagnostic frames remain <=64 bytes.
+
 ## Motor transaction diagnostics
 
 ### UART receive-error detail (0x89)
@@ -24,13 +45,13 @@ host task reads independent aligned 32-bit fields; snapshots are not globally
 simultaneous. ISR cycle accumulation uses two 32-bit words, read high/low/high
 with up to three retries and a last-good fallback. Motor diagnostic writes are
 serialized by the existing bus mutex; trace/last-error tuples are best-effort
-and must not be used as coherent safety decisions. Existing RX-ring consumption
-and reset IRQ protection is unchanged; this is not a fully lock-free RX ring.
+and must not be used as coherent safety decisions. USART2 RX-ring protection
+is unchanged; USART1 now has DMA setup/teardown protection rather than a ring.
 Measurement storage/serialization remains in src/uart_diagnostics.c. Existing
 0x85..0x88 layouts remain unchanged. Actual failure cause requires board tests.
 
-GET_UART_STATS sends five responses: 0x85 UART_STATS, 0x86 UART_ISR_STATS,
-0x87 MOTOR_DIAGNOSTICS, 0x88 MOTOR_TRACE and 0x89 UART_RX_ERRORS. Existing 0x85/0x86 formats remain
+GET_UART_STATS sends six responses: 0x85 UART_STATS, 0x86 UART_ISR_STATS,
+0x87 MOTOR_DIAGNOSTICS, 0x88 MOTOR_TRACE, 0x89 UART_RX_ERRORS and 0x8A MOTOR_TRANSPORT_STATS. Existing 0x85/0x86 layouts remain
 unchanged. No extra request or automatic motor motion is introduced.
 Measurement storage, ISR accounting and diagnostic serialization are separated
 into src/uart_diagnostics.c. Control/driver code calls measurement hooks only.
@@ -43,7 +64,7 @@ bad_length, bad_checksum, parse_error, id_or_data_length, servo_fault, valid_rep
 no_response means no byte was consumed before the RX deadline;
 header_timeout means bytes arrived but a complete FF FF header was not found;
 body_timeout means the header was found but the remaining frame was incomplete.
-rx_error includes ring discontinuity caused by UART errors or overflow;
+rx_error includes UART/DMA receive failure or exhausted RX DMA buffer;
 UART_STATS distinguishes hardware errors from buffer overflow. Checksums are
 the servo protocol's checksum, not host CRC16. Valid_reply counts parsed reply
 frames, not complete six-motor feedback sets. Masks show the last completed read.
@@ -73,7 +94,7 @@ Disabled/non-running DWT is reported via the mask, not as zero CPU usage.
 
 The measured span excludes hardware exception entry/return, compiler prologue/
 epilogue and the final accounting operations. It includes most diagnostic
-instrumentation and any preempting higher-priority ISR. USART1/2 have the same
+instrumentation and any preempting higher-priority ISR. USART1/2 and DMA1 Ch4/5 have the same
 priority and do not preempt each other. These are approximate instrumented ISR
 body costs, not total interrupt overhead or task deadline/latency measurements.
 No printing or blocking operation is performed inside the ISR.
@@ -137,10 +158,12 @@ Request payload is empty. The response contains `u32 uptime_ms`, then two
 `u32` fields: tx_bytes, rx_bytes, rx_interrupts, rx_errors, rx_overflows,
 rx_peak, timeouts. Counters accumulate since boot and wrap at 32 bits.
 
-RX bytes count register reads with RXNE, including errored/discarded bytes;
-RX errors count IRQs with one or more receive-error flags. Overflow counts
-buffer-full events, not lost bytes. Peak is the maximum queued RX bytes since
-boot (capacity 255); timeouts count motor TX waits/RX byte waits that expire.
+USART2 RX bytes count register reads with RXNE, including errored/discarded
+bytes; USART1 DMA bytes and IRQ timing have the semantics documented above.
+RX errors count UART IRQs with one or more receive-error flags. Overflow counts
+buffer-full events, not lost bytes. Peak is the observed since-boot DMA received
+position for USART1 (capacity 256), or queued RX bytes for USART2 (capacity 255).
+Timeouts count motor TX waits/RX byte waits that expire.
 USART2 timeouts are zero because that driver has no timed waits.
 
 PC rates use differences between snapshots divided by MCU elapsed time.

@@ -10,6 +10,7 @@ add_executable(yertle_f103rb
     src/host_uart.c
     src/host_protocol.c
     src/motor_uart.c
+    src/motor_dma.c
     src/uart_diagnostics.c
     src/motor_device.c
     src/actuator_task.c

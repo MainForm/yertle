@@ -42,8 +42,9 @@ static motor_device_status_t send_broadcast(int16_t frame_length)
         return MOTOR_DEVICE_PROTOCOL_ERROR;
     }
     motor_uart_discard_rx();
-    return motor_uart_write(tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)
-        ? MOTOR_DEVICE_OK : MOTOR_DEVICE_UART_ERROR;
+    const bool sent = motor_uart_write(tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS);
+    motor_uart_discard_rx();
+    return sent ? MOTOR_DEVICE_OK : MOTOR_DEVICE_UART_ERROR;
 }
 
 static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
@@ -57,6 +58,7 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
     }
 
     motor_uart_discard_rx();
+    motor_transport_record(TRANSPORT_SYNC_REQUEST);
     if (!motor_uart_write(tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
         return 0U;
     }
@@ -101,6 +103,8 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
         }
         received_mask |= (uint8_t) (1U << (uint8_t) index);
     }
+    motor_uart_discard_rx(); /* Stop DMA even on partial response/error. */
+    if (received_mask == 0x3FU) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
     return received_mask;
 }
 
@@ -187,11 +191,13 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)
         feedback->motor[index].id = motor_ids[index];
     }
 
+    motor_transport_record(TRANSPORT_FEEDBACK_CYCLE);
     const uint8_t motion_mask = read_sync_block(
         STS3215_REG_CURRENT_POS, 8U, feedback, false);
     const uint8_t current_mask = read_sync_block(
         STS3215_REG_CURRENT_CURRENT, 2U, feedback, true);
     feedback->valid_mask = motion_mask & current_mask;
+    if (feedback->valid_mask == 0x3FU) motor_transport_record(TRANSPORT_FEEDBACK_COMPLETE);
     motor_diagnostics_masks(motion_mask, current_mask);
 
     for (uint8_t index = 0U; index < YERTLE_MOTOR_COUNT; ++index) {

@@ -11,7 +11,7 @@ void motor_uart_init(void);
 void motor_uart_get_stats(uart_stats_t *stats);
 void motor_uart_discard_rx(void);
 bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms);
-/* Task context, bus mutex held: assembles a reply from the ISR RX ring.
+/* Task context, bus mutex held: assembles a reply from the RX DMA buffer.
  * Overflow/receive errors invalidate the transaction until discard_rx(). */
 bool motor_uart_read_frame(uint8_t *frame, size_t capacity, size_t *length,
                            uint32_t timeout_ms);

@@ -24,14 +24,24 @@ next zero delimiter. RX is interrupt-driven; host TX remains polling.
 
 ## Motor stack
 
-USART1 RX is interrupt-driven. `USART1_IRQHandler` reads SR/DR and produces
-bytes into a 256-byte ring (255 usable); it calls no FreeRTOS API.
-`sensor_task -> motor_device_read_feedback -> motor_uart_read_frame` consumes
-that ring and parses replies in task context. When no bytes are available the
-reader sleeps for one tick, retaining the bus mutex so another request cannot
-interrupt the response sequence. Overflow/UART errors invalidate the current
-transaction; the next request flushes the ring and clears the error latch.
-USART1 TX remains polling. No new task is introduced.
+USART1 uses the F103 DMA port of Mowibox's transaction pattern, implemented in
+`motor_dma.c`, not the G4 HAL source itself. RX DMA1 Channel5 is armed before
+TX DMA1 Channel4; owned buffers stay valid until transaction completion/abort.
+`motor_uart_write` preserves the existing synchronous task API, but sleeps while
+DMA sends and waits for both DMA completion and UART TC (wire completion).
+It no longer supplies each byte by polling. USART1 RXNE interrupts and the old
+motor RX ring are removed. UART IDLE/error and DMA complete/error handlers do
+minimal accounting/state updates with no FreeRTOS calls or packet parsing.
+`motor_uart_read_frame` assembles from DMA progress (CNDTR), and the existing
+Mowibox parser runs in task context. Multiple IDLE events between servo replies
+do NOT terminate a six-servo transaction. The normal-mode 256-byte RX buffer is
+reset for each request; exhaustion/errors abort instead of wrapping/overwriting.
+The bus mutex remains held throughout TX/replies; empty reads sleep one tick.
+Normal DMA is stopped and residual byte counts finalized at each transaction
+end, including broadcasts, partial feedback and abort. Setup/teardown uses a
+short peripheral-specific IRQ guard; diagnostic snapshots remain unmasked.
+The task-owned residual counter is separate from ISR-owned RX accounting.
+No new task, HAL/RS485 DE layer, pin, baud, clock or FSM change is introduced.
 
 ```text
 actuator_task ------- write/torque ----+
@@ -40,6 +50,7 @@ sensor_task --------- feedback read ---+--> motor_device mutex
                                                |
                                                +--> Mowibox protocol builder/parser
                                                +--> motor_uart (USART1, 1 Mbps)
+                                               +--> motor_dma (DMA1 Ch4 TX / Ch5 RX)
                                                +--> FE-URT --> STS3215 bus
 ```
 

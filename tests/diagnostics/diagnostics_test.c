@@ -43,6 +43,6 @@ int main(void) {
     motor_diagnostics_tx(packet, sizeof packet); motor_diagnostics_rx_byte(0xab);
     motor_diagnostics_record(DIAG_VALID_REPLY); motor_diagnostics_masks(0x3f, 0x3f);
     uart_diagnostics_send(NULL, receive);
-    assert(frames == 5);
+    assert(frames == 6);
     puts("firmware diagnostics tests passed (ownership, carry, serialization; no hardware IRQ simulation)");
 }

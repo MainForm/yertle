@@ -7,6 +7,8 @@
 
 static volatile uart_isr_stats_t ports[2];
 static volatile uint32_t tx_bytes[2], timeouts[2];
+static volatile uint32_t rx_tail_bytes[2]; /* Bus-owning task: DMA residue on stop. */
+static volatile uint32_t transport[16]; /* Per-field single writer; word 0 packed uptime. */
 static uint64_t last_cycles[2]; /* Sole reader's cache; bounded retry fallback. */
 static volatile uint32_t reasons[DIAG_REASON_COUNT];
 static volatile uint32_t last_reason = 0xffffffffU;
@@ -29,13 +31,17 @@ void uart_diagnostics_rx_error(volatile uart_isr_stats_t *s, uint32_t status, ui
 
 volatile uart_isr_stats_t *uart_diagnostics_port(unsigned port) { return &ports[port]; }
 void uart_diagnostics_tx_byte(unsigned port) { ++tx_bytes[port]; }
+void uart_diagnostics_tx_bytes(unsigned port, uint32_t count) { tx_bytes[port] += count; }
+void uart_diagnostics_rx_tail_bytes(unsigned port, uint32_t count) { rx_tail_bytes[port] += count; }
 void uart_diagnostics_timeout(unsigned port) { ++timeouts[port]; }
+void motor_transport_dma_mode(uint32_t capacity) { transport[1] = 1U; transport[12] = capacity; }
+void motor_transport_record(enum motor_transport_event event) { ++transport[event]; }
 
 void uart_diagnostics_get_stats(unsigned port, uart_stats_t *o)
 {
     volatile uart_isr_stats_t *s = &ports[port];
     o->tx_bytes = tx_bytes[port]; o->timeouts = timeouts[port];
-    o->rx_bytes = s->rx_bytes; o->rx_interrupts = s->rx_interrupts;
+    o->rx_bytes = s->rx_bytes + rx_tail_bytes[port]; o->rx_interrupts = s->rx_interrupts;
     o->rx_errors = s->rx_errors; o->rx_overflows = s->rx_overflows;
     o->rx_peak = s->rx_peak; o->isr_calls = s->isr_calls;
     /* Task cannot run halfway through its UART ISR on this single-core MCU.
@@ -122,6 +128,7 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     uint32_t counters[DIAG_REASON_COUNT], last, valid, sr, txlen, rxlen, uptime;
     uint8_t tx[16], rx[16];
     uint32_t registers[5];
+    uint32_t transport_snapshot[16];
     const uint32_t snapshot_start = DWT->CYCCNT;
     host_uart_get_stats(&snapshot[1]);
     motor_uart_get_stats(&snapshot[0]);
@@ -134,6 +141,7 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     registers[2] = USART1->CR3; registers[3] = GPIOA->CRH;
     registers[4] = (NVIC->ISER[(unsigned) USART1_IRQn / 32U] >>
                     ((unsigned) USART1_IRQn % 32U)) & 1U;
+    for (unsigned i = 1; i < 16; ++i) transport_snapshot[i] = transport[i];
     const uint32_t snapshot_cycles = DWT->CYCCNT - snapshot_start;
     if (snapshot_cycles > snapshot_max_cycles) snapshot_max_cycles = snapshot_cycles;
     uint8_t payload[64];
@@ -172,4 +180,7 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     }
     pack(&payload[60], snapshot_max_cycles);
     send(context, 0x89U, payload, 64U);
+    pack(payload, uptime);
+    for (unsigned i = 1; i < 16; ++i) pack(&payload[i*4], transport_snapshot[i]);
+    send(context, 0x8AU, payload, 64U);
 }
