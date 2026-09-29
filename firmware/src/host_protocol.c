@@ -8,6 +8,7 @@
 #include "task.h"
 
 #include "host_uart.h"
+#include "actuator_task.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
 
@@ -26,6 +27,7 @@ enum message_type {
     MESSAGE_ARM = 0x03U,
     MESSAGE_DISARM = 0x04U,
     MESSAGE_STOP = 0x05U,
+    MESSAGE_SET_JOINT_TARGETS = 0x06U,
     MESSAGE_RESET_FAULT = 0x07U,
     MESSAGE_GET_UART_STATS = 0x08U,
     MESSAGE_ACK = 0x80U,
@@ -47,7 +49,9 @@ enum error_code {
     ERROR_UNSUPPORTED_VERSION = 4U,
     ERROR_INVALID_STATE = 5U,
     ERROR_FAULT_NOT_CLEARABLE = 6U,
-    ERROR_INVALID_FLAGS = 7U
+    ERROR_INVALID_FLAGS = 7U,
+    ERROR_INVALID_TARGET = 8U,
+    ERROR_TARGET_BUSY = 9U
 };
 
 enum event_code {
@@ -324,12 +328,39 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_FLAGS);
         return;
     }
-    if ((raw[5] != 0U) || (raw[6] != 0U)) {
+    if (type != MESSAGE_SET_JOINT_TARGETS && ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
     }
 
     switch (type) {
+    case MESSAGE_SET_JOINT_TARGETS: {
+        if (raw[5] != YERTLE_MOTOR_COUNT * 5U || raw[6] != 0U) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
+            break;
+        }
+        if (!context->host_connected || context->state != HOST_FSM_ARMED ||
+            pending_safety_action != HOST_SAFETY_ACTION_NONE) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
+            break;
+        }
+        motor_target_set_t targets = { 0 };
+        targets.sequence = sequence;
+        for (uint8_t i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+            const size_t offset = YERTLE_PROTOCOL_HEADER_SIZE + (size_t)i * 5U;
+            targets.motor[i].position = (uint16_t)raw[offset] | ((uint16_t)raw[offset + 1U] << 8U);
+            targets.motor[i].speed = (uint16_t)raw[offset + 2U] | ((uint16_t)raw[offset + 3U] << 8U);
+            targets.motor[i].acceleration = raw[offset + 4U];
+        }
+        if (!motor_device_validate_targets(&targets)) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_TARGET);
+        } else if (!actuator_submit_targets(&targets)) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_TARGET_BUSY);
+        } else {
+            send_result(context, MESSAGE_ACK, type, sequence, 0U);
+        }
+        break;
+    }
     case MESSAGE_GET_UART_STATS:
         /* Read-only diagnostic: does not refresh the control lease or ARM. */
         uart_diagnostics_send(context, send_diagnostic_frame);

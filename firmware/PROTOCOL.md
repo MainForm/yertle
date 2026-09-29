@@ -137,8 +137,12 @@ u16  crc16_ccitt          # CRC-16/CCITT-FALSE over preceding raw bytes
 | `RESET_FAULT` | `0x07` | `ACK` only from clearable `FAULT`; requests safe stop |
 | `GET_UART_STATS` | `0x08` | Read-only cumulative counters; replies with `UART_STATS`, no ARM or lease refresh |
 
-`0x06` is reserved for the later `SET_JOINT_TARGETS` phase and returns `NACK`
-in phase 1.
+`SET_JOINT_TARGETS` (`0x06`) has a fixed 60-byte payload: for IDs 1..12 in
+ascending order, five bytes each: position u16 LE [step], speed u16 LE [raw],
+acceleration u8 [raw]. All 12 targets are required. It is accepted only while
+connected and ARMED; position must be 0..4095 and speed 0..3400. ACK means
+queued, not that the servo reached its goal. Invalid length/state/target or
+queue failure returns NACK codes 2/5/8/9 respectively.
 
 ## Implemented responses
 
