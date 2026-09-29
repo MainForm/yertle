@@ -110,9 +110,9 @@ void motor_diagnostics_rx_byte(uint8_t byte)
     ++rx_length;
 }
 
-void motor_diagnostics_masks(uint8_t motion, uint8_t current)
+void motor_diagnostics_masks(uint16_t motion, uint16_t current)
 {
-    masks = motion | ((uint32_t) current << 8U);
+    masks = motion | ((uint32_t) current << 16U);
 }
 
 static void pack(uint8_t *output, uint32_t value)

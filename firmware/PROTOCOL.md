@@ -9,7 +9,7 @@ TX DMA errors, RX DMA errors, SyncRead attempts, complete six-ID SyncReads,
 feedback cycle attempts, complete two-block/six-ID feedback cycles, RX buffer
 capacity (256), three reserved zero words. No new request is needed.
 Each counter has one serialized writer (bus task or equal-priority ISRs).
-Complete SyncRead means all IDs 1..6 parsed; complete feedback means both
+Complete SyncRead means all IDs 1..12 parsed; complete feedback means both
 motion/current blocks for all six. Counts are since boot; PC summary subtracts
 first/last samples and prints the actual MCU span. Boundary snapshots can catch
 an in-progress transaction, so attempts/completions are not an atomic pair.
@@ -57,7 +57,7 @@ Measurement storage, ISR accounting and diagnostic serialization are separated
 into src/uart_diagnostics.c. Control/driver code calls measurement hooks only.
 
 0x87 has 64 bytes: u32 uptime, u32 last reason (0xffffffff means none),
-u32 motion/current masks (bits 0..5 for motion IDs 1..6, bits 8..13 for current),
+u32 motion/current masks (bits 0..11 for motion IDs 1..12, bits 16..27 for current),
 u32 live USART1 SR, then twelve cumulative u32 counters in this order:
 build_failed, tx_timeout, no_response, header_timeout, body_timeout, rx_error,
 bad_length, bad_checksum, parse_error, id_or_data_length, servo_fault, valid_reply.
@@ -67,7 +67,7 @@ body_timeout means the header was found but the remaining frame was incomplete.
 rx_error includes UART/DMA receive failure or exhausted RX DMA buffer;
 UART_STATS distinguishes hardware errors from buffer overflow. Checksums are
 the servo protocol's checksum, not host CRC16. Valid_reply counts parsed reply
-frames, not complete six-motor feedback sets. Masks show the last completed read.
+frames, not complete twelve-motor feedback sets. Masks show the last completed read.
 
 0x88 has 64 bytes: u32 uptime, attempted TX length, consumed RX length since
 that TX, first 16 attempted TX bytes, first 16 consumed RX bytes, then u32

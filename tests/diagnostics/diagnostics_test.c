@@ -41,7 +41,7 @@ int main(void) {
     assert(copy.tx_bytes == 0 && copy.isr_cycles == 0 && copy.timeouts == 0);
     const uint8_t packet[] = {0xff, 0xff, 1};
     motor_diagnostics_tx(packet, sizeof packet); motor_diagnostics_rx_byte(0xab);
-    motor_diagnostics_record(DIAG_VALID_REPLY); motor_diagnostics_masks(0x3f, 0x3f);
+    motor_diagnostics_record(DIAG_VALID_REPLY); motor_diagnostics_masks(0x0fff, 0x0fff);
     uart_diagnostics_send(NULL, receive);
     assert(frames == 6);
     puts("firmware diagnostics tests passed (ownership, carry, serialization; no hardware IRQ simulation)");

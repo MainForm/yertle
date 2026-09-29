@@ -4,7 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define YERTLE_MOTOR_COUNT 6U
+#define YERTLE_MOTOR_COUNT 12U
+#define YERTLE_ALL_MOTORS_MASK ((uint16_t)((1U << YERTLE_MOTOR_COUNT) - 1U))
 
 typedef struct {
     uint16_t position;
@@ -31,7 +32,7 @@ typedef struct {
 
 typedef struct {
     uint32_t sequence;
-    uint8_t valid_mask;
+    uint16_t valid_mask;
     motor_feedback_t motor[YERTLE_MOTOR_COUNT];
 } motor_feedback_set_t;
 

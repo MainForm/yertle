@@ -56,8 +56,8 @@ void vTaskDelay(uint32_t ticks) {
         DMA1->ISR=DMA_ISR_TCIF4; DMA1_Channel4_IRQHandler(); DMA1->ISR=0;
         USART1->SR=USART_SR_TC; ++tx_simulations;
         if (inject_sync && q[4]==0x82) {
-            uint8_t packets[128]; size_t size=0;
-            for (uint8_t id=1;id<=6;++id) if (id!=omit_id) size+=reply(packets+size,id,q[6]);
+            uint8_t packets[256]; size_t size=0;
+            for (uint8_t id=1;id<=YERTLE_MOTOR_COUNT;++id) if (id!=omit_id) size+=reply(packets+size,id,q[6]);
             inject_bytes(packets,size);
         }
     }
@@ -141,15 +141,15 @@ int main(void) {
     inject_sync=true;
     motor_feedback_set_t feedback;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_OK);
-    assert(feedback.valid_mask==0x3f && tx_simulations==4);
-    for (unsigned i=0;i<6;++i) assert(feedback.motor[i].position==(int)i+1 && feedback.motor[i].current==(int)i+1);
-    omit_id=6;
+    assert(feedback.valid_mask==YERTLE_ALL_MOTORS_MASK && tx_simulations==4);
+    for (unsigned i=0;i<YERTLE_MOTOR_COUNT;++i) assert(feedback.motor[i].position==(int)i+1 && feedback.motor[i].current==(int)i+1);
+    omit_id=12;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
-    assert(feedback.valid_mask==0x1f);
+    assert(feedback.valid_mask==0x7ff);
     uart_diagnostics_send(NULL,capture);
     assert(transport_words[1]==1 && transport_words[12]==256);
     assert(transport_words[6]==1 && transport_words[7]==1 && transport_words[5]==1);
     assert(transport_words[8]==4 && transport_words[9]==2);
     assert(transport_words[10]==2 && transport_words[11]==1);
-    puts("DMA driver tests passed: six replies/multiple IDLE, missing ID, TX wire completion, abort, errors, bounds, statistics (mock registers, not board)");
+    puts("DMA driver tests passed: twelve replies/multiple IDLE, missing ID, TX wire completion, abort, errors, bounds, statistics (mock registers, not board)");
 }

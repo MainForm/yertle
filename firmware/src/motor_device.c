@@ -19,7 +19,9 @@
 static SemaphoreHandle_t bus_mutex;
 static uint8_t tx_frame[STS3215_TX_BUF_SIZE];
 static uint8_t rx_frame[STS3215_RX_BUF_SIZE];
-static const uint8_t motor_ids[YERTLE_MOTOR_COUNT] = { 1U, 2U, 3U, 4U, 5U, 6U };
+static const uint8_t motor_ids[YERTLE_MOTOR_COUNT] = {
+    1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U
+};
 
 static int motor_index_from_id(uint8_t id)
 {
@@ -47,7 +49,7 @@ static motor_device_status_t send_broadcast(int16_t frame_length)
     return sent ? MOTOR_DEVICE_OK : MOTOR_DEVICE_UART_ERROR;
 }
 
-static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
+static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
                                motor_feedback_set_t *feedback, bool current_block)
 {
     const int16_t frame_length = STS3215_BuildSyncRead(
@@ -63,7 +65,7 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
         return 0U;
     }
 
-    uint8_t received_mask = 0U;
+    uint16_t received_mask = 0U;
     for (uint8_t reply_index = 0U; reply_index < YERTLE_MOTOR_COUNT; ++reply_index) {
         size_t received_length = 0U;
         if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length,
@@ -101,10 +103,10 @@ static uint8_t read_sync_block(uint8_t reg, uint8_t data_length,
             motor->voltage = reply.data[6];
             motor->temperature = reply.data[7];
         }
-        received_mask |= (uint8_t) (1U << (uint8_t) index);
+        received_mask |= (uint16_t) (1U << (uint8_t) index);
     }
     motor_uart_discard_rx(); /* Stop DMA even on partial response/error. */
-    if (received_mask == 0x3FU) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
+    if (received_mask == YERTLE_ALL_MOTORS_MASK) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
     return received_mask;
 }
 
@@ -192,20 +194,20 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)
     }
 
     motor_transport_record(TRANSPORT_FEEDBACK_CYCLE);
-    const uint8_t motion_mask = read_sync_block(
+    const uint16_t motion_mask = read_sync_block(
         STS3215_REG_CURRENT_POS, 8U, feedback, false);
-    const uint8_t current_mask = read_sync_block(
+    const uint16_t current_mask = read_sync_block(
         STS3215_REG_CURRENT_CURRENT, 2U, feedback, true);
     feedback->valid_mask = motion_mask & current_mask;
-    if (feedback->valid_mask == 0x3FU) motor_transport_record(TRANSPORT_FEEDBACK_COMPLETE);
+    if (feedback->valid_mask == YERTLE_ALL_MOTORS_MASK) motor_transport_record(TRANSPORT_FEEDBACK_COMPLETE);
     motor_diagnostics_masks(motion_mask, current_mask);
 
     for (uint8_t index = 0U; index < YERTLE_MOTOR_COUNT; ++index) {
         feedback->motor[index].valid =
-            (feedback->valid_mask & (uint8_t) (1U << index)) != 0U;
+            (feedback->valid_mask & (uint16_t) (1U << index)) != 0U;
     }
 
     (void) xSemaphoreGive(bus_mutex);
-    return feedback->valid_mask == 0x3FU
+    return feedback->valid_mask == YERTLE_ALL_MOTORS_MASK
         ? MOTOR_DEVICE_OK : MOTOR_DEVICE_PARTIAL_FEEDBACK;
 }

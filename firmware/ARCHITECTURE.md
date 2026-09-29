@@ -6,7 +6,7 @@
 |---|---:|---:|---|
 | `actuator_task` | idle + 4 | 10 ms | Latest-target execution, torque state and SAFE_STOP |
 | `host_protocol_task` | idle + 3 | 2 ms buffer polling | Host framing, commands, heartbeat and FSM |
-| `sensor_task` | idle + 2 | 20 ms | Six-servo feedback collection and cached snapshot |
+| `sensor_task` | idle + 2 | 20 ms | Twelve-servo feedback collection and cached snapshot |
 | Idle task | idle | kernel managed | FreeRTOS idle processing |
 
 The FSM is owned by `host_protocol_task`; there is no separate FSM task.
@@ -74,7 +74,7 @@ actuator request.
 
 ## Feedback behavior
 
-At 50 Hz, `sensor_task` performs two SYNC_READ transactions for IDs 1..6:
+At 50 Hz, `sensor_task` performs two SYNC_READ transactions for IDs 1..12:
 
 1. registers `0x38..0x3F`: position, speed, load, voltage, temperature;
 2. registers `0x45..0x46`: current.

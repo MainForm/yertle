@@ -33,6 +33,6 @@ void uart_diagnostics_rx_error(volatile uart_isr_stats_t *s, uint32_t status, ui
 void motor_diagnostics_record(enum motor_diag_reason reason);
 void motor_diagnostics_tx(const uint8_t *data, size_t length);
 void motor_diagnostics_rx_byte(uint8_t byte);
-void motor_diagnostics_masks(uint8_t motion, uint8_t current);
+void motor_diagnostics_masks(uint16_t motion, uint16_t current);
 void uart_diagnostics_send(void *context, uart_diag_sender_t send);
 #endif
