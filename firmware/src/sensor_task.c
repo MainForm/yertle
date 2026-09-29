@@ -38,9 +38,10 @@ void sensor_task(void *argument)
 
     for (;;) {
         motor_feedback_set_t sample = { 0 };
-        /* Driver reads USART1's ISR ring while this sensor task owns the bus. */
+        /* Driver reads USART1's DMA buffer while this sensor task owns the bus. */
         (void) motor_device_read_feedback(&sample);
         sample.sequence = ++feedback_sequence;
+        sample.uptime_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
         if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
             latest_feedback = sample;

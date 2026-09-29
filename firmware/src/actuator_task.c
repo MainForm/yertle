@@ -8,6 +8,7 @@
 
 #define ACTUATOR_PERIOD_MS 10U
 #define ACTUATOR_FAILURE_LIMIT 3U
+#define TARGET_TIMEOUT_MS 500U
 
 static QueueHandle_t target_queue;
 
@@ -35,6 +36,7 @@ void actuator_task(void *argument)
     bool target_valid = false;
     bool torque_enabled = false;
     uint8_t consecutive_failures = 0U;
+    TickType_t last_target_tick = 0U;
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;) {
@@ -61,6 +63,12 @@ void actuator_task(void *argument)
             if (xQueueReceive(target_queue, &received_targets, 0U) == pdPASS) {
                 active_targets = received_targets;
                 target_valid = true;
+                last_target_tick = xTaskGetTickCount();
+            }
+
+            if (target_valid && (xTaskGetTickCount() - last_target_tick) >= pdMS_TO_TICKS(TARGET_TIMEOUT_MS)) {
+                target_valid = false;
+                host_protocol_request_target_timeout();
             }
 
             if (target_valid) {

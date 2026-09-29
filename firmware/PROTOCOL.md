@@ -143,6 +143,18 @@ acceleration u8 [raw]. All 12 targets are required. It is accepted only while
 connected and ARMED; position must be 0..4095 and speed 0..3400. ACK means
 queued, not that the servo reached its goal. Invalid length/state/target or
 queue failure returns NACK codes 2/5/8/9 respectively.
+The actuator repeats its most recent valid target every 10 ms, but enters
+DISARMED and requests torque-off safe stop after 500 ms without a fresh target.
+That target timeout latches automatic re-ARM off until an explicit ARM command.
+An independent host HEARTBEAT timeout remains 1000 ms.
+
+`GET_MOTOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
+(`0x8B`) frames, four IDs per frame. Each 56-byte payload contains sample
+sequence u32 LE, sample uptime_ms u32 LE, valid mask u16 LE, first ID u8,
+count u8 (=4), then four 11-byte entries: signed position/speed/load/current
+u16 LE, voltage u8 (0.1 V), temperature u8 (deg C), servo error u8. The three
+frames share one cached sensor snapshot. A zero bit in valid mask means that
+ID's data must not be used. If no snapshot exists, NACK code 10 is returned.
 
 ## Implemented responses
 
@@ -154,6 +166,7 @@ queue failure returns NACK codes 2/5/8/9 respectively.
 | `EVENT` | `0x83` | state transition, host-link change, or unsafe diagnostic report |
 | `F103_HEARTBEAT` | `0x84` | uptime, FSM state, host-link status, requested safety action, unsafe reason, fault reason |
 | `UART_STATS` | `0x85` | 60-byte UART diagnostic snapshot described below |
+| `MOTOR_FEEDBACK` | `0x8B` | One of three four-motor cached feedback blocks described above |
 
 ## UART statistics
 

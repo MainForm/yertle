@@ -9,6 +9,7 @@
 
 #include "host_uart.h"
 #include "actuator_task.h"
+#include "sensor_task.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
 
@@ -30,6 +31,7 @@ enum message_type {
     MESSAGE_SET_JOINT_TARGETS = 0x06U,
     MESSAGE_RESET_FAULT = 0x07U,
     MESSAGE_GET_UART_STATS = 0x08U,
+    MESSAGE_GET_MOTOR_FEEDBACK = 0x09U,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -39,7 +41,8 @@ enum message_type {
     MESSAGE_UART_ISR_STATS = 0x86U,
     MESSAGE_MOTOR_DIAGNOSTICS = 0x87U,
     MESSAGE_MOTOR_TRACE = 0x88U,
-    MESSAGE_UART_RX_ERRORS = 0x89U
+    MESSAGE_UART_RX_ERRORS = 0x89U,
+    MESSAGE_MOTOR_FEEDBACK = 0x8BU
 };
 
 enum error_code {
@@ -51,7 +54,8 @@ enum error_code {
     ERROR_FAULT_NOT_CLEARABLE = 6U,
     ERROR_INVALID_FLAGS = 7U,
     ERROR_INVALID_TARGET = 8U,
-    ERROR_TARGET_BUSY = 9U
+    ERROR_TARGET_BUSY = 9U,
+    ERROR_FEEDBACK_UNAVAILABLE = 10U
 };
 
 enum event_code {
@@ -67,6 +71,7 @@ enum state_cause {
     STATE_CAUSE_STOP_COMMAND = 4U,
     STATE_CAUSE_HEARTBEAT_TIMEOUT = 5U,
     STATE_CAUSE_HEARTBEAT_REARM = 6U,
+    STATE_CAUSE_TARGET_TIMEOUT = 7U,
     STATE_CAUSE_FAULT = 8U,
     STATE_CAUSE_FAULT_RESET = 10U
 };
@@ -91,6 +96,7 @@ static volatile bool fault_clearable = false;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
 static volatile bool stop_latched = false;
+static volatile bool requested_target_timeout = false;
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t length)
 {
@@ -237,6 +243,38 @@ static void send_f103_heartbeat(protocol_context_t *context)
     send_frame(context, MESSAGE_F103_HEARTBEAT, payload, sizeof(payload));
 }
 
+static void send_motor_feedback(protocol_context_t *context, const motor_feedback_set_t *feedback)
+{
+    for (uint8_t first = 0U; first < YERTLE_MOTOR_COUNT; first += 4U) {
+        uint8_t payload[56] = { 0 };
+        const uint32_t sequence = feedback->sequence, uptime = feedback->uptime_ms;
+        for (uint8_t b = 0U; b < 4U; ++b) {
+            payload[b] = (uint8_t)(sequence >> (8U * b));
+            payload[4U + b] = (uint8_t)(uptime >> (8U * b));
+        }
+        payload[8] = (uint8_t)feedback->valid_mask;
+        payload[9] = (uint8_t)(feedback->valid_mask >> 8U);
+        payload[10] = first + 1U;
+        payload[11] = 4U;
+        for (uint8_t j = 0U; j < 4U; ++j) {
+            const motor_feedback_t *m = &feedback->motor[first + j];
+            const size_t p = 12U + (size_t)j * 11U;
+            payload[p] = (uint8_t)m->position;
+            payload[p+1U] = (uint8_t)((uint16_t)m->position >> 8U);
+            payload[p+2U] = (uint8_t)m->speed;
+            payload[p+3U] = (uint8_t)((uint16_t)m->speed >> 8U);
+            payload[p+4U] = (uint8_t)m->load;
+            payload[p+5U] = (uint8_t)((uint16_t)m->load >> 8U);
+            payload[p+6U] = (uint8_t)m->current;
+            payload[p+7U] = (uint8_t)((uint16_t)m->current >> 8U);
+            payload[p+8U] = m->voltage;
+            payload[p+9U] = m->temperature;
+            payload[p+10U] = m->servo_error;
+        }
+        send_frame(context, MESSAGE_MOTOR_FEEDBACK, payload, sizeof(payload));
+    }
+}
+
 static void transition_state(protocol_context_t *context, host_fsm_state_t next,
                              uint8_t cause, bool announce)
 {
@@ -334,6 +372,15 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
 
     switch (type) {
+    case MESSAGE_GET_MOTOR_FEEDBACK: {
+        motor_feedback_set_t feedback;
+        if (!sensor_get_motor_feedback(&feedback) || feedback.sequence == 0U) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_FEEDBACK_UNAVAILABLE);
+        } else {
+            send_motor_feedback(context, &feedback);
+        }
+        break;
+    }
     case MESSAGE_SET_JOINT_TARGETS: {
         if (raw[5] != YERTLE_MOTOR_COUNT * 5U || raw[6] != 0U) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
@@ -474,6 +521,15 @@ void host_protocol_task(void *argument)
             request_safe_stop();
         }
 
+        if (requested_target_timeout) {
+            requested_target_timeout = false;
+            if (context.state == HOST_FSM_ARMED) {
+                stop_latched = true; /* Explicit ARM required after lost targets. */
+                transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_TARGET_TIMEOUT, true);
+                request_safe_stop();
+            }
+        }
+
         if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
             context.last_reported_unsafe_reason = requested_unsafe_reason;
             const uint8_t payload[] = {
@@ -526,6 +582,11 @@ void host_protocol_latch_fault(host_fault_reason_t reason)
     if (reason != HOST_FAULT_NONE) {
         requested_fault_reason = reason;
     }
+}
+
+void host_protocol_request_target_timeout(void)
+{
+    requested_target_timeout = true;
 }
 
 void host_protocol_set_fault_clearable(bool clearable)

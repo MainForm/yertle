@@ -32,6 +32,7 @@ typedef struct {
 
 typedef struct {
     uint32_t sequence;
+    uint32_t uptime_ms;
     uint16_t valid_mask;
     motor_feedback_t motor[YERTLE_MOTOR_COUNT];
 } motor_feedback_set_t;

@@ -146,6 +146,16 @@ int main(void) {
     omit_id=12;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
     assert(feedback.valid_mask==0x7ff);
+    motor_target_set_t targets={0};
+    for (unsigned i=0;i<YERTLE_MOTOR_COUNT;++i) {
+        targets.motor[i].position=(uint16_t)(2048U+i);
+        targets.motor[i].speed=200U;
+        targets.motor[i].acceleration=10U;
+    }
+    assert(motor_device_validate_targets(&targets));
+    assert(motor_device_write_targets(&targets)==MOTOR_DEVICE_OK);
+    targets.motor[11].position=4096U;
+    assert(!motor_device_validate_targets(&targets));
     uart_diagnostics_send(NULL,capture);
     assert(transport_words[1]==1 && transport_words[12]==256);
     assert(transport_words[6]==1 && transport_words[7]==1 && transport_words[5]==1);
