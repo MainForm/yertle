@@ -153,7 +153,7 @@ int main(void)
 
     run_case(true, true, false);
     assert(center_writes > 0U && torque_off_calls == 1U);
-    assert(torque_off_tick >= 1510U && faults > 0U);
+    assert(torque_off_tick >= 510U && torque_off_tick <= 520U && faults > 0U);
 
     run_case(false, false, false);
     assert(center_writes == 0U && torque_off_calls == 1U);

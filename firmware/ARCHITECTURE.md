@@ -72,7 +72,7 @@ actuator request.
   motors toward position 2048 at speed 200 raw and acceleration 10 raw. Three
   fresh, complete feedback samples with every motor within 16 steps are needed
   before broadcast torque-off completes SAFE_STOP. Recovery is bounded by a
-  15 s total timeout and a 1.5 s no-progress timeout; failed writes also abort.
+  15 s total timeout and a 0.5 s no-progress timeout; failed writes also abort.
 - At boot (no commanded torque) and in FAULT, SAFE_STOP skips repositioning and
   requests broadcast torque-off. Failed torque-off is retried and faults after
   three failed attempts. A successful broadcast write does not prove that every

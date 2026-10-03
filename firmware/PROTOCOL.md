@@ -238,7 +238,7 @@ repeatedly sends a synchronized 2048-step goal (speed 200 raw, acceleration
 10 raw) and requires three fresh complete feedback samples with all twelve
 axes within 16 steps. It then sends broadcast torque-off and calls
 `host_protocol_complete_safe_stop()`. The return attempt is bounded to 15 s
-overall and 1.5 s without measurable progress; repeated motor-bus failures,
+overall and 0.5 s without measurable progress; repeated motor-bus failures,
 missing feedback or a blocked joint trigger FAULT and a torque-off attempt.
 At boot or in FAULT it skips movement and attempts torque-off immediately.
 Broadcast success confirms transmission, not individual servo compliance.
