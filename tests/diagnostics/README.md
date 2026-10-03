@@ -23,12 +23,16 @@ signals, interrupt latency, or the driver's boundary IRQ protection.
 
 `firmware_dma_test` compiles the real DMA driver, task-side frame reader,
 motor_device and Mowibox protocol using mock registers/RTOS calls. It covers
-multiple IDLE events, six replies, missing IDs, buffer ownership, wire-TC wait,
+multiple IDLE events, twelve replies, missing IDs, buffer ownership, wire-TC wait,
 RX residue/no double counting, UART errors, both DMA errors, buffer exhaustion,
 no response/partial response timeout, restart and transport/cycle counters.
 It does not emulate DMA bus arbitration or electrical/interruption timing.
 
-Run both tests under GCC in the container:
+The safe-stop test also covers single FAULT return attempts, torque-off-only
+fallback, successful completion and continued OFF failure. These tests do not
+execute the host FSM or the physical board.
+
+Run all tests under GCC in the container:
 
 ```sh
 cmake -S tests/diagnostics -B build/diagnostic-tests-linux

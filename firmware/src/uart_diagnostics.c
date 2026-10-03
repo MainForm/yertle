@@ -2,8 +2,6 @@
 #include <string.h>
 #include "FreeRTOS.h"
 #include "task.h"
-#include "host_uart.h"
-#include "motor_uart.h"
 
 static volatile uart_isr_stats_t ports[2];
 static volatile uint32_t tx_bytes[2], timeouts[2];
@@ -130,8 +128,8 @@ void uart_diagnostics_send(void *context, uart_diag_sender_t send)
     uint32_t registers[5];
     uint32_t transport_snapshot[16];
     const uint32_t snapshot_start = DWT->CYCCNT;
-    host_uart_get_stats(&snapshot[1]);
-    motor_uart_get_stats(&snapshot[0]);
+    uart_diagnostics_get_stats(1U, &snapshot[1]);
+    uart_diagnostics_get_stats(0U, &snapshot[0]);
     for (unsigned i = 0; i < DIAG_REASON_COUNT; ++i) counters[i] = reasons[i];
     last = last_reason; valid = masks; sr = USART1->SR;
     txlen = tx_length; rxlen = rx_length;

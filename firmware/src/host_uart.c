@@ -16,11 +16,6 @@ static volatile bool rx_resync;
 static volatile uart_isr_stats_t *diagnostics;
 #define stats (*diagnostics)
 
-void host_uart_get_stats(uart_stats_t *output)
-{
-    uart_diagnostics_get_stats(1U, output);
-}
-
 /* ISR owns production; the task disables this IRQ briefly while consuming. */
 void USART2_IRQHandler(void)
 {

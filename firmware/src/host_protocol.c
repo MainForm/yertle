@@ -34,11 +34,6 @@ enum message_type {
     MESSAGE_HELLO_ACK = 0x82U,
     MESSAGE_EVENT = 0x83U,
     MESSAGE_F103_HEARTBEAT = 0x84U,
-    MESSAGE_UART_STATS = 0x85U,
-    MESSAGE_UART_ISR_STATS = 0x86U,
-    MESSAGE_MOTOR_DIAGNOSTICS = 0x87U,
-    MESSAGE_MOTOR_TRACE = 0x88U,
-    MESSAGE_UART_RX_ERRORS = 0x89U,
     MESSAGE_MOTOR_FEEDBACK = 0x8BU,
     MESSAGE_IMU_FEEDBACK = 0x8CU,
     MESSAGE_FSM_STATE = 0x8DU
@@ -85,7 +80,6 @@ typedef struct {
 } protocol_context_t;
 
 static volatile host_fsm_state_t published_state = HOST_FSM_BOOT;
-static volatile bool published_host_connected = false;
 static volatile host_fault_reason_t requested_fault_reason = HOST_FAULT_NONE;
 static volatile host_unsafe_reason_t requested_unsafe_reason = HOST_UNSAFE_NONE;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
@@ -333,7 +327,6 @@ static void set_host_connected(protocol_context_t *context, bool connected)
     }
     context->host_connected = connected;
     if (!connected) context->lease_established = false;
-    published_host_connected = connected;
     const uint8_t payload[] = { EVENT_HOST_LINK_CHANGED, connected ? 1U : 0U };
     send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
 }
@@ -599,9 +592,4 @@ host_fsm_state_t host_protocol_get_state(void)
 bool host_protocol_is_armed(void)
 {
     return published_state == HOST_FSM_ARMED;
-}
-
-bool host_protocol_is_host_connected(void)
-{
-    return published_host_connected;
 }

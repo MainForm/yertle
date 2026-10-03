@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.15)
 
 project(yertle_freertos_f103rb LANGUAGES C ASM)
 
-# The STM32F103RE uses an ARM Cortex-M3 core.
+# The STM32F103RB uses an ARM Cortex-M3 core.
 set(FREERTOS_PORT GCC_ARM_CM3 CACHE STRING "FreeRTOS portable layer")
 set(FREERTOS_HEAP 4 CACHE STRING "FreeRTOS heap implementation")
 

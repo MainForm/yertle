@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /*
- * Phase 1 FSM. FAULT stays at value 5 to preserve the v1 host wire format.
+ * Host-owned FSM. FAULT stays at value 5 in the v1 host wire format.
  * Values 3 and 4 are intentionally unused after removing the two transient
  * states that previously represented timeout and unsafe detection.
  */
@@ -39,7 +39,7 @@ typedef enum {
 
 void host_protocol_task(void *argument);
 
-/* Interface implemented by the later motor/safety task. Never call from ISR. */
+/* Task-context interface shared with actuator_task. Never call from ISR. */
 host_safety_action_t host_protocol_get_pending_safety_action(void);
 /* Completion also releases FAULT into DISARMED, requiring a fresh heartbeat. */
 void host_protocol_complete_safe_stop(void);
@@ -49,6 +49,5 @@ void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
 host_fsm_state_t host_protocol_get_state(void);
 bool host_protocol_is_armed(void);
-bool host_protocol_is_host_connected(void);
 
 #endif /* HOST_PROTOCOL_H */

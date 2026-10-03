@@ -11,9 +11,7 @@
 #include "sts3215_protocol.h"
 #define RX_CAPACITY 256U
 #define UART_BAUD 1000000U
-typedef enum { DMA_IDLE, DMA_TX_BUSY, DMA_RX_BUSY, DMA_ERROR } dma_state_t;
 static uint8_t tx_buffer[STS3215_TX_BUF_SIZE], rx_buffer[RX_CAPACITY];
-static volatile dma_state_t state;
 static volatile bool active, tx_finished, failed, tx_dma_failed;
 static volatile uint32_t rx_accounted;
 static uint32_t rx_consumed, tx_length;
@@ -40,7 +38,7 @@ void USART1_IRQHandler(void) {
         if (sr & USART_SR_IDLE) motor_transport_record(TRANSPORT_RX_IDLE);
         if (errors) {
             ++s->rx_errors; uart_diagnostics_rx_error(s, sr, byte);
-            if (active) { failed = true; state = DMA_ERROR; }
+            if (active) failed = true;
         }
     }
     uart_isr_timing_finish(s, begin);
@@ -49,11 +47,10 @@ void DMA1_Channel4_IRQHandler(void) {
     const uint32_t begin = DWT->CYCCNT, flags = DMA1->ISR;
     DMA1->IFCR = DMA_IFCR_CGIF4;
     if (flags & DMA_ISR_TEIF4) {
-        tx_dma_failed = true; failed = true; state = DMA_ERROR; motor_transport_record(TRANSPORT_TX_DMA_ERROR);
+        tx_dma_failed = true; failed = true; motor_transport_record(TRANSPORT_TX_DMA_ERROR);
     }
     if (flags & DMA_ISR_TCIF4) {
         DMA1_Channel4->CCR &= ~DMA_CCR_EN; tx_finished = true;
-        if (!failed) state = DMA_RX_BUSY;
     }
     uart_isr_timing_finish(s, begin);
 }
@@ -62,11 +59,11 @@ void DMA1_Channel5_IRQHandler(void) {
     DMA1->IFCR = DMA_IFCR_CGIF5;
     account_rx_irq();
     if (flags & DMA_ISR_TEIF5) {
-        failed = true; state = DMA_ERROR; motor_transport_record(TRANSPORT_RX_DMA_ERROR);
+        failed = true; motor_transport_record(TRANSPORT_RX_DMA_ERROR);
     }
     if (flags & DMA_ISR_TCIF5) {
         /* Normal DMA exhausted: never silently overwrite unread bytes. */
-        failed = true; state = DMA_ERROR; ++s->rx_overflows;
+        failed = true; ++s->rx_overflows;
         motor_transport_record(TRANSPORT_RX_FULL);
     }
     uart_isr_timing_finish(s, begin);
@@ -93,7 +90,7 @@ void motor_dma_stop(void) {
     DMA1->IFCR = DMA_IFCR_CGIF4 | DMA_IFCR_CGIF5;
     volatile uint32_t discard = USART1->SR; discard = USART1->DR; (void)discard;
     NVIC_ClearPendingIRQ(USART1_IRQn); NVIC_ClearPendingIRQ(DMA1_Channel4_IRQn); NVIC_ClearPendingIRQ(DMA1_Channel5_IRQn);
-    state = DMA_IDLE; __DMB();
+    __DMB();
     NVIC_EnableIRQ(DMA1_Channel4_IRQn); NVIC_EnableIRQ(DMA1_Channel5_IRQn); NVIC_EnableIRQ(USART1_IRQn);
 }
 void motor_dma_init(void) {
@@ -112,7 +109,7 @@ void motor_dma_init(void) {
     motor_transport_dma_mode(RX_CAPACITY); motor_dma_stop();
 }
 bool motor_dma_start(const uint8_t *data, size_t length) {
-    if (!data || !length || length>sizeof tx_buffer || state!=DMA_IDLE) return false;
+    if (!data || !length || length>sizeof tx_buffer || active) return false;
     memcpy(tx_buffer,data,length);
     rx_accounted=0; rx_consumed=0; tx_length=(uint32_t)length;
     failed=false; tx_dma_failed=false; tx_finished=false; tx_accounted=false;
@@ -123,7 +120,7 @@ bool motor_dma_start(const uint8_t *data, size_t length) {
     DMA1_Channel4->CCR = DMA_CCR_DIR | DMA_CCR_MINC | DMA_CCR_PL_1 | DMA_CCR_TCIE | DMA_CCR_TEIE;
     DMA1_Channel4->CPAR = (uintptr_t)&USART1->DR; DMA1_Channel4->CMAR = (uintptr_t)tx_buffer;
     DMA1_Channel4->CNDTR = tx_length;
-    active=true; state=DMA_TX_BUSY; __DMB();
+    active=true; __DMB();
     DMA1_Channel5->CCR |= DMA_CCR_EN; USART1->CR3 |= USART_CR3_DMAR; /* RX before TX. */
     motor_transport_record(TRANSPORT_TX_STARTED);
     DMA1_Channel4->CCR |= DMA_CCR_EN; USART1->CR3 |= USART_CR3_DMAT;

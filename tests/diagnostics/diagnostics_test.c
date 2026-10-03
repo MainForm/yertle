@@ -7,8 +7,6 @@ USART_Type test_usart;
 GPIO_Type test_gpio;
 NVIC_Type test_nvic;
 uint32_t SystemCoreClock = 64000000U;
-void host_uart_get_stats(uart_stats_t *s) { uart_diagnostics_get_stats(1, s); }
-void motor_uart_get_stats(uart_stats_t *s) { uart_diagnostics_get_stats(0, s); }
 static unsigned frames;
 static uint32_t read32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);

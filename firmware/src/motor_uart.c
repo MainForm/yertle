@@ -5,7 +5,6 @@
 #include "uart_diagnostics.h"
 
 void motor_uart_init(void) { motor_dma_init(); }
-void motor_uart_get_stats(uart_stats_t *s) { uart_diagnostics_get_stats(0U,s); }
 void motor_uart_discard_rx(void) { motor_dma_stop(); }
 
 bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms) {

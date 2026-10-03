@@ -130,7 +130,7 @@ Replace COM10 with ST-LINK VCP, not the servo module USB. Keep the already-worki
 UART wiring and disconnect servo-module USB/other bus masters. No ARM/heartbeat
 or motion commands are sent by the monitor. Existing baseline logs are untouched.
 The terminal must show `MOTOR transport=Mowibox-pattern F103 DMA port`.
-Summary adds complete six-servo SyncRead and full two-block feedback cycle
+Summary adds complete twelve-servo SyncRead and full two-block feedback cycle
 percentages. RX IRQ counts are now IDLE/error events, not byte interrupts; motor
 ISR time now includes UART plus TX/RX DMA handler bodies. Compare error deltas,
 valid responses/timeouts and complete-cycle rates, NOT IRQ count per byte.

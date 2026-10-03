@@ -27,7 +27,6 @@ void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
 uint32_t board_apb2_clock_hz(void) { return 64000000U; }
 uint32_t xTaskGetTickCount(void) { return tick; }
-void host_uart_get_stats(uart_stats_t *s) { uart_diagnostics_get_stats(1,s); }
 static void inject_bytes(const uint8_t *data,size_t size) {
     assert(size<=256);
     memcpy((void *)DMA1_Channel5->CMAR,data,size);
@@ -85,7 +84,9 @@ int main(void) {
     assert(USART1->BRR==0x40);
     assert(!(USART1->CR1 & USART_CR1_RXNEIE));
     assert(USART1->CR1 & USART_CR1_IDLEIE);
-    uint8_t request[14]={0xff,0xff,0xfe,10,0x82,0x38,8,1,2,3,4,5,6,0x20};
+    const uint8_t ids[YERTLE_MOTOR_COUNT]={1,2,3,4,5,6,7,8,9,10,11,12};
+    uint8_t request[YERTLE_MOTOR_COUNT+8U];
+    assert(STS3215_BuildSyncRead(request,sizeof request,0x38,8,ids,YERTLE_MOTOR_COUNT)==sizeof request);
     assert(motor_dma_start(request,sizeof request));
     assert(!motor_dma_start(request,sizeof request)); /* no buffer reuse while busy */
     assert(!motor_dma_tx_complete());
@@ -94,29 +95,29 @@ int main(void) {
     DMA1_Channel4_IRQHandler(); DMA1->ISR=0;
     USART1->SR=0; assert(!motor_dma_tx_complete()); /* DMA TC is not UART wire TC */
     USART1->SR=USART_SR_TC; assert(motor_dma_tx_complete());
-    uint8_t packets[128]; size_t size=0;
-    for (uint8_t id=1;id<=6;++id) size+=reply(packets+size,id,8);
+    uint8_t packets[256]; size_t size=0;
+    for (uint8_t id=1;id<=YERTLE_MOTOR_COUNT;++id) size+=reply(packets+size,id,8);
     inject_bytes(packets,14); /* first IDLE must not terminate the whole response */
     inject_bytes(packets,28);
     inject_bytes(packets,size);
-    for (uint8_t id=1;id<=6;++id) {
+    for (uint8_t id=1;id<=YERTLE_MOTOR_COUNT;++id) {
         uint8_t frame[16]; size_t length=0; STS3215_Reply_t parsed;
         assert(motor_uart_read_frame(frame,sizeof frame,&length,5));
         assert(STS3215_ParseReply(frame,(uint16_t)length,&parsed)==STS3215_OK);
         assert(parsed.id==id && parsed.data_len==8);
     }
     uart_stats_t stats;
-    motor_uart_get_stats(&stats); assert(stats.rx_bytes==84 && stats.tx_bytes==14);
-    motor_dma_stop(); motor_uart_get_stats(&stats); assert(stats.rx_bytes==84);
+    uart_diagnostics_get_stats(0U,&stats); assert(stats.rx_bytes==168 && stats.tx_bytes==sizeof request);
+    motor_dma_stop(); uart_diagnostics_get_stats(0U,&stats); assert(stats.rx_bytes==168);
     assert(motor_dma_start(request,sizeof request));
     /* Residue without IDLE still counted exactly once at stop. */
     DMA1_Channel5->CNDTR=253; motor_dma_stop();
-    motor_uart_get_stats(&stats); assert(stats.rx_bytes==87);
-    motor_dma_stop(); motor_uart_get_stats(&stats); assert(stats.rx_bytes==87);
+    uart_diagnostics_get_stats(0U,&stats); assert(stats.rx_bytes==171);
+    motor_dma_stop(); uart_diagnostics_get_stats(0U,&stats); assert(stats.rx_bytes==171);
     assert(motor_dma_start(request,sizeof request));
     DMA1_Channel5->CNDTR=0; DMA1->ISR=DMA_ISR_TCIF5;
     DMA1_Channel5_IRQHandler(); DMA1->ISR=0;
-    assert(motor_dma_failed()); motor_uart_get_stats(&stats); assert(stats.rx_overflows==1);
+    assert(motor_dma_failed()); uart_diagnostics_get_stats(0U,&stats); assert(stats.rx_overflows==1);
     motor_dma_stop();
     assert(motor_dma_start(request,sizeof request));
     DMA1->ISR=DMA_ISR_TEIF4; DMA1_Channel4_IRQHandler(); DMA1->ISR=0;
@@ -127,7 +128,7 @@ int main(void) {
     assert(motor_dma_start(request,sizeof request));
     USART1->SR=USART_SR_FE | USART_SR_NE;
     USART1_IRQHandler(); USART1->SR=0;
-    assert(motor_dma_failed()); motor_uart_get_stats(&stats);
+    assert(motor_dma_failed()); uart_diagnostics_get_stats(0U,&stats);
     assert(stats.fe_errors==1 && stats.ne_errors==1 && stats.rx_errors==1);
     motor_dma_stop();
     assert(!motor_uart_write(request,sizeof request,5)); /* TX timeout abort */

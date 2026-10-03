@@ -1,7 +1,5 @@
 #include "sensor_task.h"
 
-#include <string.h>
-
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"

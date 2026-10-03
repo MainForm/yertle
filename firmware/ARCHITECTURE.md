@@ -34,7 +34,7 @@ motor RX ring are removed. UART IDLE/error and DMA complete/error handlers do
 minimal accounting/state updates with no FreeRTOS calls or packet parsing.
 `motor_uart_read_frame` assembles from DMA progress (CNDTR), and the existing
 Mowibox parser runs in task context. Multiple IDLE events between servo replies
-do NOT terminate a six-servo transaction. The normal-mode 256-byte RX buffer is
+do NOT terminate a twelve-servo transaction. The normal-mode 256-byte RX buffer is
 reset for each request; exhaustion/errors abort instead of wrapping/overwriting.
 The bus mutex remains held throughout TX/replies; empty reads sleep one tick.
 Normal DMA is stopped and residual byte counts finalized at each transaction
@@ -42,6 +42,15 @@ end, including broadcasts, partial feedback and abort. Setup/teardown uses a
 short peripheral-specific IRQ guard; diagnostic snapshots remain unmasked.
 The task-owned residual counter is separate from ISR-owned RX accounting.
 No new task, HAL/RS485 DE layer, pin, baud, clock or FSM change is introduced.
+
+DMA replaces per-byte USART1 RX interrupts, not all interrupts. The active
+handlers are USART1 IDLE/error, DMA1 Channel4 TX completion/error and DMA1
+Channel5 RX full/error. USART1 RXNEIE stays disabled. USART2 still uses its
+own RX ISR/ring and polling TX. Its implementation is not a retired motor path.
+Upstream submodules remain unmodified; the G4 HAL source is excluded by CMake.
+Diagnostic snapshots directly read uart_diagnostics storage, not UART-driver
+wrapper APIs. Transaction ownership uses one active flag; separate completion
+and error flags retain their actual distinct meanings.
 
 ```text
 actuator_task ------- write/torque ----+

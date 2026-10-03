@@ -5,12 +5,12 @@
 GET_UART_STATS also returns MOTOR_TRANSPORT_STATS, 64 bytes of little-endian
 u32 words: uptime_ms, mode (1 = F103 DMA port of Mowibox pattern), TX starts,
 TX wire completions observed by task, UART IDLE events, RX buffer-full events,
-TX DMA errors, RX DMA errors, SyncRead attempts, complete six-ID SyncReads,
-feedback cycle attempts, complete two-block/six-ID feedback cycles, RX buffer
+TX DMA errors, RX DMA errors, SyncRead attempts, complete twelve-ID SyncReads,
+feedback cycle attempts, complete two-block/twelve-ID feedback cycles, RX buffer
 capacity (256), three reserved zero words. No new request is needed.
 Each counter has one serialized writer (bus task or equal-priority ISRs).
 Complete SyncRead means all IDs 1..12 parsed; complete feedback means both
-motion/current blocks for all six. Counts are since boot; PC summary subtracts
+motion/current blocks for all twelve. Counts are since boot; PC summary subtracts
 first/last samples and prints the actual MCU span. Boundary snapshots can catch
 an in-progress transaction, so attempts/completions are not an atomic pair.
 DMA full is fatal, not circular ring overflow. In DMA mode UART_STATS RX bytes
