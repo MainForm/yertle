@@ -13,6 +13,7 @@ add_executable(yertle_f103rb
     src/motor_dma.c
     src/uart_diagnostics.c
     src/motor_device.c
+    src/imu_device.c
     src/actuator_task.c
     src/sensor_task.c
     ${STS3215_DIR}/src/sts3215_protocol.c
