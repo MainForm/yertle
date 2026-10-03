@@ -67,7 +67,8 @@ enum state_cause {
     STATE_CAUSE_HEARTBEAT_TIMEOUT = 5U,
     STATE_CAUSE_LEASE_READY = 6U,
     STATE_CAUSE_TARGET_TIMEOUT = 7U,
-    STATE_CAUSE_FAULT = 8U
+    STATE_CAUSE_FAULT = 8U,
+    STATE_CAUSE_SAFE_STOP_COMPLETE = 9U
 };
 
 typedef struct {
@@ -503,6 +504,14 @@ void host_protocol_task(void *argument)
         if (safe_stop_completed) {
             safe_stop_completed = false;
             pending_safety_action = HOST_SAFETY_ACTION_NONE;
+            if (context.state == HOST_FSM_FAULT) {
+                requested_fault_reason = HOST_FAULT_NONE;
+                /* Stay DISARMED until a heartbeat received after recovery. */
+                context.lease_established = false;
+                requested_target_timeout = false;
+                transition_state(&context, HOST_FSM_DISARMED,
+                                 STATE_CAUSE_SAFE_STOP_COMPLETE, true);
+            }
         }
 
         if ((requested_fault_reason != HOST_FAULT_NONE) && (context.state != HOST_FSM_FAULT)) {

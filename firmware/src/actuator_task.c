@@ -22,7 +22,6 @@
 #define SAFE_STOP_STALL_TIMEOUT_MS 500U
 #define SAFE_STOP_TOTAL_TIMEOUT_MS 15000U
 #define SAFE_STOP_PROGRESS_STEP 12U
-#define FAULT_SAFE_STOP_ATTEMPTS 2U
 
 typedef enum {
     SAFE_STOP_IDLE = 0,
@@ -37,7 +36,6 @@ typedef struct {
     safe_stop_phase_t phase;
     bool fault_recovery;
     bool torque_on_sent;
-    uint8_t fault_attempts;
     uint8_t consecutive_failures;
     TickType_t started_tick;
     TickType_t last_command_tick;
@@ -63,17 +61,13 @@ static void begin_stop_attempt(safe_stop_context_t *stop, TickType_t now,
     stop->settled_samples = 0U;
 }
 
-static void stop_attempt_failed(safe_stop_context_t *stop, TickType_t now)
+static void stop_attempt_failed(safe_stop_context_t *stop)
 {
     if (!stop->fault_recovery) {
         host_protocol_latch_fault(HOST_FAULT_SERVO);
         stop->phase = SAFE_STOP_WAITING_FOR_FAULT;
-    } else if (stop->fault_attempts < FAULT_SAFE_STOP_ATTEMPTS) {
-        ++stop->fault_attempts;
-        /* A failed torque-off write may already have reached some servos. */
-        begin_stop_attempt(stop, now, true, false);
     } else {
-        /* Latch until reboot: never issue another movement or torque-on command. */
+        /* The single FAULT return attempt failed; only retry torque-off now. */
         stop->phase = SAFE_STOP_TORQUE_OFF_ONLY;
     }
 }
@@ -167,7 +161,6 @@ void actuator_task(void *argument)
             const TickType_t now = xTaskGetTickCount();
             if (in_fault && !stop.fault_recovery) {
                 stop.fault_recovery = true;
-                stop.fault_attempts = 1U;
                 begin_stop_attempt(&stop, now, true, false);
             } else if (stop.phase == SAFE_STOP_IDLE) {
                 /* Boot never enables torque just to return to center. */
@@ -178,7 +171,7 @@ void actuator_task(void *argument)
             case SAFE_STOP_RETURNING:
                 if ((now - stop.started_tick) >= pdMS_TO_TICKS(SAFE_STOP_TOTAL_TIMEOUT_MS) ||
                     (now - stop.last_progress_tick) >= pdMS_TO_TICKS(SAFE_STOP_STALL_TIMEOUT_MS)) {
-                    stop_attempt_failed(&stop, now);
+                    stop_attempt_failed(&stop);
                     break;
                 }
                 if ((now - stop.last_command_tick) >= pdMS_TO_TICKS(SAFE_STOP_COMMAND_PERIOD_MS)) {
@@ -194,7 +187,7 @@ void actuator_task(void *argument)
                     if (status == MOTOR_DEVICE_OK) {
                         stop.consecutive_failures = 0U;
                     } else if (++stop.consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
-                        stop_attempt_failed(&stop, now);
+                        stop_attempt_failed(&stop);
                         break;
                     }
                 }
@@ -210,12 +203,16 @@ void actuator_task(void *argument)
                     consecutive_failures = 0U;
                     host_protocol_complete_safe_stop();
                 } else if (++stop.consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
-                    stop_attempt_failed(&stop, now);
+                    stop_attempt_failed(&stop);
                 }
                 break;
             case SAFE_STOP_TORQUE_OFF_ONLY:
-                /* Keep attempting even after local TX success; broadcast has no ACK. */
-                if (motor_device_set_torque(false) == MOTOR_DEVICE_OK) torque_enabled = false;
+                if (motor_device_set_torque(false) == MOTOR_DEVICE_OK) {
+                    torque_enabled = false;
+                    stop.phase = SAFE_STOP_COMPLETE;
+                    consecutive_failures = 0U;
+                    host_protocol_complete_safe_stop();
+                }
                 break;
             case SAFE_STOP_WAITING_FOR_FAULT:
             case SAFE_STOP_COMPLETE:

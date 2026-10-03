@@ -209,6 +209,7 @@ DISARMED --healthy host lease, safe stop complete, no fault--> ARMED
 ARMED --target timeout (500 ms)--> DISARMED + safe stop request
 ARMED --heartbeat timeout--> DISARMED + safe stop request
 ARMED or DISARMED --fault report--> FAULT
+FAULT --safe stop or fallback torque-off TX succeeds--> DISARMED
 ```
 
 FSM values are `BOOT=0`, `DISARMED=1`, `ARMED=2`, and `FAULT=5`. Values 3 and
@@ -218,8 +219,10 @@ FSM values are `BOOT=0`, `DISARMED=1`, `ARMED=2`, and `FAULT=5`. Values 3 and
 owns FSM transitions. `HELLO` establishes the link; a valid `HEARTBEAT` grants
 a lease, after which the F103 enters `ARMED` only when safe-stop has completed
 and no fault is latched. A target timeout revokes the lease until a fresh
-heartbeat. A fault stays latched until local reset; there is no remote fault
-reset command. The PC cannot command immediate disarm/stop. Ceasing targets
+heartbeat. FAULT is released into DISARMED when safe stop or fallback torque-off
+transmission succeeds; this clears the fault reason and revokes the host lease,
+requiring a heartbeat received after completion before re-arming. There is no
+remote fault reset command. The PC cannot command immediate disarm/stop. Ceasing targets
 triggers the 500 ms target watchdog; loss of heartbeat triggers the 1000 ms
 link watchdog. Neither means torque is removed immediately: the F103 first
 attempts to return to 2048. An independent physical emergency stop is needed
@@ -241,15 +244,16 @@ axes within 16 steps. It then sends broadcast torque-off and calls
 overall and 0.5 s without measurable progress; repeated motor-bus failures,
 missing feedback or a blocked joint trigger FAULT. At boot with no commanded
 torque, it skips movement and attempts torque-off immediately.
-In FAULT, the actuator performs two additional full return-and-torque-off
-attempts. Each sends the center goal before explicitly enabling torque, uses
+In FAULT, the actuator performs one additional full return-and-torque-off
+attempt. It sends the center goal before explicitly enabling torque, uses
 fresh feedback, and has independent 0.5 s no-progress and 15 s total deadlines.
 Three consecutive transmission failures also fail an attempt, including failures
-to send torque-off. Successful recovery clears the pending safety action but
-does not clear FAULT or permit host targets. If both attempts fail, torque-off
-is repeatedly transmitted every 10 ms actuator cycle until reboot; position and
-torque-on commands stop, and the safety action stays pending. A local successful
-torque-off transmission does not terminate this fallback loop.
+to send torque-off. Successful recovery clears the pending safety action and
+fault reason, then transitions to DISARMED (state-change EVENT cause 9).
+If the single attempt fails, torque-off is repeatedly transmitted every 10 ms
+actuator cycle; position and torque-on commands stop. FAULT and the safety action
+stay active while transmission fails. The first successful local torque-off
+transmission terminates this fallback loop and also transitions to DISARMED.
 Broadcast success confirms transmission, not individual servo compliance.
 The host must send fresh targets after the F103 autonomously re-enters ARMED.
 

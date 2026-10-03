@@ -74,17 +74,21 @@ actuator request.
   before broadcast torque-off completes SAFE_STOP. Recovery is bounded by a
   15 s total timeout and a 0.5 s no-progress timeout; failed writes also abort.
 - At boot (no commanded torque), SAFE_STOP only requests broadcast torque-off.
-- FAULT starts two additional full SAFE_STOP attempts: command position 2048,
+- FAULT starts one additional full SAFE_STOP attempt: command position 2048,
   explicitly enable torque, verify settling, then disable torque. Each attempt
   resets its timers and feedback history. Three consecutive command/torque
   transmission failures, 0.5 s without progress, or 15 s overall fail an attempt.
-- A successful FAULT recovery completes SAFE_STOP but leaves FAULT latched until
-  reboot. If both attempts fail, the actuator permanently switches to torque-off
-  only, once per 10 ms actuator cycle, even after a successful local transmission.
-  No more position or torque-on commands are issued. SAFE_STOP remains pending.
+- Successful FAULT recovery completes SAFE_STOP and transitions to DISARMED.
+  If the single attempt fails, only torque-off is retried once per 10 ms actuator
+  cycle, without position or torque-on commands. The first successful local
+  torque-off transmission also completes SAFE_STOP and transitions to DISARMED.
+  While OFF keeps failing, FAULT and the pending safety action remain active.
   A successful broadcast write does not prove that every servo disabled torque.
+- FAULT completion clears the fault reason and revokes the host lease. A new
+  heartbeat after completion is required before automatic re-arming; torque
+  remains off until a fresh target. A subsequent fault report starts a new cycle.
 - The 0.5 s no-progress limit applies separately to each attempt: an initial
-  failed stop followed by two stalled FAULT retries can total about 1.5 s.
+  failed stop followed by one stalled FAULT retry can total about 1.0 s.
 - Re-arming does not restore a stale target; a new target set is required.
 
 ## Feedback behavior

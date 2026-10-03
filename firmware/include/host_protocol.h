@@ -41,6 +41,7 @@ void host_protocol_task(void *argument);
 
 /* Interface implemented by the later motor/safety task. Never call from ISR. */
 host_safety_action_t host_protocol_get_pending_safety_action(void);
+/* Completion also releases FAULT into DISARMED, requiring a fresh heartbeat. */
 void host_protocol_complete_safe_stop(void);
 void host_protocol_latch_unsafe(host_unsafe_reason_t reason);
 void host_protocol_clear_unsafe(void);

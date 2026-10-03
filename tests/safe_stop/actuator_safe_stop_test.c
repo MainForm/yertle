@@ -82,6 +82,7 @@ void host_protocol_complete_safe_stop(void)
 {
     ++completed_stops;
     safety_action = HOST_SAFETY_ACTION_NONE;
+    if (state == HOST_FSM_FAULT) state = HOST_FSM_DISARMED;
 }
 void host_protocol_latch_fault(host_fault_reason_t reason)
 {
@@ -174,12 +175,12 @@ int main(void)
     assert(torque_off_calls == 1U && torque_off_tick >= 110U);
     assert(completed_stops == 1U && faults == 0U);
 
-    /* Initial stop fails, then both FAULT retries fail. Torque-off stays active. */
+    /* Initial stop and the single FAULT retry stall; successful OFF completes. */
     run_case(true, true, false, 70U, 1750U, false, false, 0U);
-    assert(torque_on_calls == 3U && center_writes > 0U);
-    assert(torque_off_calls >= 10U && faults == 1U && completed_stops == 0U);
-    assert(state == HOST_FSM_FAULT && center_writes == writes_at_first_successful_off);
-    assert(last_center_write_tick < 1540U && torque_off_tick >= 1700U);
+    assert(torque_on_calls == 2U && center_writes > 0U);
+    assert(torque_off_calls == 1U && faults == 1U && completed_stops == 1U);
+    assert(state == HOST_FSM_DISARMED && center_writes == writes_at_first_successful_off);
+    assert(last_center_write_tick < 1040U && torque_off_tick < 1050U);
 
     run_case(false, false, false, 70U, 100U, false, false, 0U);
     assert(center_writes == 0U && torque_off_calls == 1U);
@@ -188,26 +189,33 @@ int main(void)
     /* FAULT recovery succeeds on the first try; no repeat after completion. */
     run_case(true, false, true, 70U, 300U, false, false, 0U);
     assert(torque_on_calls == 2U && center_writes > 0U);
-    assert(torque_off_calls == 1U && completed_stops == 1U && state == HOST_FSM_FAULT);
+    assert(torque_off_calls == 1U && completed_stops == 1U && state == HOST_FSM_DISARMED);
 
-    /* First FAULT try stalls, the second succeeds with fresh feedback. */
+    /* No second FAULT return attempt, even if feedback later becomes centered. */
     run_case(true, false, true, 600U, 850U, false, false, 0U);
-    assert(torque_on_calls == 3U && torque_off_calls == 1U && completed_stops == 1U);
-    assert(torque_off_tick >= 650U && state == HOST_FSM_FAULT);
+    assert(torque_on_calls == 2U && torque_off_calls == 1U && completed_stops == 1U);
+    assert(torque_off_tick < 600U && state == HOST_FSM_DISARMED);
 
     /* No feedback cannot be mistaken for a centered pose. */
     run_case(true, false, true, 70U, 1250U, false, true, 0U);
-    assert(torque_on_calls == 3U && torque_off_calls >= 10U && completed_stops == 0U);
+    assert(torque_on_calls == 2U && torque_off_calls == 1U && completed_stops == 1U);
+    assert(state == HOST_FSM_DISARMED);
     assert(center_writes == writes_at_first_successful_off);
 
-    /* Three failed goal writes per attempt: initial + two retries, then off-only. */
+    /* Three failed goal writes per attempt: initial + one retry, then off-only. */
     run_case(true, false, false, 70U, 300U, true, false, 0U);
-    assert(center_writes == 9U && torque_on_calls == 1U && faults == 1U);
-    assert(torque_off_calls >= 10U && completed_stops == 0U);
+    assert(center_writes == 6U && torque_on_calls == 1U && faults == 1U);
+    assert(torque_off_calls == 1U && completed_stops == 1U && state == HOST_FSM_DISARMED);
 
-    /* A stop includes torque-off: six failed OFF writes exhaust both FAULT tries. */
+    /* Failed OFF writes retry without more center commands; first success ends. */
     run_case(true, false, true, 0U, 350U, false, false, 6U);
-    assert(torque_on_calls == 3U && torque_off_calls > 6U && completed_stops == 0U);
-    assert(center_writes == writes_at_first_successful_off && state == HOST_FSM_FAULT);
+    assert(torque_on_calls == 2U && torque_off_calls == 7U && completed_stops == 1U);
+    assert(center_writes == writes_at_first_successful_off && state == HOST_FSM_DISARMED);
+
+    /* While OFF keeps failing, FAULT and the pending stop must remain active. */
+    run_case(true, true, true, 70U, 850U, false, false, 1000U);
+    assert(torque_on_calls == 2U && torque_off_calls >= 10U && completed_stops == 0U);
+    assert(state == HOST_FSM_FAULT && safety_action == HOST_SAFETY_ACTION_SAFE_STOP);
+    assert(last_center_write_tick < 520U);
     return 0;
 }
