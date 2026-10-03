@@ -41,7 +41,7 @@ int main(void)
 
     created = xTaskCreate(actuator_task,
                           "actuator",
-                          configMINIMAL_STACK_SIZE * 2U,
+                          configMINIMAL_STACK_SIZE * 3U,
                           NULL,
                           tskIDLE_PRIORITY + 4U,
                           NULL);

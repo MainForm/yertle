@@ -61,15 +61,22 @@ actuator request.
 
 ## Control behavior
 
-- `actuator_task` accepts only validated sets containing all six motor targets.
+- `actuator_task` accepts only validated sets containing all twelve motor targets.
 - Position is restricted to 0..4095 steps and speed to 0..3400 raw.
 - A received target is written with one seven-byte-per-servo SYNC_WRITE frame:
   acceleration, position, running time (zero), and speed.
 - Torque stays disabled until a valid target exists. The target registers are
   written first, then torque is enabled, preventing an uncommanded jump to an
   arbitrary startup target.
-- DISARM, STOP, heartbeat timeout, or FAULT discards queued targets and sends
-  broadcast torque-off. SAFE_STOP completes only after that frame is sent.
+- Target or heartbeat timeout discards queued targets, then commands all twelve
+  motors toward position 2048 at speed 200 raw and acceleration 10 raw. Three
+  fresh, complete feedback samples with every motor within 16 steps are needed
+  before broadcast torque-off completes SAFE_STOP. Recovery is bounded by a
+  15 s total timeout and a 1.5 s no-progress timeout; failed writes also abort.
+- At boot (no commanded torque) and in FAULT, SAFE_STOP skips repositioning and
+  requests broadcast torque-off. Failed torque-off is retried and faults after
+  three failed attempts. A successful broadcast write does not prove that every
+  servo physically disabled torque.
 - Re-arming does not restore a stale target; a new target set is required.
 
 ## Feedback behavior
@@ -80,7 +87,7 @@ At 50 Hz, `sensor_task` performs two SYNC_READ transactions for IDs 1..12:
 2. registers `0x45..0x46`: current.
 
 A motor is marked valid only when both replies were received and parsed. The
-latest snapshot and a six-bit validity mask are protected by a separate cache
+latest snapshot and a twelve-bit validity mask are protected by a separate cache
 mutex. Missing feedback is recorded as invalid but is not yet promoted to a
 FAULT; that policy belongs to the later hard-safety stage.
 

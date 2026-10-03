@@ -141,9 +141,10 @@ connected and ARMED; position must be 0..4095 and speed 0..3400. ACK means
 queued, not that the servo reached its goal. Invalid length/state/target or
 queue failure returns NACK codes 2/5/8/9 respectively.
 The actuator repeats its most recent valid target every 10 ms, but enters
-DISARMED and requests torque-off safe stop after 500 ms without a fresh target.
+DISARMED and starts a bounded 2048-step return before torque-off after 500 ms
+without a fresh target.
 That target timeout invalidates the host lease; a later fresh HEARTBEAT can
-make the FSM ready again once torque-off safe stop has completed.
+make the FSM ready again once the return and torque-off have completed.
 An independent host HEARTBEAT timeout remains 1000 ms.
 
 `GET_MOTOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
@@ -220,8 +221,9 @@ and no fault is latched. A target timeout revokes the lease until a fresh
 heartbeat. A fault stays latched until local reset; there is no remote fault
 reset command. The PC cannot command immediate disarm/stop. Ceasing targets
 triggers the 500 ms target watchdog; loss of heartbeat triggers the 1000 ms
-link watchdog. An independent physical emergency stop is needed where immediate
-torque removal is required.
+link watchdog. Neither means torque is removed immediately: the F103 first
+attempts to return to 2048. An independent physical emergency stop is needed
+where immediate torque removal is required.
 
 `host_protocol_latch_unsafe()` and `host_protocol_latch_fault()` are integration
 points for the later motor/safety task. An unsafe report sends an `EVENT` and
@@ -230,10 +232,17 @@ safe stop; this preserves the RPi policy's ability to issue recovery targets.
 `host_protocol_clear_unsafe()` clears the diagnostic once the later safety task
 has verified recovery. A fault remains an F103-owned hard stop.
 
-`actuator_task` owns target execution and safe stopping. A safe stop disables
-torque through `motor_device` before calling
-`host_protocol_complete_safe_stop()`. New targets are discarded during the
-transition, so the host must send a fresh target after re-arming.
+`actuator_task` owns target execution and safe stopping. On a target or host
+timeout with commanded torque active, a safe stop discards queued targets,
+repeatedly sends a synchronized 2048-step goal (speed 200 raw, acceleration
+10 raw) and requires three fresh complete feedback samples with all twelve
+axes within 16 steps. It then sends broadcast torque-off and calls
+`host_protocol_complete_safe_stop()`. The return attempt is bounded to 15 s
+overall and 1.5 s without measurable progress; repeated motor-bus failures,
+missing feedback or a blocked joint trigger FAULT and a torque-off attempt.
+At boot or in FAULT it skips movement and attempts torque-off immediately.
+Broadcast success confirms transmission, not individual servo compliance.
+The host must send fresh targets after the F103 autonomously re-enters ARMED.
 
 Target and feedback messages are implemented as described above. IMU feedback
 is telemetry only; this version does not use it for actuator safety decisions.
