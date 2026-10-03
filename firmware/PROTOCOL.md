@@ -156,6 +156,16 @@ u16 LE, voltage u8 (0.1 V), temperature u8 (deg C), servo error u8. The three
 frames share one cached sensor snapshot. A zero bit in valid mask means that
 ID's data must not be used. If no snapshot exists, NACK code 10 is returned.
 
+The same request also returns one `IMU_FEEDBACK` (`0x8C`) frame with a 24-byte
+payload: sample sequence u32 LE, sample uptime_ms u32 LE, valid u8, reserved
+u8 (=0), then signed i16 LE accel X/Y/Z, temperature, gyro X/Y/Z in that
+order. Sequence and uptime match the three motor frames. Raw scale is MPU-6050
+at +/-2 g (16384 LSB/g) and +/-250 deg/s (131 LSB/(deg/s)); temperature in
+degrees C is raw/340 + 36.53. When the IMU is absent or a read fails, valid=0
+and all raw fields are zero; motor feedback remains available. The IMU uses
+PB6=SCL and PB7=SDA with external pull-ups to 3.3 V; AD0 must be low for
+I2C address 0x68. It is probed again once per second after a failure.
+
 ## Implemented responses
 
 | F103 → PC/RPi | Value | Payload |
@@ -222,6 +232,5 @@ torque through `motor_device` before calling
 `host_protocol_complete_safe_stop()`. New targets are discarded during the
 transition, so the host must send a fresh target after re-arming.
 
-The stage-2 target and feedback messages are not part of the wire format yet.
-The task and device-driver APIs are present, but `0x06` remains reserved and is
-rejected until the corresponding host-side serialization is added.
+Target and feedback messages are implemented as described above. IMU feedback
+is telemetry only; this version does not use it for actuator safety decisions.

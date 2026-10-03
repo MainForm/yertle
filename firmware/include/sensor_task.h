@@ -14,7 +14,6 @@ typedef struct {
 } imu_feedback_t;
 
 bool sensor_task_init(void);
-bool sensor_get_motor_feedback(motor_feedback_set_t *feedback);
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu);
 void sensor_task(void *argument);
 

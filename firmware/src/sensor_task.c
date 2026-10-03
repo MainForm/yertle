@@ -21,17 +21,6 @@ bool sensor_task_init(void)
     return feedback_mutex != NULL;
 }
 
-bool sensor_get_motor_feedback(motor_feedback_set_t *feedback)
-{
-    if ((feedback == NULL) || (feedback_mutex == NULL) ||
-        (xSemaphoreTake(feedback_mutex, pdMS_TO_TICKS(5U)) != pdTRUE)) {
-        return false;
-    }
-    *feedback = latest_feedback;
-    (void) xSemaphoreGive(feedback_mutex);
-    return true;
-}
-
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 {
     if ((motor == NULL) || (imu == NULL) || (feedback_mutex == NULL) ||
