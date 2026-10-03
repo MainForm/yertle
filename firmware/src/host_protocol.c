@@ -25,13 +25,10 @@
 enum message_type {
     MESSAGE_HELLO = 0x01U,
     MESSAGE_HEARTBEAT = 0x02U,
-    MESSAGE_ARM = 0x03U,
-    MESSAGE_DISARM = 0x04U,
-    MESSAGE_STOP = 0x05U,
     MESSAGE_SET_JOINT_TARGETS = 0x06U,
-    MESSAGE_RESET_FAULT = 0x07U,
     MESSAGE_GET_UART_STATS = 0x08U,
     MESSAGE_GET_MOTOR_FEEDBACK = 0x09U,
+    MESSAGE_GET_FSM_STATE = 0x0AU,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -43,7 +40,8 @@ enum message_type {
     MESSAGE_MOTOR_TRACE = 0x88U,
     MESSAGE_UART_RX_ERRORS = 0x89U,
     MESSAGE_MOTOR_FEEDBACK = 0x8BU,
-    MESSAGE_IMU_FEEDBACK = 0x8CU
+    MESSAGE_IMU_FEEDBACK = 0x8CU,
+    MESSAGE_FSM_STATE = 0x8DU
 };
 
 enum error_code {
@@ -52,7 +50,6 @@ enum error_code {
     ERROR_NOT_CONNECTED = 3U,
     ERROR_UNSUPPORTED_VERSION = 4U,
     ERROR_INVALID_STATE = 5U,
-    ERROR_FAULT_NOT_CLEARABLE = 6U,
     ERROR_INVALID_FLAGS = 7U,
     ERROR_INVALID_TARGET = 8U,
     ERROR_TARGET_BUSY = 9U,
@@ -67,14 +64,10 @@ enum event_code {
 
 enum state_cause {
     STATE_CAUSE_BOOT_COMPLETE = 1U,
-    STATE_CAUSE_ARM_COMMAND = 2U,
-    STATE_CAUSE_DISARM_COMMAND = 3U,
-    STATE_CAUSE_STOP_COMMAND = 4U,
     STATE_CAUSE_HEARTBEAT_TIMEOUT = 5U,
-    STATE_CAUSE_HEARTBEAT_REARM = 6U,
+    STATE_CAUSE_LEASE_READY = 6U,
     STATE_CAUSE_TARGET_TIMEOUT = 7U,
-    STATE_CAUSE_FAULT = 8U,
-    STATE_CAUSE_FAULT_RESET = 10U
+    STATE_CAUSE_FAULT = 8U
 };
 
 typedef struct {
@@ -82,6 +75,7 @@ typedef struct {
     size_t encoded_length;
     uint8_t decoded[YERTLE_PROTOCOL_MAX_RAW];
     bool host_connected;
+    bool lease_established;
     host_fsm_state_t state;
     TickType_t last_host_tick;
     TickType_t last_f103_heartbeat_tick;
@@ -93,10 +87,8 @@ static volatile host_fsm_state_t published_state = HOST_FSM_BOOT;
 static volatile bool published_host_connected = false;
 static volatile host_fault_reason_t requested_fault_reason = HOST_FAULT_NONE;
 static volatile host_unsafe_reason_t requested_unsafe_reason = HOST_UNSAFE_NONE;
-static volatile bool fault_clearable = false;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
-static volatile bool stop_latched = false;
 static volatile bool requested_target_timeout = false;
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t length)
@@ -244,6 +236,16 @@ static void send_f103_heartbeat(protocol_context_t *context)
     send_frame(context, MESSAGE_F103_HEARTBEAT, payload, sizeof(payload));
 }
 
+static void send_fsm_state(protocol_context_t *context, uint16_t request_sequence)
+{
+    const uint8_t payload[] = {
+        (uint8_t)request_sequence,
+        (uint8_t)(request_sequence >> 8U),
+        (uint8_t)context->state
+    };
+    send_frame(context, MESSAGE_FSM_STATE, payload, sizeof(payload));
+}
+
 static void send_motor_feedback(protocol_context_t *context, const motor_feedback_set_t *feedback)
 {
     for (uint8_t first = 0U; first < YERTLE_MOTOR_COUNT; first += 4U) {
@@ -329,6 +331,7 @@ static void set_host_connected(protocol_context_t *context, bool connected)
         return;
     }
     context->host_connected = connected;
+    if (!connected) context->lease_established = false;
     published_host_connected = connected;
     const uint8_t payload[] = { EVENT_HOST_LINK_CHANGED, connected ? 1U : 0U };
     send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
@@ -336,20 +339,16 @@ static void set_host_connected(protocol_context_t *context, bool connected)
 
 static bool can_arm(const protocol_context_t *context)
 {
-    return context->host_connected && (context->state == HOST_FSM_DISARMED) &&
+    return context->host_connected && context->lease_established &&
+           (context->state == HOST_FSM_DISARMED) &&
            (pending_safety_action == HOST_SAFETY_ACTION_NONE) &&
            (requested_fault_reason == HOST_FAULT_NONE);
 }
 
-static bool can_auto_arm_from_heartbeat(const protocol_context_t *context)
+static void try_enter_control_ready(protocol_context_t *context)
 {
-    return can_arm(context) && !stop_latched;
-}
-
-static void try_auto_arm_from_heartbeat(protocol_context_t *context)
-{
-    if (can_auto_arm_from_heartbeat(context)) {
-        transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_HEARTBEAT_REARM, true);
+    if (can_arm(context)) {
+        transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_LEASE_READY, true);
     }
 }
 
@@ -396,6 +395,10 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
 
     switch (type) {
+    case MESSAGE_GET_FSM_STATE:
+        /* Read-only: never refreshes the host lease or changes the FSM. */
+        send_fsm_state(context, sequence);
+        break;
     case MESSAGE_GET_MOTOR_FEEDBACK: {
         motor_feedback_set_t feedback;
         imu_feedback_t imu;
@@ -450,49 +453,8 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             break;
         }
         context->last_host_tick = xTaskGetTickCount();
-        try_auto_arm_from_heartbeat(context);
+        context->lease_established = true;
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
-        break;
-    case MESSAGE_ARM:
-        if (!context->host_connected) {
-            send_result(context, MESSAGE_NACK, type, sequence, ERROR_NOT_CONNECTED);
-        } else if (!can_arm(context)) {
-            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
-        } else {
-            stop_latched = false;
-            transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_ARM_COMMAND, true);
-            send_result(context, MESSAGE_ACK, type, sequence, 0U);
-        }
-        break;
-    case MESSAGE_DISARM:
-        if (context->state != HOST_FSM_FAULT) {
-            transition_state(context, HOST_FSM_DISARMED, STATE_CAUSE_DISARM_COMMAND, true);
-            request_safe_stop();
-        }
-        send_result(context, MESSAGE_ACK, type, sequence, 0U);
-        break;
-    case MESSAGE_STOP:
-        if (context->state != HOST_FSM_FAULT) {
-            stop_latched = true;
-            transition_state(context, HOST_FSM_DISARMED, STATE_CAUSE_STOP_COMMAND, true);
-            request_safe_stop();
-        }
-        send_result(context, MESSAGE_ACK, type, sequence, 0U);
-        break;
-    case MESSAGE_RESET_FAULT:
-        if (!context->host_connected) {
-            send_result(context, MESSAGE_NACK, type, sequence, ERROR_NOT_CONNECTED);
-        } else if (context->state != HOST_FSM_FAULT) {
-            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
-        } else if (!fault_clearable) {
-            send_result(context, MESSAGE_NACK, type, sequence, ERROR_FAULT_NOT_CLEARABLE);
-        } else {
-            requested_fault_reason = HOST_FAULT_NONE;
-            fault_clearable = false;
-            transition_state(context, HOST_FSM_DISARMED, STATE_CAUSE_FAULT_RESET, true);
-            request_safe_stop();
-            send_result(context, MESSAGE_ACK, type, sequence, 0U);
-        }
         break;
     default:
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_UNKNOWN_MESSAGE);
@@ -509,6 +471,7 @@ void host_protocol_task(void *argument)
     context.last_host_tick = xTaskGetTickCount();
     context.last_f103_heartbeat_tick = context.last_host_tick;
     transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_BOOT_COMPLETE, false);
+    request_safe_stop();
 
     for (;;) {
         for (;;) {
@@ -550,7 +513,8 @@ void host_protocol_task(void *argument)
         if (requested_target_timeout) {
             requested_target_timeout = false;
             if (context.state == HOST_FSM_ARMED) {
-                stop_latched = true; /* Explicit ARM required after lost targets. */
+                /* Require a fresh host lease before accepting another target. */
+                context.lease_established = false;
                 transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_TARGET_TIMEOUT, true);
                 request_safe_stop();
             }
@@ -572,6 +536,9 @@ void host_protocol_task(void *argument)
                 request_safe_stop();
             }
         }
+
+        /* The FSM owns the transition; heartbeat only provides a healthy lease. */
+        try_enter_control_ready(&context);
 
         if ((now - context.last_f103_heartbeat_tick) >= pdMS_TO_TICKS(YERTLE_HEARTBEAT_PERIOD_MS)) {
             context.last_f103_heartbeat_tick = now;
@@ -613,11 +580,6 @@ void host_protocol_latch_fault(host_fault_reason_t reason)
 void host_protocol_request_target_timeout(void)
 {
     requested_target_timeout = true;
-}
-
-void host_protocol_set_fault_clearable(bool clearable)
-{
-    fault_clearable = clearable;
 }
 
 host_fsm_state_t host_protocol_get_state(void)

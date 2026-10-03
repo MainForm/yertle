@@ -46,8 +46,6 @@ void host_protocol_latch_unsafe(host_unsafe_reason_t reason);
 void host_protocol_clear_unsafe(void);
 void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
-void host_protocol_set_fault_clearable(bool clearable);
-
 host_fsm_state_t host_protocol_get_state(void);
 bool host_protocol_is_armed(void);
 bool host_protocol_is_host_connected(void);

@@ -130,12 +130,9 @@ u16  crc16_ccitt          # CRC-16/CCITT-FALSE over preceding raw bytes
 | PC/RPi → F103 | Value | Result |
 |---|---:|---|
 | `HELLO` | `0x01` | Marks host link connected, then sends `HELLO_ACK` and `ACK` |
-| `HEARTBEAT` | `0x02` | Refreshes the 1 s host timeout; when safely `DISARMED`, it also attempts automatic re-ARM |
-| `ARM` | `0x03` | Explicit re-ARM, including after an operator `STOP` |
-| `DISARM` | `0x04` | Requests safe stop and enters `DISARMED` |
-| `STOP` | `0x05` | Requests safe stop and enters `DISARMED` |
-| `RESET_FAULT` | `0x07` | `ACK` only from clearable `FAULT`; requests safe stop |
+| `HEARTBEAT` | `0x02` | Refreshes the 1 s host lease; the F103 FSM may autonomously enter `ARMED` after a safe stop completes |
 | `GET_UART_STATS` | `0x08` | Read-only cumulative counters; replies with `UART_STATS`, no ARM or lease refresh |
+| `GET_FSM_STATE` | `0x0A` | Read-only FSM query; replies with `FSM_STATE`, without refreshing the lease |
 
 `SET_JOINT_TARGETS` (`0x06`) has a fixed 60-byte payload: for IDs 1..12 in
 ascending order, five bytes each: position u16 LE [step], speed u16 LE [raw],
@@ -145,7 +142,8 @@ queued, not that the servo reached its goal. Invalid length/state/target or
 queue failure returns NACK codes 2/5/8/9 respectively.
 The actuator repeats its most recent valid target every 10 ms, but enters
 DISARMED and requests torque-off safe stop after 500 ms without a fresh target.
-That target timeout latches automatic re-ARM off until an explicit ARM command.
+That target timeout invalidates the host lease; a later fresh HEARTBEAT can
+make the FSM ready again once torque-off safe stop has completed.
 An independent host HEARTBEAT timeout remains 1000 ms.
 
 `GET_MOTOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
@@ -177,6 +175,8 @@ I2C address 0x68. It is probed again once per second after a failure.
 | `F103_HEARTBEAT` | `0x84` | uptime, FSM state, host-link status, requested safety action, unsafe reason, fault reason |
 | `UART_STATS` | `0x85` | 60-byte UART diagnostic snapshot described below |
 | `MOTOR_FEEDBACK` | `0x8B` | One of three four-motor cached feedback blocks described above |
+| `IMU_FEEDBACK` | `0x8C` | Cached IMU sample described above |
+| `FSM_STATE` | `0x8D` | Request sequence u16 LE, FSM state u8; no ACK for the query |
 
 ## UART statistics
 
@@ -204,21 +204,24 @@ The stats request/reply traffic itself is included in USART2 counters.
 
 ```text
 BOOT --initialization complete--> DISARMED
-DISARMED --valid HEARTBEAT with host link, no pending safe stop, no fault--> ARMED
-DISARMED --explicit ARM with host link, no pending safe stop, no fault--> ARMED
-ARMED --DISARM or STOP--> DISARMED + safe stop request
+DISARMED --healthy host lease, safe stop complete, no fault--> ARMED
+ARMED --target timeout (500 ms)--> DISARMED + safe stop request
 ARMED --heartbeat timeout--> DISARMED + safe stop request
 ARMED or DISARMED --fault report--> FAULT
-FAULT --fault clearable and RESET_FAULT--> DISARMED + safe stop request
 ```
 
 FSM values are `BOOT=0`, `DISARMED=1`, `ARMED=2`, and `FAULT=5`. Values 3 and
 4 remain unused so an earlier v1 client still decodes `FAULT` correctly.
 
-`DISARMED` means that external target control is not accepted. A valid
-heartbeat automatically re-enters `ARMED` as soon as no safe-stop action is
-pending and no fault is latched. `STOP` is intentionally different: it latches
-external control off until an explicit `ARM` request arrives.
+`DISARMED` means that external target control is not accepted. The F103 alone
+owns FSM transitions. `HELLO` establishes the link; a valid `HEARTBEAT` grants
+a lease, after which the F103 enters `ARMED` only when safe-stop has completed
+and no fault is latched. A target timeout revokes the lease until a fresh
+heartbeat. A fault stays latched until local reset; there is no remote fault
+reset command. The PC cannot command immediate disarm/stop. Ceasing targets
+triggers the 500 ms target watchdog; loss of heartbeat triggers the 1000 ms
+link watchdog. An independent physical emergency stop is needed where immediate
+torque removal is required.
 
 `host_protocol_latch_unsafe()` and `host_protocol_latch_fault()` are integration
 points for the later motor/safety task. An unsafe report sends an `EVENT` and
