@@ -39,7 +39,13 @@ static void inject_bytes(const uint8_t *data,size_t size) {
 static size_t reply(uint8_t *p,uint8_t id,uint8_t len) {
     p[0]=0xff; p[1]=0xff; p[2]=id; p[3]=len+2; p[4]=0;
     memset(p+5,0,len); p[5]=id;
-    if (len==8) { p[11]=64; p[12]=30; }
+    if (len==8) {
+        p[11]=64; p[12]=30;
+        if (id==7) { p[7]=0x64; p[8]=0x80; } /* -100 speed, not -32668 */
+        if (id==8) { p[9]=0x33; p[10]=0x04; } /* -51 load, not 1075 */
+        if (id==12) { p[5]=0x0c; p[6]=0x80; } /* negative position */
+    }
+    if (len==2 && id==9) { p[5]=0x05; p[6]=0x80; } /* -5 current */
     unsigned sum=0;
     for (unsigned i=2;i<(unsigned)len+5;++i) sum+=p[i];
     p[5+len]=(uint8_t)~sum;
@@ -142,7 +148,12 @@ int main(void) {
     motor_feedback_set_t feedback;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_OK);
     assert(feedback.valid_mask==YERTLE_ALL_MOTORS_MASK && tx_simulations==4);
-    for (unsigned i=0;i<YERTLE_MOTOR_COUNT;++i) assert(feedback.motor[i].position==(int)i+1 && feedback.motor[i].current==(int)i+1);
+    for (unsigned i=0;i<YERTLE_MOTOR_COUNT;++i) {
+        assert(feedback.motor[i].position==(i==11U ? -12 : (int)i+1));
+        assert(feedback.motor[i].current==(i==8U ? -5 : (int)i+1));
+    }
+    assert(feedback.motor[6].speed==-100);
+    assert(feedback.motor[7].load==-51);
     omit_id=12;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
     assert(feedback.valid_mask==0x7ff);

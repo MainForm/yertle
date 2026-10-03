@@ -31,6 +31,15 @@ static int motor_index_from_id(uint8_t id)
     return (int) id - 1;
 }
 
+/* STS3215 feedback uses a direction bit and magnitude, not two's complement.
+ * Position/speed/current use bit 15; load uses bit 10 (SDK SMS_STS). */
+static int16_t decode_direction_magnitude(const uint8_t *data, uint16_t direction_bit)
+{
+    const uint16_t encoded = STS3215_UnpackU16LE(data);
+    const int16_t magnitude = (int16_t) (encoded & (uint16_t) ~direction_bit);
+    return (encoded & direction_bit) != 0U ? (int16_t) -magnitude : magnitude;
+}
+
 static bool take_bus(void)
 {
     return (bus_mutex != NULL) &&
@@ -95,11 +104,11 @@ static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
         motor->id = reply.id;
         motor->servo_error = reply.error;
         if (current_block) {
-            motor->current = STS3215_UnpackS16LE(&reply.data[0]);
+            motor->current = decode_direction_magnitude(&reply.data[0], 0x8000U);
         } else {
-            motor->position = STS3215_UnpackS16LE(&reply.data[0]);
-            motor->speed = STS3215_UnpackS16LE(&reply.data[2]);
-            motor->load = STS3215_UnpackS16LE(&reply.data[4]);
+            motor->position = decode_direction_magnitude(&reply.data[0], 0x8000U);
+            motor->speed = decode_direction_magnitude(&reply.data[2], 0x8000U);
+            motor->load = decode_direction_magnitude(&reply.data[4], 0x0400U);
             motor->voltage = reply.data[6];
             motor->temperature = reply.data[7];
         }
