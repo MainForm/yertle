@@ -147,7 +147,7 @@ That target timeout invalidates the host lease; a later fresh HEARTBEAT can
 make the FSM ready again once the return and torque-off have completed.
 An independent host HEARTBEAT timeout remains 1000 ms.
 
-`GET_MOTOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
+`GET_SENSOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
 (`0x8B`) frames, four IDs per frame. Each 56-byte payload contains sample
 sequence u32 LE, sample uptime_ms u32 LE, valid mask u16 LE, first ID u8,
 count u8 (=4), then four 11-byte entries: signed position/speed/load/current

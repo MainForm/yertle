@@ -27,7 +27,7 @@ enum message_type {
     MESSAGE_HEARTBEAT = 0x02U,
     MESSAGE_SET_JOINT_TARGETS = 0x06U,
     MESSAGE_GET_UART_STATS = 0x08U,
-    MESSAGE_GET_MOTOR_FEEDBACK = 0x09U,
+    MESSAGE_GET_SENSOR_FEEDBACK = 0x09U,
     MESSAGE_GET_FSM_STATE = 0x0AU,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
@@ -399,7 +399,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         /* Read-only: never refreshes the host lease or changes the FSM. */
         send_fsm_state(context, sequence);
         break;
-    case MESSAGE_GET_MOTOR_FEEDBACK: {
+    case MESSAGE_GET_SENSOR_FEEDBACK: {
         motor_feedback_set_t feedback;
         imu_feedback_t imu;
         if (!sensor_get_feedback_snapshot(&feedback, &imu) || feedback.sequence == 0U) {
