@@ -239,8 +239,17 @@ repeatedly sends a synchronized 2048-step goal (speed 200 raw, acceleration
 axes within 16 steps. It then sends broadcast torque-off and calls
 `host_protocol_complete_safe_stop()`. The return attempt is bounded to 15 s
 overall and 0.5 s without measurable progress; repeated motor-bus failures,
-missing feedback or a blocked joint trigger FAULT and a torque-off attempt.
-At boot or in FAULT it skips movement and attempts torque-off immediately.
+missing feedback or a blocked joint trigger FAULT. At boot with no commanded
+torque, it skips movement and attempts torque-off immediately.
+In FAULT, the actuator performs two additional full return-and-torque-off
+attempts. Each sends the center goal before explicitly enabling torque, uses
+fresh feedback, and has independent 0.5 s no-progress and 15 s total deadlines.
+Three consecutive transmission failures also fail an attempt, including failures
+to send torque-off. Successful recovery clears the pending safety action but
+does not clear FAULT or permit host targets. If both attempts fail, torque-off
+is repeatedly transmitted every 10 ms actuator cycle until reboot; position and
+torque-on commands stop, and the safety action stays pending. A local successful
+torque-off transmission does not terminate this fallback loop.
 Broadcast success confirms transmission, not individual servo compliance.
 The host must send fresh targets after the F103 autonomously re-enters ARMED.
 

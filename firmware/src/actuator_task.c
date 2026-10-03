@@ -22,10 +22,23 @@
 #define SAFE_STOP_STALL_TIMEOUT_MS 500U
 #define SAFE_STOP_TOTAL_TIMEOUT_MS 15000U
 #define SAFE_STOP_PROGRESS_STEP 12U
+#define FAULT_SAFE_STOP_ATTEMPTS 2U
+
+typedef enum {
+    SAFE_STOP_IDLE = 0,
+    SAFE_STOP_RETURNING,
+    SAFE_STOP_DISABLING_TORQUE,
+    SAFE_STOP_WAITING_FOR_FAULT,
+    SAFE_STOP_TORQUE_OFF_ONLY,
+    SAFE_STOP_COMPLETE
+} safe_stop_phase_t;
 
 typedef struct {
-    bool active;
-    bool return_finished;
+    safe_stop_phase_t phase;
+    bool fault_recovery;
+    bool torque_on_sent;
+    uint8_t fault_attempts;
+    uint8_t consecutive_failures;
     TickType_t started_tick;
     TickType_t last_command_tick;
     TickType_t last_progress_tick;
@@ -35,6 +48,35 @@ typedef struct {
 } safe_stop_context_t;
 
 static QueueHandle_t target_queue;
+
+static void begin_stop_attempt(safe_stop_context_t *stop, TickType_t now,
+                               bool return_to_center, bool torque_on_sent)
+{
+    stop->phase = return_to_center ? SAFE_STOP_RETURNING : SAFE_STOP_DISABLING_TORQUE;
+    stop->torque_on_sent = torque_on_sent;
+    stop->consecutive_failures = 0U;
+    stop->started_tick = now;
+    stop->last_command_tick = now - pdMS_TO_TICKS(SAFE_STOP_COMMAND_PERIOD_MS);
+    stop->last_progress_tick = now;
+    stop->last_sample_sequence = 0U;
+    stop->best_total_error = UINT32_MAX;
+    stop->settled_samples = 0U;
+}
+
+static void stop_attempt_failed(safe_stop_context_t *stop, TickType_t now)
+{
+    if (!stop->fault_recovery) {
+        host_protocol_latch_fault(HOST_FAULT_SERVO);
+        stop->phase = SAFE_STOP_WAITING_FOR_FAULT;
+    } else if (stop->fault_attempts < FAULT_SAFE_STOP_ATTEMPTS) {
+        ++stop->fault_attempts;
+        /* A failed torque-off write may already have reached some servos. */
+        begin_stop_attempt(stop, now, true, false);
+    } else {
+        /* Latch until reboot: never issue another movement or torque-on command. */
+        stop->phase = SAFE_STOP_TORQUE_OFF_ONLY;
+    }
+}
 
 static motor_target_set_t center_targets(void)
 {
@@ -118,70 +160,77 @@ void actuator_task(void *argument)
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;) {
-        if (host_protocol_get_pending_safety_action() == HOST_SAFETY_ACTION_SAFE_STOP) {
+        const bool in_fault = host_protocol_get_state() == HOST_FSM_FAULT;
+        if (in_fault || host_protocol_get_pending_safety_action() == HOST_SAFETY_ACTION_SAFE_STOP) {
             target_valid = false;
             (void) xQueueReset(target_queue);
             const TickType_t now = xTaskGetTickCount();
-            if (!stop.active) {
-                stop.active = true;
-                stop.return_finished = false;
-                stop.started_tick = now;
-                stop.last_command_tick = now - pdMS_TO_TICKS(SAFE_STOP_COMMAND_PERIOD_MS);
-                stop.last_progress_tick = now;
-                stop.last_sample_sequence = 0U;
-                stop.best_total_error = UINT32_MAX;
-                stop.settled_samples = 0U;
-                consecutive_failures = 0U;
+            if (in_fault && !stop.fault_recovery) {
+                stop.fault_recovery = true;
+                stop.fault_attempts = 1U;
+                begin_stop_attempt(&stop, now, true, false);
+            } else if (stop.phase == SAFE_STOP_IDLE) {
+                /* Boot never enables torque just to return to center. */
+                begin_stop_attempt(&stop, now, torque_enabled, torque_enabled);
             }
 
-            bool disable_torque = !torque_enabled || stop.return_finished ||
-                                  host_protocol_get_state() == HOST_FSM_FAULT;
-            bool return_failed = false;
-            if (!disable_torque) {
+            switch (stop.phase) {
+            case SAFE_STOP_RETURNING:
                 if ((now - stop.started_tick) >= pdMS_TO_TICKS(SAFE_STOP_TOTAL_TIMEOUT_MS) ||
                     (now - stop.last_progress_tick) >= pdMS_TO_TICKS(SAFE_STOP_STALL_TIMEOUT_MS)) {
-                    return_failed = true;
-                } else {
-                    if ((now - stop.last_command_tick) >=
-                        pdMS_TO_TICKS(SAFE_STOP_COMMAND_PERIOD_MS)) {
-                        stop.last_command_tick = now;
-                        if (motor_device_write_targets(&centered) == MOTOR_DEVICE_OK) {
-                            consecutive_failures = 0U;
-                        } else if (++consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
-                            return_failed = true;
+                    stop_attempt_failed(&stop, now);
+                    break;
+                }
+                if ((now - stop.last_command_tick) >= pdMS_TO_TICKS(SAFE_STOP_COMMAND_PERIOD_MS)) {
+                    stop.last_command_tick = now;
+                    motor_device_status_t status = motor_device_write_targets(&centered);
+                    if (status == MOTOR_DEVICE_OK && !stop.torque_on_sent) {
+                        status = motor_device_set_torque(true);
+                        if (status == MOTOR_DEVICE_OK) {
+                            stop.torque_on_sent = true;
+                            torque_enabled = true;
                         }
                     }
-                    if (!return_failed && center_reached(&stop, now)) {
-                        stop.return_finished = true;
-                        disable_torque = true;
+                    if (status == MOTOR_DEVICE_OK) {
+                        stop.consecutive_failures = 0U;
+                    } else if (++stop.consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
+                        stop_attempt_failed(&stop, now);
+                        break;
                     }
                 }
-            }
-
-            if (return_failed) {
-                /* Never keep driving toward an unreachable pose indefinitely. */
-                host_protocol_latch_fault(HOST_FAULT_SERVO);
-                stop.return_finished = true;
-                disable_torque = true;
-            }
-            if (disable_torque) {
+                if (stop.torque_on_sent && center_reached(&stop, now)) {
+                    stop.phase = SAFE_STOP_DISABLING_TORQUE;
+                    stop.consecutive_failures = 0U;
+                }
+                break;
+            case SAFE_STOP_DISABLING_TORQUE:
                 if (motor_device_set_torque(false) == MOTOR_DEVICE_OK) {
                     torque_enabled = false;
+                    stop.phase = SAFE_STOP_COMPLETE;
                     consecutive_failures = 0U;
                     host_protocol_complete_safe_stop();
-                } else if (++consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
-                    host_protocol_latch_fault(HOST_FAULT_SERVO);
+                } else if (++stop.consecutive_failures >= ACTUATOR_FAILURE_LIMIT) {
+                    stop_attempt_failed(&stop, now);
                 }
+                break;
+            case SAFE_STOP_TORQUE_OFF_ONLY:
+                /* Keep attempting even after local TX success; broadcast has no ACK. */
+                if (motor_device_set_torque(false) == MOTOR_DEVICE_OK) torque_enabled = false;
+                break;
+            case SAFE_STOP_WAITING_FOR_FAULT:
+            case SAFE_STOP_COMPLETE:
+            case SAFE_STOP_IDLE:
+                break;
             }
         } else if (!host_protocol_is_armed()) {
-            stop.active = false;
+            stop = (safe_stop_context_t){ 0 };
             if (torque_enabled) {
                 if (motor_device_set_torque(false) == MOTOR_DEVICE_OK) torque_enabled = false;
             }
             target_valid = false;
             (void) xQueueReset(target_queue);
         } else {
-            stop.active = false;
+            stop = (safe_stop_context_t){ 0 };
             motor_target_set_t received_targets;
             if (xQueueReceive(target_queue, &received_targets, 0U) == pdPASS) {
                 active_targets = received_targets;
