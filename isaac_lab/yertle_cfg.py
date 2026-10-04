@@ -57,7 +57,7 @@ YERTLE_CFG = ArticulationCfg(
             # Do not also set the legacy fields: this version rejects two
             # mismatching limits on one implicit actuator.
             effort_limit_sim=1.9,      # N.m
-            velocity_limit_sim=5.45,   # rad/s (v6.0 baseline)
+            velocity_limit_sim=4.6,    # rad/s (v6.1 motor-speed constraint)
             stiffness=25.0,
             damping=0.5,
         ),

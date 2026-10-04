@@ -59,6 +59,19 @@ set OMNI_KIT_ACCEPT_EULA=YES
 Logs and checkpoints: `isaac_lab/runs/<experiment>/<timestamp>/`. Watch with
 `tensorboard --logdir isaac_lab/runs`.
 
+The flat environment defaults to fixed diagonal trot at **2.2 Hz** with a 0.5
+stance duty factor over the full vx [-0.5, 0.3] m/s, vy [-0.2, 0.2] m/s, and
+yaw-rate [-1.0, 1.0] rad/s command ranges. Command sampling does not exclude
+low-speed or straight-line motion. The policy outputs 12 joint-position
+actions; it does not select gait frequency. The existing three-channel gait
+observation is retained, with trot always selected.
+
+The v6.1 actuator defaults are `effort_limit_sim=1.9` N.m and
+`velocity_limit_sim=4.6` rad/s. Training can override these with
+`--effort-limit-sim` and `--velocity-limit-sim`; use
+`--velocity-limit-sim 5.45` to select the v6.0 speed limit. Saved checkpoints
+and training histories are stored separately from these code settings.
+
 ## 3. Play / record
 
 ```bat
