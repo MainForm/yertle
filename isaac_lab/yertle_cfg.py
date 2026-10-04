@@ -53,8 +53,11 @@ YERTLE_CFG = ArticulationCfg(
         # what the hardware can do.
         "legs": ImplicitActuatorCfg(
             joint_names_expr=[".*_shoulder", ".*_thigh", ".*_shin"],
-            effort_limit=3.0,          # N.m, hobby-servo scale
-            velocity_limit=10.0,       # rad/s
+            # Isaac Lab 2.3 applies the ``*_sim`` values to the PhysX drive.
+            # Do not also set the legacy fields: this version rejects two
+            # mismatching limits on one implicit actuator.
+            effort_limit_sim=1.9,      # N.m
+            velocity_limit_sim=5.45,   # rad/s (v6.0 baseline)
             stiffness=25.0,
             damping=0.5,
         ),

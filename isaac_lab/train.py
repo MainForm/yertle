@@ -33,8 +33,14 @@ parser.add_argument("--push-duration", type=float, default=0.10)
 parser.add_argument("--push-interval-min", type=float, default=3.0)
 parser.add_argument("--push-interval-max", type=float, default=6.0)
 parser.add_argument("--perturbed-env-fraction", type=float, default=0.30)
+parser.add_argument("--lin-vel-x-min", type=float, default=None, help="Optional lower bound for commanded vx (m/s).")
+parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional upper bound for commanded vx (m/s).")
+parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
+parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
+    parser.error("--lin-vel-x-min and --lin-vel-x-max must be supplied together.")
 
 # Launch Isaac Sim first; everything below needs the running app.
 app_launcher = AppLauncher(args_cli)
@@ -75,6 +81,13 @@ def main():
         )
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
+    if args_cli.lin_vel_x_min is not None:
+        env_cfg.commands.base_velocity.ranges.lin_vel_x = (args_cli.lin_vel_x_min, args_cli.lin_vel_x_max)
+    legs = env_cfg.scene.robot.actuators["legs"]
+    if args_cli.velocity_limit_sim is not None:
+        legs.velocity_limit_sim = args_cli.velocity_limit_sim
+    if args_cli.effort_limit_sim is not None:
+        legs.effort_limit_sim = args_cli.effort_limit_sim
 
     agent_cfg = RunnerCfg()
     agent_cfg.max_iterations = args_cli.max_iterations
@@ -97,6 +110,18 @@ def main():
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
     print(f"TRAIN_START task={TASK} num_envs={args_cli.num_envs} iters={args_cli.max_iterations}", flush=True)
+    print(
+        "COMMAND_RANGES "
+        f"vx={env_cfg.commands.base_velocity.ranges.lin_vel_x} "
+        f"vy={env_cfg.commands.base_velocity.ranges.lin_vel_y} "
+        f"yaw={env_cfg.commands.base_velocity.ranges.ang_vel_z}",
+        flush=True,
+    )
+    print(
+        f"ACTUATOR_LIMITS effort_limit_sim={legs.effort_limit_sim} "
+        f"velocity_limit_sim={legs.velocity_limit_sim}",
+        flush=True,
+    )
     print(f"TRAIN_LOGDIR {log_dir}", flush=True)
     runner.learn(
         num_learning_iterations=agent_cfg.max_iterations,

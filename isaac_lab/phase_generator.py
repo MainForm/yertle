@@ -90,6 +90,16 @@ def phase_contact_schedule(env, sensor_cfg: SceneEntityCfg, command_name: str = 
     return (_actual_contact(env, sensor_cfg) == _desired_contact(env, command_name)).to(torch.float32).mean(dim=1) * _moving(env, command_name)
 
 
+def phase_unscheduled_contact_penalty(env, sensor_cfg: SceneEntityCfg, command_name: str = "base_velocity") -> torch.Tensor:
+    """Fraction of feet contacting during their scheduled swing phase.
+
+    This complements ``phase_contact_schedule``: standing still no longer earns
+    phase reward merely because all feet remain in contact.
+    """
+    unscheduled = _actual_contact(env, sensor_cfg) & ~_desired_contact(env, command_name)
+    return unscheduled.to(torch.float32).mean(dim=1) * _moving(env, command_name)
+
+
 def phase_swing_clearance(env, command_name: str = "base_velocity", min_height_m: float = 0.045, transition_m: float = 0.015) -> torch.Tensor:
     asset = env.scene["robot"]
     body_ids = [asset.data.body_names.index(name) for name in _FOOT_NAMES]

@@ -36,10 +36,23 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.feet_air_time.params["sensor_cfg"].body_names = FEET
     rewards.feet_air_time.weight = 0.50
     rewards.feet_air_time.params["threshold"] = 0.50
-    rewards.flat_orientation_l2.weight = -2.5
+    rewards.flat_orientation_l2.weight = -1.0
+    rewards.lin_vel_z_l2.weight = -0.5
     rewards.dof_torques_l2.weight = -0.0002
-    rewards.track_lin_vel_xy_exp.weight = 1.5
-    rewards.track_ang_vel_z_exp.weight = 0.75
+    # Slow commands demand a tight match; the acceptable error grows with the
+    # magnitude of each commanded velocity component.
+    rewards.track_lin_vel_xy_exp = None
+    rewards.track_ang_vel_z_exp = None
+    rewards.track_lin_vel_xy_cauchy = RewTerm(
+        func=track_lin_vel_xy_cauchy,
+        weight=2.0,
+        params={"command_name": "base_velocity", "min_scale": 0.05, "relative_scale": 0.50},
+    )
+    rewards.track_ang_vel_z_cauchy = RewTerm(
+        func=track_ang_vel_z_cauchy,
+        weight=0.75,
+        params={"command_name": "base_velocity", "min_scale": 0.10, "relative_scale": 0.50},
+    )
     rewards.action_rate_l2.weight = -0.04
     rewards.ang_vel_xy_l2.weight = -0.05
     rewards.dof_acc_l2.weight = -5.0e-7
@@ -61,6 +74,11 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.diagonal_trot_gait = RewTerm(func=GaitReward, weight=0.25, params={"std": 0.1, "max_err": 0.2, "velocity_threshold": 0.05, "synced_feet_pair_names": (("lf_shin", "rb_shin"), ("rf_shin", "lb_shin")), "asset_cfg": SceneEntityCfg("robot"), "sensor_cfg": SceneEntityCfg("contact_forces")})
     rewards.diagonal_trot_gait = None
     rewards.phase_contact_schedule = RewTerm(func=phase_generator.phase_contact_schedule, weight=0.20, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+    rewards.phase_unscheduled_contact_penalty = RewTerm(
+        func=phase_generator.phase_unscheduled_contact_penalty,
+        weight=-0.20,
+        params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"},
+    )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
 
@@ -73,6 +91,44 @@ def air_time_variance_penalty(env, sensor_cfg: SceneEntityCfg, max_time: float =
     air = torch.clamp(sensor.data.last_air_time[:, sensor_cfg.body_ids], max=max_time)
     contact = torch.clamp(sensor.data.last_contact_time[:, sensor_cfg.body_ids], max=max_time)
     return torch.var(air, dim=1) + torch.var(contact, dim=1)
+
+
+def _command_relative_cauchy(error: torch.Tensor, command: torch.Tensor, min_scale: float, relative_scale: float):
+    """Return a Cauchy score with a command-relative half-width.
+
+    A zero/slow command uses ``min_scale``.  Each component widens only in
+    proportion to the magnitude commanded for that component, so large vx,
+    vy, or yaw commands are not judged by an unrealistically tight absolute
+    error tolerance.
+    """
+    scale = min_scale + relative_scale * command.abs()
+    return 1.0 / (1.0 + (error / scale).square())
+
+
+def track_lin_vel_xy_cauchy(
+    env,
+    command_name: str = "base_velocity",
+    min_scale: float = 0.05,
+    relative_scale: float = 0.50,
+):
+    """Mean Cauchy tracking score for independently scaled vx and vy."""
+    asset = env.scene["robot"]
+    command = env.command_manager.get_command(command_name)[:, :2]
+    error = asset.data.root_lin_vel_b[:, :2] - command
+    return _command_relative_cauchy(error, command, min_scale, relative_scale).mean(dim=1)
+
+
+def track_ang_vel_z_cauchy(
+    env,
+    command_name: str = "base_velocity",
+    min_scale: float = 0.10,
+    relative_scale: float = 0.50,
+):
+    """Cauchy tracking score for yaw-rate command and body yaw velocity."""
+    asset = env.scene["robot"]
+    command = env.command_manager.get_command(command_name)[:, 2]
+    error = asset.data.root_ang_vel_b[:, 2] - command
+    return _command_relative_cauchy(error, command, min_scale, relative_scale)
 
 
 def _interval_barrier(value: torch.Tensor, lower: float, upper: float, transition: float):

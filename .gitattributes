@@ -1,0 +1,2 @@
+# Compose copies these scripts into a Linux image; keep their shebangs LF-only.
+isaac_lab/train_in_docker_container/docker/*.sh text eol=lf

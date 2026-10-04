@@ -15,6 +15,10 @@ else
     git clone --depth 1 --branch "${git_ref}" "${repository_url}" "${source_dir}"
 fi
 
+# The editable checkout is mounted from Windows.  Match its checkout policy so
+# container-side Git does not report every CRLF text file as modified.
+git -C "${source_dir}" config core.autocrlf true
+
 readonly urdf_path="${source_dir}/simulation/yertle.urdf"
 readonly usd_path="${source_dir}/simulation/usd/yertle.usd"
 if [[ ! -f "${usd_path}" ]]; then
