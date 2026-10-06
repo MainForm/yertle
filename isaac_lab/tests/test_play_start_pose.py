@@ -143,6 +143,43 @@ class PlayStartPoseTests(unittest.TestCase):
             pose.reset_selected_pose(env, [0], self.angles)
         robot.write_joint_state_to_sim.assert_not_called()
 
+    def test_extension_is_explicit_and_requires_json(self):
+        event = SimpleNamespace(func=object(), params={})
+        cfg = SimpleNamespace(events=SimpleNamespace(reset_robot_joints=event))
+        for mode in ("random", "default"):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                pose.configure_start_pose(cfg, mode, None, extend_limits=True)
+        pose.configure_start_pose(cfg, "json", self.angles, extend_limits=True)
+        self.assertTrue(event.params["extend_limits"])
+
+    def test_extension_updates_only_selected_limits_and_preserves_defaults(self):
+        env, robot = self.make_env()
+        original = robot.data.joint_pos_limits.clone()
+        defaults = robot.data.default_joint_pos.clone()
+        self.angles[self.names[0]] = 2.0
+        self.angles[self.names[1]] = -2.0
+        def write_limits(limits, env_ids):
+            robot.data.joint_pos_limits[env_ids] = limits
+        robot.write_joint_position_limit_to_sim = Mock(side_effect=write_limits)
+        for _ in range(2):
+            pose.reset_selected_pose(env, [1, 2], self.angles, extend_limits=True)
+        expected = original.clone()
+        expected[1:, 0, 1] = 2.0
+        expected[1:, 1, 0] = -2.0
+        torch.testing.assert_close(robot.data.joint_pos_limits, expected)
+        torch.testing.assert_close(robot.data.default_joint_pos, defaults)
+        self.assertEqual(robot.write_joint_position_limit_to_sim.call_count, 1)
+
+    def test_extension_rejects_nonfinite_and_beyond_180_before_writes(self):
+        for value in (float("nan"), float("inf"), math.pi + 0.01):
+            env, robot = self.make_env()
+            robot.write_joint_position_limit_to_sim = Mock()
+            self.angles[self.names[0]] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                pose.reset_selected_pose(env, [0], self.angles, extend_limits=True)
+            robot.write_joint_position_limit_to_sim.assert_not_called()
+            robot.write_joint_state_to_sim.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

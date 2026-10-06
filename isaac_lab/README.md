@@ -72,10 +72,87 @@ The v6.1 actuator defaults are `effort_limit_sim=1.9` N.m and
 `--velocity-limit-sim 5.45` to select the v6.0 speed limit. Saved checkpoints
 and training histories are stored separately from these code settings.
 
+The additional `joint_velocity_excess` reward penalizes measured joint speeds
+only above **2.30 rad/s** (approximately 1500 encoder steps/s with 4096 steps
+per revolution). Its cost is
+`sum(max(abs(joint_velocity) / 2.30 - 1, 0)^2)` with initial weight **-0.10**.
+The existing `joint_vel_l2` weight remains -0.001. This soft penalty does not
+guarantee a speed bound or change the actuator default of 4.6 rad/s; use
+`--velocity-limit-sim 2.30` to also set the simulation limit for a new run.
+Isaac Lab's reward manager records this term in episode reward logs.
+
 ## 3. Play / record
 
 ```bat
 <isaac_venv>\Scripts\python.exe isaac_lab\play.py --task flat --checkpoint <path> --num_envs 16 --video
+```
+
+### Manual pose calibration (no policy)
+
+`show_default_pose.py` opens a separate **Yertle pose calibration** window with
+12 degree sliders and numeric fields, labeled by joint and physical motor ID.
+The body is held fixed and physics stays paused; the tool does not communicate
+with servos or change training/default action settings. Every editor joint now
+has a **-180 to +180 degree** range; only this paused editor's live articulation
+limits are overridden. The source USD/URDF and train/play limits are unchanged.
+This static geometry reference does **not** check
+balance, contact, self-collision, or motor torque.
+
+The default `--motor-frame reverse-front` uses physical forward=-sim X and
+physical right=+sim Y (180-degree yaw). IDs 1/2/3 map to lb thigh/shin/shoulder,
+4/5/6 to rb, 7/8/9 to lf, and 10/11/12 to rf. The UI shows physical leg labels
+and unchanged sim joint names together. `--motor-frame sim` restores the old
+mapping; `--motor-frame swap-front-rear` swaps only front/rear labels while
+retaining the old left/right labels. No joint-angle sign is changed by mapping.
+
+```powershell
+<isaac_venv>\Scripts\python.exe isaac_lab\show_default_pose.py --rendering_mode performance --experience isaaclab.python.yertle_min_d3d12.kit
+```
+
+Use **Restore default standing pose** to reset all joints. **Save pose JSON**
+creates a new timestamped file in `isaac_lab/runs/pose_calibration` (override with
+`--output-dir`). Files contain named angles in rad/deg and motor-ID mapping, but
+leave hardware raw reference values and direction signs unset. Matching a real
+pose still requires hardware calibration; a visually similar seated pose alone
+is not an exact joint-angle measurement.
+
+To reopen a saved pose, pass `--pose-json <absolute-path-to-pose.json>` at
+startup. In the editor, enter a path and click **Load pose JSON**, or use
+**Browse...** to choose a local JSON file. Angles are matched by joint name,
+not array order. Loading checks schema, all 12 joint names, finite rad values,
+the active editor angle limits, and redundant rad/deg data. An invalid file leaves the
+existing pose unchanged; loading never changes the default standing reference.
+Old JSON is loaded by sim joint name, without permuting its angles. A different
+file motor mapping is reported in the UI. New JSON records the motor reference
+frame and both editor and original USD limits; values beyond the original limits
+are visualization references, not safe training or hardware targets.
+
+Save/load/reset buttons enqueue requests for the outer loop. They never call
+simulation pause/update/render from inside a UI callback, avoiding nested
+D3D12 rendering on Save. Unknown raw/sign hardware values remain unset.
+
+The live robot viewport is docked on the left and joint controls on the right
+after Kit's startup layout completes. Slider/angle-field changes appear on
+the next rendered frame while the controls remain open; no closing or applying
+a settings dialog is needed. Physics stays paused and the body stays fixed.
+For this static editor only, computed PhysX link poses are explicitly mirrored
+to the renderer's transform hierarchy. The usual physics-to-Fabric writer is
+disabled, since paused tensor kinematics do not automatically update rendered
+meshes. This does not change the training/play configuration or source USD.
+
+Bounded verification of actual UI callbacks, articulation/link transforms,
+fixed body, reset, and saved JSON:
+
+```bash
+/isaac-sim/python.sh isaac_lab/show_default_pose.py --headless --self-test
+python -m unittest discover -s isaac_lab/tests -p test_pose_calibration.py -v
+```
+
+Native GUI regression with three real mouse-click save/reset/load cycles and
+rendered standing/folded viewport captures while the controls remain open:
+
+```powershell
+<isaac_venv>\Scripts\python.exe isaac_lab\show_default_pose.py --ui-self-test --rendering_mode performance --experience isaaclab.python.yertle_min_d3d12.kit
 ```
 
 ## 4. Distill to a deployable policy

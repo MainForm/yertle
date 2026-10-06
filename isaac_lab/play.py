@@ -31,6 +31,8 @@ parser.add_argument("--start-pose", choices=["random", "default", "json"], defau
                     help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
 parser.add_argument("--pose-json", type=str,
                     help="Saved editor pose JSON; implies --start-pose json if the mode is omitted.")
+parser.add_argument("--extend-start-pose-limits", action="store_true",
+                    help="Simulation-only: expand runtime joint limits just enough to include the JSON pose.")
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--video_length", type=int, default=400)
 parser.add_argument("--keyboard", action="store_true", help="Control vx, vy, and yaw from this terminal.")
@@ -45,6 +47,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 try:
     start_pose_mode, start_joint_angles = select_start_pose(args_cli.start_pose, args_cli.pose_json)
+    if args_cli.extend_start_pose_limits and start_pose_mode != "json":
+        raise ValueError("--extend-start-pose-limits requires --pose-json.")
 except (OSError, ValueError) as exc:
     parser.error(str(exc))
 if args_cli.video:
@@ -182,7 +186,8 @@ def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
-    configure_start_pose(env_cfg, start_pose_mode, start_joint_angles)
+    configure_start_pose(env_cfg, start_pose_mode, start_joint_angles,
+                         extend_limits=args_cli.extend_start_pose_limits)
     print(f"PLAY_START_POSE mode={start_pose_mode} file={args_cli.pose_json or '-'}", flush=True)
     if args_cli.keyboard:
         env_cfg.commands.base_velocity.resampling_time_range = (1.0e6, 1.0e6)

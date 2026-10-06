@@ -32,6 +32,17 @@ particular, a thigh +75 / shin -160 degree reference may be rejected.
 Even an accepted seated pose does not guarantee that a walking-only policy
 can stand up; balance, ground clearance and the transition require testing.
 
+For explicit **simulation-only** testing of an editor pose outside those
+limits, add `--extend-start-pose-limits` alongside `--pose-json`. This expands
+only the running play environment's hard limits to include the selected pose
+(e.g. knee upper limit 90 -> 160 degrees). Isaac Lab also updates its soft
+limit buffers. It does not edit the USD/URDF, training config, pose JSON,
+default joint angles or policy action offsets. All other joint limits remain
+unchanged, and expansion never shrinks an existing range. Angles beyond
+ +/-180 degrees are still rejected. Without this flag, strict rejection is
+unchanged. These expanded limits persist for the lifetime of that play process;
+this is not a claim of hardware safety or a trained stand-up capability.
+
 Verification without launching Isaac Sim:
 
 ```text

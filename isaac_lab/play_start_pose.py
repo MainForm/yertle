@@ -55,20 +55,24 @@ def select_start_pose(mode=None, pose_json=None):
     return mode, load_pose_json(pose_json) if mode == "json" else None
 
 
-def configure_start_pose(env_cfg, mode, joint_angles):
+def configure_start_pose(env_cfg, mode, joint_angles, extend_limits=False):
     """Replace only this play instance's joint reset event (including auto resets)."""
+    if extend_limits and (mode != "json" or joint_angles is None):
+        raise ValueError("--extend-start-pose-limits requires --pose-json.")
     if mode == "random":
         return
     event = env_cfg.events.reset_robot_joints
     asset_cfg = event.params.get("asset_cfg")
     event.func = reset_selected_pose
     event.params = {"joint_angles": joint_angles}
+    if extend_limits:
+        event.params["extend_limits"] = True
     if asset_cfg is not None:
         event.params["asset_cfg"] = asset_cfg
 
 
-def reset_selected_pose(env, env_ids, joint_angles=None, asset_cfg=None):
-    """Set current state/targets only; validate against actual PhysX hard limits."""
+def reset_selected_pose(env, env_ids, joint_angles=None, asset_cfg=None, extend_limits=False):
+    """Reset joints; optionally expand runtime limits for simulation-only play."""
     import torch
 
     robot = env.scene["robot" if asset_cfg is None else asset_cfg.name]
@@ -83,7 +87,25 @@ def reset_selected_pose(env, env_ids, joint_angles=None, asset_cfg=None):
         if set(robot.joint_names) != JOINT_NAMES or set(joint_angles) != JOINT_NAMES:
             raise ValueError("Start pose does not match the robot's 12 joint names.")
         positions[:] = positions.new_tensor([joint_angles[name] for name in robot.joint_names])
-    limits = robot.data.joint_pos_limits[env_ids]
+    if not torch.isfinite(positions).all():
+        raise ValueError("Start pose must contain finite joint angles.")
+    limits = robot.data.joint_pos_limits[env_ids].clone()
+    if extend_limits:
+        if joint_angles is None:
+            raise ValueError("Limit extension requires a JSON joint pose.")
+        if (positions.abs() > math.pi).any():
+            raise ValueError("Play-only limit extension accepts angles only within +/-180 deg.")
+        expanded = limits.clone()
+        expanded[..., 0] = torch.minimum(limits[..., 0], positions)
+        expanded[..., 1] = torch.maximum(limits[..., 1], positions)
+        if not torch.equal(expanded, limits):
+            changed = (expanded != limits).any(dim=-1).any(dim=0)
+            names = [name for name, flag in zip(robot.joint_names, changed.tolist()) if flag]
+            # This API updates both PhysX and its hard/soft-limit buffers.
+            # Expanding (never shrinking) keeps training default offsets intact.
+            robot.write_joint_position_limit_to_sim(expanded, env_ids=env_ids)
+            print("PLAY_POSE_LIMITS_EXTENDED simulation_only joints=" + ",".join(names), flush=True)
+        limits = expanded
     invalid = (~torch.isfinite(positions) | (positions < limits[..., 0]) | (positions > limits[..., 1]))
     if invalid.any():
         row, column = invalid.nonzero()[0].tolist()
@@ -92,7 +114,8 @@ def reset_selected_pose(env, env_ids, joint_angles=None, asset_cfg=None):
         raise ValueError(
             f"Start pose {robot.joint_names[column]}={math.degrees(q):.2f} deg is outside "
             f"PhysX limits [{math.degrees(lower):.2f}, {math.degrees(upper):.2f}] deg. "
-            "The paused pose editor's +/-180 deg range does not change play limits."
+            "The paused editor does not change play limits. For simulation-only testing, "
+            "pass --extend-start-pose-limits to explicitly include this JSON pose."
         )
     velocities = torch.zeros_like(positions)
     robot.write_joint_state_to_sim(positions, velocities, env_ids=env_ids)

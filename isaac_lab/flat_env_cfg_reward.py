@@ -59,6 +59,14 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.dof_pos_limits.weight = -0.25
 
     rewards.joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-0.001, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
+    rewards.joint_velocity_excess = RewTerm(
+        func=joint_velocity_excess,
+        weight=-0.10,
+        params={
+            "velocity_limit_rad_s": 2.30,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+        },
+    )
     rewards.feet_slide = RewTerm(func=mdp.feet_slide, weight=-0.10, params={"asset_cfg": SceneEntityCfg("robot", body_names=FEET), "sensor_cfg": CONTACT_SENSOR})
     rewards.undesired_contacts = RewTerm(func=mdp.undesired_contacts, weight=-0.50, params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=NON_FEET)})
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
@@ -81,6 +89,24 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+def joint_velocity_excess(
+    env,
+    velocity_limit_rad_s: float = 2.30,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """Sum squared normalized speed excess; the reward weight must be negative.
+
+    Uses measured joint velocity [rad/s], not action or target-position changes.
+    Speeds at or below the threshold have zero cost. This is a soft training
+    penalty, not a replacement for the actuator's physics-solver speed limit.
+    """
+    if velocity_limit_rad_s <= 0.0:
+        raise ValueError("velocity_limit_rad_s must be positive")
+    velocity = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
+    excess = (velocity.abs() / velocity_limit_rad_s - 1.0).clamp_min(0.0)
+    return excess.square().sum(dim=1)
 
 
 def air_time_variance_penalty(env, sensor_cfg: SceneEntityCfg, max_time: float = 0.5):
