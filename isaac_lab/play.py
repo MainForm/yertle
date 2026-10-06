@@ -8,6 +8,11 @@ import argparse
 import os
 import sys
 
+if __package__:
+    from .play_start_pose import configure_start_pose, select_start_pose
+else:
+    from play_start_pose import configure_start_pose, select_start_pose
+
 # Windows DLL-order fix: import torch/rsl_rl before launching Isaac Sim. Also
 # pre-import h5py so its bundled HDF5 DLL loads before Isaac Sim's rendering kit
 # pulls in a conflicting one (video path imports isaaclab.utils.datasets -> h5py).
@@ -22,6 +27,10 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
+parser.add_argument("--start-pose", choices=["random", "default", "json"], default=None,
+                    help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
+parser.add_argument("--pose-json", type=str,
+                    help="Saved editor pose JSON; implies --start-pose json if the mode is omitted.")
 parser.add_argument("--video", action="store_true")
 parser.add_argument("--video_length", type=int, default=400)
 parser.add_argument("--keyboard", action="store_true", help="Control vx, vy, and yaw from this terminal.")
@@ -34,6 +43,10 @@ parser.add_argument("--push-body-weight", type=float, default=0.20, help="Manual
 parser.add_argument("--push-duration", type=float, default=0.10)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+try:
+    start_pose_mode, start_joint_angles = select_start_pose(args_cli.start_pose, args_cli.pose_json)
+except (OSError, ValueError) as exc:
+    parser.error(str(exc))
 if args_cli.video:
     args_cli.enable_cameras = True
 if not 0.05 <= args_cli.push_body_weight <= 1.00:
@@ -169,6 +182,8 @@ def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
+    configure_start_pose(env_cfg, start_pose_mode, start_joint_angles)
+    print(f"PLAY_START_POSE mode={start_pose_mode} file={args_cli.pose_json or '-'}", flush=True)
     if args_cli.keyboard:
         env_cfg.commands.base_velocity.resampling_time_range = (1.0e6, 1.0e6)
         env_cfg.commands.base_velocity.rel_standing_envs = 0.0
