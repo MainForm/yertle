@@ -10,8 +10,12 @@ import sys
 
 if __package__:
     from .play_start_pose import configure_start_pose, select_start_pose
+    from .play_controls import (VX_RANGE, VY_RANGE, YAW_RANGE, clamp, apply_command,
+                                handle_key, configure_play_terminations, reset_play_environment, clear_manual_push)
 else:
     from play_start_pose import configure_start_pose, select_start_pose
+    from play_controls import (VX_RANGE, VY_RANGE, YAW_RANGE, clamp, apply_command,
+                               handle_key, configure_play_terminations, reset_play_environment, clear_manual_push)
 
 # Windows DLL-order fix: import torch/rsl_rl before launching Isaac Sim. Also
 # pre-import h5py so its bundled HDF5 DLL loads before Isaac Sim's rendering kit
@@ -79,20 +83,12 @@ except ImportError:  # pragma: no cover
     msvcrt = None
 
 
-VX_RANGE = (-0.5, 0.3)
-VY_RANGE = (-0.2, 0.2)
-YAW_RANGE = (-1.0, 1.0)
 GAIT_MODE_NAMES = ("walk", "trot", "bound")
-PUSH_KEYS = {"i": (1.0, 0.0, "+X"), "k": (-1.0, 0.0, "-X"), "j": (0.0, 1.0, "+Y"), "l": (0.0, -1.0, "-Y")}
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-Play-v0", YertleFlatEnvCfg_PLAY, YertleFlatPPORunnerCfg),
     "rough": ("Isaac-Velocity-Rough-Yertle-Play-v0", YertleRoughEnvCfg_PLAY, YertleRoughPPORunnerCfg),
 }
-
-
-def clamp(value, lo, hi):
-    return max(lo, min(hi, value))
 
 
 def read_key():
@@ -105,31 +101,7 @@ def read_key():
 
 
 def update_from_keyboard(command, step_v, step_yaw):
-    key = read_key()
-    if key is None:
-        return False, False, None, None
-    if key == "w": command[0] = clamp(command[0] + step_v, *VX_RANGE)
-    elif key == "s": command[0] = clamp(command[0] - step_v, *VX_RANGE)
-    elif key == "q": command[1] = clamp(command[1] + step_v, *VY_RANGE)
-    elif key == "e": command[1] = clamp(command[1] - step_v, *VY_RANGE)
-    elif key == "a": command[2] = clamp(command[2] + step_yaw, *YAW_RANGE)
-    elif key == "d": command[2] = clamp(command[2] - step_yaw, *YAW_RANGE)
-    elif key == " ": command[:] = [0.0, 0.0, 0.0]
-    elif key in PUSH_KEYS: return False, False, PUSH_KEYS[key], None
-    elif key == "[": return False, False, None, -0.10
-    elif key == "]": return False, False, None, 0.10
-    elif key in ("x", "\x1b"): return False, True, None, None
-    else: return False, False, None, None
-    return True, False, None, None
-
-
-def apply_command(base_env, command_tensor):
-    term = base_env.command_manager.get_term("base_velocity")
-    term.vel_command_b[:, :] = command_tensor
-    term.is_standing_env[:] = False
-    if hasattr(term, "is_heading_env"):
-        term.is_heading_env[:] = False
-    term.time_left[:] = 1.0e6
+    return handle_key(read_key(), command, step_v, step_yaw)
 
 
 def gait_status(base_env):
@@ -186,6 +158,8 @@ def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
+    configure_play_terminations(env_cfg)
+    print("PLAY_TERMINATIONS base_contact=disabled time_out=unchanged", flush=True)
     configure_start_pose(env_cfg, start_pose_mode, start_joint_angles,
                          extend_limits=args_cli.extend_start_pose_limits)
     print(f"PLAY_START_POSE mode={start_pose_mode} file={args_cli.pose_json or '-'}", flush=True)
@@ -226,7 +200,7 @@ def main():
     command_tensor = torch.tensor(command, device=base_env.device, dtype=torch.float32).repeat(base_env.num_envs, 1)
     if args_cli.keyboard:
         apply_command(base_env, command_tensor)
-        print("W/S: vx, Q/E: vy, A/D: yaw, I/K/J/L: push, [/]: push strength, Space: stop, X: quit", flush=True)
+        print("W/S: vx, Q/E: vy, A/D: yaw, I/K/J/L: push, [/]: push strength, Space: stop, R: reset pose/commands, X: quit", flush=True)
         print(f"COMMAND vx={command[0]:.2f} vy={command[1]:.2f} yaw={command[2]:.2f}", flush=True)
         print(f"PUSH_STRENGTH {pulse.fraction:.2f}*m*g", flush=True)
         if args_cli.task == "flat":
@@ -234,9 +208,15 @@ def main():
     with torch.inference_mode():
         for _ in range(args_cli.steps):
             if args_cli.keyboard:
-                changed, should_quit, push, push_delta = update_from_keyboard(command, args_cli.step_v, args_cli.step_yaw)
+                changed, should_quit, push, push_delta, should_reset = update_from_keyboard(command, args_cli.step_v, args_cli.step_yaw)
                 if should_quit:
                     break
+                if should_reset:
+                    obs = reset_play_environment(env, pulse, command, command_tensor)
+                    print("PLAY_MANUAL_RESET command=(0,0,0) push=cleared start_pose=" + start_pose_mode, flush=True)
+                    if args_cli.task == "flat":
+                        print(gait_status(base_env), flush=True)
+                    continue
                 if push_delta is not None:
                     pulse.set_fraction(pulse.fraction + push_delta)
                     print(f"PUSH_STRENGTH {pulse.fraction:.2f}*m*g", flush=True)
@@ -253,8 +233,7 @@ def main():
             obs, _, _, _ = env.step(actions)
             if isinstance(obs, tuple):
                 obs = obs[0]
-    pulse.force_w.zero_()
-    pulse.apply()
+    clear_manual_push(pulse)
     print("PLAY_DONE", flush=True)
 
     env.close()

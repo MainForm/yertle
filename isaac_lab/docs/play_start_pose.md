@@ -1,5 +1,18 @@
 # Policy play start pose
 
+In `play.py`, body/base contact no longer terminates or resets the environment.
+This change is applied to the play instance only; training keeps its original
+base-contact termination and the play episode timeout remains enabled.
+Contact sensors and contact-based rewards remain active.
+
+With `--keyboard`, press **R** in the launching terminal to reset all environments
+to the selected start pose (random/default/JSON). It clears the active manual
+push and vx/vy/yaw commands, resets episode/phase counters and action history,
+and refreshes policy observations before the next inference. Body reset height
+and orientation follow the existing environment reset settings. **Space** only
+zeros velocity commands; **X** exits. Keyboard controls are Windows terminal
+controls, not keys pressed in the Isaac Sim viewport.
+
 Add one of these options to the existing `play.py` command:
 
 ```text
