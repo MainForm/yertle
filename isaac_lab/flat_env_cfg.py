@@ -75,7 +75,8 @@ class YertleFlatEnvCfg(LocomotionVelocityRoughEnvCfg):
         )
 
         # --- terminations ---
-        self.terminations.base_contact.params["sensor_cfg"].body_names = _BASE
+        # Allow recovery from seated/fallen starts; penalize contact instead.
+        self.terminations.base_contact = None
 
 @configclass
 class YertleFlatEnvCfg_PLAY(YertleFlatEnvCfg):

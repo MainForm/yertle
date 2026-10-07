@@ -37,10 +37,23 @@ parser.add_argument("--lin-vel-x-min", type=float, default=None, help="Optional 
 parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional upper bound for commanded vx (m/s).")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
 parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
+parser.add_argument("--reset-pose-json", action="append", default=[], help="Repeatable pose JSON; sample standing + these poses uniformly on every episode reset.")
+parser.add_argument("--extend-reset-pose-limits", action="store_true", help="Explicitly expand simulation joint limits to include all reset poses for the entire run.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
     parser.error("--lin-vel-x-min and --lin-vel-x-max must be supplied together.")
+if args_cli.extend_reset_pose_limits and not args_cli.reset_pose_json:
+    parser.error("--extend-reset-pose-limits requires --reset-pose-json.")
+# Validate saved poses before launching Kit. Direct script and -m both supported.
+if __package__:
+    from .play_start_pose import load_pose_json
+else:
+    from play_start_pose import load_pose_json
+try:
+    reset_poses = [load_pose_json(path) for path in args_cli.reset_pose_json]
+except (OSError, ValueError) as exc:
+    parser.error(str(exc))
 
 # Launch Isaac Sim first; everything below needs the running app.
 app_launcher = AppLauncher(args_cli)
@@ -58,6 +71,7 @@ from isaac_lab.disturbance_cfg import TimedPlanarForceImpulse  # noqa: E402
 from isaac_lab.flat_env_cfg import YertleFlatEnvCfg  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
+from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-v0", YertleFlatEnvCfg, YertleFlatPPORunnerCfg),
@@ -81,6 +95,7 @@ def main():
         )
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
+    configure_reset_pose_pool(env_cfg, reset_poses, args_cli.extend_reset_pose_limits)
     if args_cli.lin_vel_x_min is not None:
         env_cfg.commands.base_velocity.ranges.lin_vel_x = (args_cli.lin_vel_x_min, args_cli.lin_vel_x_max)
     legs = env_cfg.scene.robot.actuators["legs"]
@@ -123,6 +138,9 @@ def main():
         flush=True,
     )
     print(f"TRAIN_LOGDIR {log_dir}", flush=True)
+    print(f"TRAIN_RESET_POSES standing_plus_json={args_cli.reset_pose_json} "
+          f"uniform_pool_size={len(reset_poses) + 1 if reset_poses else 0} "
+          f"extend_limits={args_cli.extend_reset_pose_limits}", flush=True)
     runner.learn(
         num_learning_iterations=agent_cfg.max_iterations,
         init_at_random_ep_len=args_cli.checkpoint is None,

@@ -69,6 +69,10 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.feet_slide = RewTerm(func=mdp.feet_slide, weight=-0.10, params={"asset_cfg": SceneEntityCfg("robot", body_names=FEET), "sensor_cfg": CONTACT_SENSOR})
     rewards.undesired_contacts = RewTerm(func=mdp.undesired_contacts, weight=-0.50, params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=NON_FEET)})
+    rewards.base_contact_penalty = RewTerm(
+        func=mdp.undesired_contacts, weight=-1.0,
+        params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=BASE)},
+    )
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})

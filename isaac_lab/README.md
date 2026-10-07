@@ -81,6 +81,48 @@ guarantee a speed bound or change the actuator default of 4.6 rad/s; use
 `--velocity-limit-sim 2.30` to also set the simulation limit for a new run.
 Isaac Lab's reward manager records this term in episode reward logs.
 
+### Random episode start poses (flat recovery training)
+
+Pass repeatable `--reset-pose-json <path>` options to sample a complete joint
+pose independently for each environment on **every episode reset**. The pool
+contains the default standing pose plus each JSON pose, with equal probability
+(one JSON means 50% standing / 50% JSON). Without JSON options, the existing
+0.8–1.2 standing-joint randomization remains unchanged. This is a discrete pose
+pool, not independent random joint angles. Root-height/yaw reset behavior stays
+unchanged: a folded pose initially settles under gravity from the usual spawn
+height, rather than being teleported into floor contact.
+
+```bash
+/isaac-sim/python.sh isaac_lab/train.py --headless --task flat --num_envs 1024 --max_iterations 2000 --reset-pose-json /workspace/yertle/isaac_lab/runs/pose_calibration/pose_20261006_113145_861156Z.json --extend-reset-pose-limits
+```
+
+Pose JSONs use the calibration editor's schema-1 named joint angles. Limits are
+validated for the whole pool before sampling. The example seated pose has
+160-degree knees, beyond the original 90-degree PhysX upper bound. The explicit
+`--extend-reset-pose-limits` flag expands the **runtime hard and soft joint
+limits of every environment for the entire run**, covering every candidate
+pose, within +/-180 degrees. It does not edit the USD, standing defaults,
+12-action position offsets, or actuator torque/speed settings. This expansion
+is a simulation experiment, not proof that the corresponding motion is safe
+on hardware. Omit it to reject out-of-limit poses.
+
+Flat environments now disable `base_contact` termination and add
+`base_contact_penalty` with initial weight **-1.0**: a cost of 1 when base_link
+contact-force magnitude exceeds **1 N** in the sensor's recent history, else 0.
+Isaac Lab multiplies reward terms by control dt; at 50 Hz this contributes
+**-0.02 per contacted control step**. It permits learning recovery, but does not
+guarantee standing-up behavior. Time-out and all other rewards remain enabled.
+Rough-terrain termination/rewards are not changed by this flat-task change.
+The pose pool is saved in `params/env.yaml`, and episode reward logs include
+`base_contact_penalty`. With base termination disabled, its old termination-rate
+metric is no longer a useful contact-incidence measure.
+
+Bounded native or container integration verification:
+
+```bash
+python isaac_lab/tests/check_train_start_pose_sim.py --headless --pose-json <pose.json>
+```
+
 ## 3. Play / record
 
 ```bat
