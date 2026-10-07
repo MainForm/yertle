@@ -4,9 +4,9 @@ Edit the initial link polar pairs (length in meters, joint angle in degrees)
 and target coordinates in main.
 The target is (-0.05, -0.15) m to show a clearly bent knee.
 
-X describes forward/backward foot movement and Z describes foot height,
-measured in meters relative to the shoulder. Y stays zero because the
-shoulder angle is fixed. Positive joint rotation turns from -Z toward -X.
+X describes forward/backward foot movement and Y describes foot height,
+measured in meters relative to the shoulder. Z stays zero because the
+shoulder angle is fixed. Positive joint rotation turns from -Y toward -X.
 The knee angle q2 is relative to the thigh, so the shin direction is q1 + q2.
 
 The first window shows the initial pose, target, and cosine rule for q2.
@@ -22,7 +22,7 @@ from matplotlib.axes import Axes
 
 
 def convert_polar_to_cartesian(length: float, angle: float) -> tuple[float, float]:
-    '''Convert length (m) and angle (rad) to (x, z), rotating from -Z toward -X.'''
+    '''Convert length (m) and angle (rad) to (x, y), rotating from -Y toward -X.'''
     return (-length * math.sin(angle), -length * math.cos(angle))
 
 
@@ -37,26 +37,26 @@ def calculate_inverse_kinematics(
     initial_thigh_polar: tuple[float, float],
     initial_shin_polar: tuple[float, float],
 ) -> tuple[float, float]:
-    '''Return (thigh, shin) joint angles in degrees for a target (x, z) in meters.
+    '''Return (thigh, shin) joint angles in degrees for a target (x, y) in meters.
 
     Each initial polar pair is (link length in meters, joint angle in degrees).
-    The thigh angle starts at -Z and turns toward -X when positive. The shin
+    The thigh angle starts at -Y and turns toward -X when positive. The shin
     angle is relative to the thigh, so its absolute direction is their sum.
     Initial angles select the knee bend branch and nearby equivalent angles;
     link lengths determine the reachable range and the IK geometry.
     '''
     thigh_length, initial_thigh_degrees = initial_thigh_polar
     shin_length, initial_shin_degrees = initial_shin_polar
-    x, z = target
+    x, y = target
     if not all(math.isfinite(value) for value in (
-        x, z, thigh_length, shin_length, initial_thigh_degrees, initial_shin_degrees
+        x, y, thigh_length, shin_length, initial_thigh_degrees, initial_shin_degrees
     )):
         raise ValueError('Target coordinates, link lengths, and initial angles must be finite.')
     if thigh_length <= 0.0 or shin_length <= 0.0:
         raise ValueError('Link lengths must be positive.')
 
     # The foot must lie within the annulus reachable by the two links.
-    distance = math.hypot(x, z)
+    distance = math.hypot(x, y)
     if distance > thigh_length + shin_length + 1e-12 or distance < abs(thigh_length - shin_length) - 1e-12:
         raise ValueError('Target is outside the reachable range of the leg.')
 
@@ -72,7 +72,7 @@ def calculate_inverse_kinematics(
         q1 = math.radians(initial_thigh_degrees)
     else:
         # alpha points toward the target; beta is the offset from thigh to target.
-        alpha = math.atan2(-x, -z)
+        alpha = math.atan2(-x, -y)
         # Resolve the target vector along and perpendicular to the thigh.
         beta = math.atan2(
             shin_length * math.sin(q2),
@@ -87,13 +87,13 @@ def calculate_inverse_kinematics(
 
 
 def setup_axes(ax: Axes, thigh_length: float, shin_length: float) -> None:
-    '''Use a shared workspace, equal scaling, and shoulder-centered X-Z axes.'''
+    '''Use a shared workspace, equal scaling, and shoulder-centered X-Y axes.'''
     reach = thigh_length + shin_length
     ax.set_xlim(-reach - 0.04, reach + 0.04)
     ax.set_ylim(-reach - 0.05, reach + 0.04)
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlabel('X: forward / backward (m)')
-    ax.set_ylabel('Z: foot height (m)')
+    ax.set_ylabel('Y: foot height (m)')
     ax.grid(alpha=0.2)
     ax.plot(0.0, 0.0, 'ks', markersize=6)
     ax.annotate('Shoulder', (0.0, 0.0), xytext=(8, 8), textcoords='offset points')
@@ -123,10 +123,10 @@ def plot_leg(
 def draw_angle(ax: Axes, start: float, angle: float, radius: float,
                label: str, color: str,
                center: tuple[float, float] = (0.0, 0.0)) -> None:
-    '''Draw a directed angle around center, rotating from -Z toward -X.'''
+    '''Draw a directed angle around center, rotating from -Y toward -X.'''
     offsets = [convert_polar_to_cartesian(radius, start + angle * i / 60)
                for i in range(61)]
-    points = [(center[0] + x, center[1] + z) for x, z in offsets]
+    points = [(center[0] + x, center[1] + y) for x, y in offsets]
     ax.plot([p[0] for p in points], [p[1] for p in points], color=color, lw=2)
     if abs(angle) > 1e-9:
         ax.annotate('', xy=points[-1], xytext=points[-5],
@@ -162,7 +162,7 @@ def main() -> None:
     # Place the target closer to the shoulder to make the knee bend clear.
     target = (-0.05, -0.15)
     gait_x_displacement = target[0] - initial_foot[0]
-    gait_z_displacement = target[1] - initial_foot[1]
+    gait_y_displacement = target[1] - initial_foot[1]
 
     # Solve IK and verify the resulting foot position through forward kinematics.
     thigh_degrees, shin_degrees = calculate_inverse_kinematics(
@@ -217,9 +217,9 @@ def main() -> None:
     target_axis.plot([0.0, target[0]], [0.0, target[1]], ':', color='#64748b')
     target_axis.legend(loc='upper right')
     add_formulas(target_axis, (
-        rf'$\Delta x={gait_x_displacement:.4f}$ m, $\Delta z={gait_z_displacement:.4f}$ m',
+        rf'$\Delta x={gait_x_displacement:.4f}$ m, $\Delta y={gait_y_displacement:.4f}$ m',
         rf'Target = ({target[0]:.4f}, {target[1]:.4f}) m',
-        rf'$r=\sqrt{{x^2+z^2}}={distance:.4f}$ m',
+        rf'$r=\sqrt{{x^2+y^2}}={distance:.4f}$ m',
         r'Reachable when $|L_1-L_2|\leq r\leq L_1+L_2$',
     ))
 
@@ -266,9 +266,9 @@ def main() -> None:
     add_formulas(cosine_axis, (
         r'$r^2=L_1^2+L_2^2-2L_1L_2\cos\gamma$',
         r'$\gamma=\pi-|q_2|\quad\Rightarrow\quad\cos\gamma=-\cos q_2$',
-        r'$c=\frac{r^2-L_1^2-L_2^2}{2L_1L_2},\quad c=\mathrm{clip}(c,-1,1)$',
+        r'$\cos\gamma=\frac{L_1^2+L_2^2-r^2}{2L_1L_2}$',
         r'$s=-1$ if $\sin(q_{2,\mathrm{initial}})<0$, else $s=+1$',
-        rf'$q_2=s\,\arccos(c)={math.degrees(q2):.2f}^\circ$',
+        rf'$q_2=s\,\arccos(\mathrm{{clip}}(-\cos\gamma,-1,1))={math.degrees(q2):.2f}^\circ$',
         r'Dotted ray: thigh continuation; triangle drawn in solved pose.',
     ))
 
@@ -288,7 +288,7 @@ def main() -> None:
     q2 = math.radians(shin_degrees)
     # A target away from the shoulder defines a direction and a triangle.
     if distance > 1e-12:
-        # Measure the target direction from -Z, with positive rotation toward -X.
+        # Measure the target direction from -Y, with positive rotation toward -X.
         alpha = math.atan2(-target[0], -target[1])
         # Resolve the shoulder-to-target vector into signed thigh-frame components.
         # A includes the thigh length; B comes only from the shin.
@@ -297,7 +297,7 @@ def main() -> None:
         # atan2 preserves the quadrant of the signed angle from thigh to target.
         beta = math.atan2(perpendicular, along)
         # P is the target's projection onto the thigh line. Positive normal
-        # points in the direction of increasing joint angle (-Z toward -X).
+        # points in the direction of increasing joint angle (-Y toward -X).
         tangent = convert_polar_to_cartesian(1.0, q1)
         normal = (-math.cos(q1), math.sin(q1))
         # Convert the along-thigh component back to world coordinates to locate P.
@@ -329,8 +329,8 @@ def main() -> None:
             u = tuple(-math.copysign(1.0, along) * v for v in tangent)
             v = tuple(math.copysign(1.0, perpendicular) * n for n in normal)
             # Trace three corners of a square to form the right-angle marker.
-            corner = [(projection[0] + size * dx, projection[1] + size * dz)
-                      for dx, dz in (u, (u[0] + v[0], u[1] + v[1]), v)]
+            corner = [(projection[0] + size * dx, projection[1] + size * dy)
+                      for dx, dy in (u, (u[0] + v[0], u[1] + v[1]), v)]
             triangle_axis.plot([p[0] for p in corner], [p[1] for p in corner],
                                color='#64748b', lw=1)
         # Draw beta at the shoulder, limiting the arc radius for nearby targets.
@@ -359,7 +359,7 @@ def main() -> None:
     angle_axis.set_title('5. Find q1 = alpha - beta', fontsize=16)
     plot_leg(angle_axis, knee, target)
     angle_axis.plot([0.0, 0.0], [0.0, -0.28], ':', color='#64748b')
-    angle_axis.annotate('-Z reference', (0.0, -0.28), xytext=(8, 0),
+    angle_axis.annotate('-Y reference', (0.0, -0.28), xytext=(8, 0),
                         textcoords='offset points')
     angle_axis.plot([0.0, target[0]], [0.0, target[1]], '--', color='#16a34a')
     angle_axis.plot(*target, '*', color='#be123c', markersize=14)
@@ -370,11 +370,11 @@ def main() -> None:
         draw_angle(angle_axis, alpha - beta, beta, 0.10, r'$\beta$', '#9333ea')
         draw_angle(angle_axis, 0.0, alpha, 0.185, r'$\alpha$', '#16a34a')
         add_formulas(angle_axis, (
-            rf'$\alpha=\mathrm{{atan2}}(-x,-z)={math.degrees(alpha):.2f}^\circ$',
-            r'$q_1$: -Z reference $\rightarrow$ thigh',
+            rf'$\alpha=\mathrm{{atan2}}(-x,-y)={math.degrees(alpha):.2f}^\circ$',
+            r'$q_1$: -Y reference $\rightarrow$ thigh',
             r'$\beta$: thigh $\rightarrow$ target ray (signed)',
             r'$\alpha=q_1+\beta\quad\Longrightarrow\quad q_1=\alpha-\beta$',
-            r'Positive rotation: -Z toward -X; angles modulo $360^\circ$.',
+            r'Positive rotation: -Y toward -X; angles modulo $360^\circ$.',
         ))
     else:
         add_formulas(angle_axis, ('Target is at the shoulder: no target ray.',
@@ -388,12 +388,12 @@ def main() -> None:
     plot_leg(result_axis, initial_knee, initial_foot, faded=True)
     plot_leg(result_axis, knee, foot)
     result_axis.plot(*target, '*', color='#be123c', markersize=14)
-    result_axis.annotate('Foot at target', foot, xytext=(10, -15), textcoords='offset points')
-    result_axis.annotate('New knee', knee, xytext=(10, 5), textcoords='offset points')
+    # result_axis.annotate('Foot at target', foot, xytext=(10, -15), textcoords='offset points')
+    # result_axis.annotate('New knee', knee, xytext=(10, 5), textcoords='offset points')
     add_formulas(result_axis, (
         r'$q_2=s\,\arccos\left(\frac{r^2-L_1^2-L_2^2}{2L_1L_2}\right)$',
         r'$\beta=\mathrm{atan2}(L_2\sin q_2, L_1+L_2\cos q_2)$',
-        r'$\alpha=\mathrm{atan2}(-x,-z),\quad q_1=\alpha-\beta$',
+        r'$\alpha=\mathrm{atan2}(-x,-y),\quad q_1=\alpha-\beta$',
         rf'$q_1={thigh_degrees:.2f}^\circ,\quad q_2={shin_degrees:.2f}^\circ$',
         rf'Foot = ({foot[0]:.4f}, {foot[1]:.4f}) m; error = {error:.1e} m',
     ))

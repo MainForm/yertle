@@ -1,22 +1,22 @@
 '''Visualize planar forward kinematics of an ideal two-link left front leg.
 
-Coordinates are (x, z) in meters relative to the shoulder:
+Coordinates are (x, y) in meters relative to the shoulder:
     X describes forward/backward foot movement.
-    Z describes foot height; positions below the shoulder have negative Z.
-The shoulder angle is fixed at zero, so there is no sideways motion and Y
+    Y describes foot height; positions below the shoulder have negative Y.
+The shoulder angle is fixed at zero, so there is no out-of-plane motion and Z
 stays zero. The shoulder and thigh joint share the origin in this model.
 This is a geometric linkage model, not a mesh-derived foot-contact calculation.
 
-Both links point along -Z at zero joint angles. Positive rotation about +Y
-turns them toward -X (clockwise when X is right and Z is up). The thigh
+Both links point along -Y at zero joint angles. Positive joint angles
+turn them toward -X (clockwise when X is right and Y is up). The thigh
 joint angle is q1, and the knee angle q2 is relative to the thigh, giving
 link directions theta1 = q1 and theta2 = q1 + q2.
 
 For a link of length L, the Cartesian components are:
     x = -L * sin(theta)
-    z = -L * cos(theta)
+    y = -L * cos(theta)
 Equivalently, the usual angle measured counterclockwise from +X is
-phi = -90 degrees - theta. The inverse direction is atan2(-x, -z).
+phi = -90 degrees - theta. The inverse direction is atan2(-x, -y).
 Joint angles in main are in degrees; trigonometric functions use radians.
 
 Three plots share the same axis limits and scale:
@@ -38,7 +38,7 @@ THIGH_LENGTH = 0.13     # 13 cm
 SHIN_LENGTH = 0.13      # 13 cm
 
 def convert_polar_to_cartesian(length: float, angle: float) -> tuple[float, float]:
-    '''Convert length (m) and angle (rad) to an (x, z) vector. Angles start at -Z and turn toward -X when positive.'''
+    '''Convert length (m) and angle (rad) to an (x, y) vector. Angles start at -Y and turn toward -X when positive.'''
     return (-length * math.sin(angle), -length * math.cos(angle))
 
 def arrow(
@@ -81,8 +81,8 @@ def direction_angle(
     color: str,
     offset: tuple[float, float],
 ) -> None:
-    '''Draw the -Z reference line, angle arc, and label at start. The angle is in degrees and the text offset is in points.'''
-    # Plot angles from -Z; positive rotation about +Y leans toward -X.
+    '''Draw the -Y reference line, angle arc, and label at start. The angle is in degrees and the text offset is in points.'''
+    # Plot angles from -Y; positive joint angles lean toward -X.
     wrapped = (degrees + 180.0) % 360.0 - 180.0
     ax.plot([start[0], start[0]], [start[1], start[1] - 0.06],
             ":", color="#94a3b8", linewidth=1.2)
@@ -102,14 +102,14 @@ def direction_angle(
 def setup_axes(
     ax: Axes,
     x_limits: tuple[float, float],
-    z_limits: tuple[float, float],
+    y_limits: tuple[float, float],
 ) -> None:
-    '''Set the X and Z limits in meters, equal axis scaling, axis labels, grid, and origin marker.'''
+    '''Set the X and Y limits in meters, equal axis scaling, axis labels, grid, and origin marker.'''
     ax.set_xlim(x_limits)
-    ax.set_ylim(z_limits)
+    ax.set_ylim(y_limits)
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("X (m)", fontsize=11)
-    ax.set_ylabel("Z (m)", fontsize=11)
+    ax.set_ylabel("Y (m)", fontsize=11)
     ax.grid(alpha=0.2)
     ax.plot(0, 0, "o", color="#334155", markersize=5, zorder=4)
     ax.annotate("O", (0.0, 0.0), xytext=(-12, 8), textcoords="offset points")
@@ -126,7 +126,7 @@ def plot_vector(
     vector: tuple[float, float],
     color: str,
 ) -> None:
-    '''Draw an (x, z) vector from the origin and its component guides in the given color.'''
+    '''Draw an (x, y) vector from the origin and its component guides in the given color.'''
     # Use the vector already calculated in main as the arrow endpoint.
     arrow(ax, (0.0, 0.0), vector, color)
 
@@ -144,7 +144,7 @@ def plot_vector_sum(
     theta1: float,
     theta2: float,
 ) -> None:
-    '''Draw two (x, z) vectors head-to-tail, their sum, knee and foot positions for plot 3. Both angles are in degrees.'''
+    '''Draw two (x, y) vectors head-to-tail, their sum, knee and foot positions for plot 3. Both angles are in degrees.'''
     # Add the vectors to locate the foot relative to the shoulder.
     origin = (0.0, 0.0)
     tip = (v1[0] + v2[0], v1[1] + v2[1])
@@ -156,7 +156,7 @@ def plot_vector_sum(
     ax.plot(*v1, "o", color="#334155", markersize=5, zorder=4)
     ax.annotate("Knee", v1, xytext=(10, 6), textcoords="offset points", fontsize=10)
 
-    # Label the thigh length and its direction from the -Z axis.
+    # Label the thigh length and its direction from the -Y axis.
     length_label(ax, origin, v1, rf"$|\vec{{v}}_1| = {THIGH_LENGTH:g}$ m", blue, (26, 0))
     direction_angle(ax, origin, theta1, r"\theta_1", blue, (-32, 8))
     #---------------------------------------------
@@ -166,7 +166,7 @@ def plot_vector_sum(
     arrow(ax, v1, tip, orange)
     ax.annotate("Foot", tip, xytext=(7, -15), textcoords="offset points", fontsize=10)
 
-    # Measure the shin direction from a -Z reference at the knee.
+    # Measure the shin direction from a -Y reference at the knee.
     length_label(ax, v1, tip, rf"$|\vec{{v}}_2| = {SHIN_LENGTH:g}$ m", orange, (26, -12))
     direction_angle(ax, v1, theta2, r"\theta_2", orange, (35, 0))
     #---------------------------------------------
@@ -175,13 +175,13 @@ def plot_vector_sum(
     # Draw the resultant directly from the shoulder to the foot.
     arrow(ax, origin, tip, green, dashed=True)
 
-    # Unpack tip into (x, z) and calculate the length: sqrt(x**2 + z**2).
+    # Unpack tip into (x, y) and calculate the length: sqrt(x**2 + y**2).
     resultant_length = math.hypot(*tip)
 
     # Treat lengths at or below 1e-12 m as zero to allow for floating-point error.
     if resultant_length > 1e-12:
-        # Recover the angle from x = -L*sin(angle) and z = -L*cos(angle).
-        # atan2(-x, -z) measures from -Z; degrees() converts radians to degrees.
+        # Recover the angle from x = -L*sin(angle) and y = -L*cos(angle).
+        # atan2(-x, -y) measures from -Y; degrees() converts radians to degrees.
         resultant_angle = math.degrees(math.atan2(-tip[0], -tip[1]))
 
         # Show length to four decimal places and angle to one on separate lines.
@@ -201,21 +201,21 @@ def plot_vector_sum(
 
 def main() -> None:
     '''Set joint angles, calculate link vectors, and display the three plots side by side.'''
-    # Use (x, z) coordinates because this model moves only in the X-Z plane.
-    # With the shoulder angle fixed at zero, there is no sideways motion,
-    # so the Y coordinate stays zero and is omitted.
+    # Use (x, y) coordinates because this model moves only in the X-Y plane.
+    # With the shoulder angle fixed at zero, there is no out-of-plane motion,
+    # so the Z coordinate stays zero and is omitted.
     # X: forward/backward foot movement relative to the shoulder.
-    # Z: foot height relative to the shoulder (negative below the shoulder).
+    # Y: foot height relative to the shoulder (negative below the shoulder).
 
     # Set the thigh angle and the knee angle relative to the thigh (degrees).
     thigh_degrees = -25.0
     shin_degrees = 50.0
 
-    # Calculate each link's direction relative to the -Z axis.
+    # Calculate each link's direction relative to the -Y axis.
     theta1 = thigh_degrees
     theta2 = thigh_degrees + shin_degrees
 
-    # Convert each link's length and direction to Cartesian (x, z) components.
+    # Convert each link's length and direction to Cartesian (x, y) components.
     v1 = convert_polar_to_cartesian(THIGH_LENGTH, math.radians(theta1))
     v2 = convert_polar_to_cartesian(SHIN_LENGTH, math.radians(theta2))
 
@@ -230,7 +230,7 @@ def main() -> None:
     points = ((0.0, 0.0), v1, v2, tip)
     x_limits = (min(p[0] for p in points) - 0.13,
                 max(p[0] for p in points) + 0.17)
-    z_limits = (min(p[1] for p in points) - 0.05,
+    y_limits = (min(p[1] for p in points) - 0.05,
                 max(p[1] for p in points) + 0.055)
 
     origin = (0.0, 0.0)
@@ -239,7 +239,7 @@ def main() -> None:
     #---------------------------------------------
     # First plot: thigh vector v1 from the origin.
     thigh_axis : Axes = axes[0]
-    setup_axes(thigh_axis, x_limits, z_limits)
+    setup_axes(thigh_axis, x_limits, y_limits)
     thigh_axis.set_title(r"1. $\vec{v}_1$", fontsize=19, pad=16)
 
     # Draw the thigh vector and label its length and direction.
@@ -253,14 +253,14 @@ def main() -> None:
         rf"$\theta_1 = q_1 = {thigh_degrees:g}^\circ$",
         r"$\vec{v}_1 = (-L_1\sin\theta_1,\ -L_1\cos\theta_1)$",
         rf"$= ({v1[0]:+.5f},\ {v1[1]:+.5f})$ m",
-        r"$\theta_1$: direction measured from $-Z$",
+        r"$\theta_1$: direction measured from $-Y$",
     ))
     #---------------------------------------------
 
     #---------------------------------------------
     # Second plot: shin vector v2 from the origin.
     shin_axis : Axes = axes[1]
-    setup_axes(shin_axis, x_limits, z_limits)
+    setup_axes(shin_axis, x_limits, y_limits)
     shin_axis.set_title(r"2. $\vec{v}_2$", fontsize=19, pad=16)
 
     # Draw the shin vector with labels placed on the opposite side.
@@ -282,7 +282,7 @@ def main() -> None:
     #---------------------------------------------
     # Third plot: head-to-tail vector sum and foot position.
     sum_axis : Axes = axes[2]
-    setup_axes(sum_axis, x_limits, z_limits)
+    setup_axes(sum_axis, x_limits, y_limits)
     sum_axis.set_title(r"3. $\vec{v}_1 + \vec{v}_2$", fontsize=19, pad=16)
 
     # Translate v2 to the tip of v1 and draw the resultant vector.
@@ -290,7 +290,7 @@ def main() -> None:
 
     # Add the vector components to explain the final foot position.
     add_formulas(sum_axis, (
-        r"$\vec{v}_1+\vec{v}_2 = (v_{1x}+v_{2x},\ v_{1z}+v_{2z})$",
+        r"$\vec{v}_1+\vec{v}_2 = (v_{1x}+v_{2x},\ v_{1y}+v_{2y})$",
         rf"$= ({v1[0]:+.5f} {v2[0]:+.5f},$",
         rf"$\qquad {v1[1]:+.5f} {v2[1]:+.5f})$ m",
         rf"$= ({tip[0]:+.5f},\ {tip[1]:+.5f})$ m",

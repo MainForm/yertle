@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation
+from matplotlib.axes import Axes
 
 
 FOOT_ELEVATION = 4.0
@@ -54,8 +55,8 @@ def animate_diagonal_groups(
     figure, axis = plt.subplots(figsize=(10, 5.5))
     lf_x, lf_y = gait["LF"]
     rf_x, rf_y = gait["RF"]
-    lf_lift = -lf_y
-    rf_lift = -rf_y
+    lf_lift = lf_y
+    rf_lift = rf_y
 
     # The geometric path is shared; the two groups enter it 180 degrees apart.
     axis.plot(lf_x, lf_lift, color="0.75", linewidth=2, label="Foot path")
@@ -64,7 +65,7 @@ def animate_diagonal_groups(
     # These are schematic representative legs, not a linkage/IK model. Sharing
     # one reference hip makes the phase crossing especially easy to compare.
     hip_x = 0.0
-    hip_y = 1.2 * foot_elevation
+    hip_y = -1.2 * foot_elevation
     axis.plot(hip_x, hip_y, "ks", markersize=7, label="Reference hip")
     lf_leg, = axis.plot([], [], color=colors["LF + RB"], linewidth=3, alpha=0.75)
     rf_leg, = axis.plot([], [], color=colors["RF + LB"], linewidth=3, alpha=0.75)
@@ -101,7 +102,7 @@ def animate_diagonal_groups(
     axis.set_xlabel("X offset (forward/backward)")
     axis.set_ylabel("Lift height (-Y offset)")
     axis.set_xlim(-1.25 * abs(x_stride), 1.25 * abs(x_stride))
-    axis.set_ylim(-0.2 * foot_elevation, 1.3 * foot_elevation)
+    axis.set_ylim(0.2 * foot_elevation, -1.3 * foot_elevation)
     axis.grid(True, alpha=0.3)
     axis.legend(loc="upper right")
     axis.set_aspect("equal", adjustable="box")
@@ -179,7 +180,7 @@ if __name__ == "__main__":
 
     #---------------------------------------------
     # First plot: X-axis movement of the LF/RB and RF/LB diagonal leg pairs
-    legs_x_axis = axes[0][0]
+    legs_x_axis : Axes = axes[0][0]
 
     # Plot the X offset of each diagonal leg pair over the gait cycle.
     for leg_name, (x_offset, _) in legs_groups.items():
@@ -199,11 +200,11 @@ if __name__ == "__main__":
 
     #---------------------------------------------
     # Second plot: Y-axis movement of the LF/RB and RF/LB diagonal leg pairs
-    legs_y_axis = axes[0][1]
+    legs_y_axis : Axes = axes[0][1]
 
     # Plot the X offset of each diagonal leg pair over the gait cycle.
     for leg_name, (_, y_offset) in legs_groups.items():
-        legs_y_axis.plot(phase_degrees, -y_offset, color=colors[leg_name], label=leg_name)
+        legs_y_axis.plot(phase_degrees, y_offset, color=colors[leg_name], label=leg_name)
 
     # Set the plot title and Y-axis label.
     legs_y_axis.set_title("Foot lift")
@@ -215,18 +216,19 @@ if __name__ == "__main__":
     legs_y_axis.set_xticks(np.arange(0, 361, 90))    # Place ticks at 90-degree intervals.
     legs_y_axis.grid(True, alpha=0.3)                # Show a lightly transparent grid.
     legs_y_axis.legend(ncols=2)                      # Arrange legend entries in two columns.
+    legs_y_axis.invert_yaxis()
     #---------------------------------------------
 
 
     #---------------------------------------------
     # Third plot: foot-tip trajectory of the LF/RB diagonal leg pair.
-    lf_rb_trajectory_axis = axes[1][0]
+    lf_rb_trajectory_axis : Axes = axes[1][0]
 
     # Retrieve the horizontal and vertical offsets for this synchronized pair.
     x_offset, y_offset = legs_groups["LF + RB"]
 
     # Plot lift height against the forward/backward foot displacement.
-    lf_rb_trajectory_axis.plot(x_offset, -y_offset, color=colors["LF + RB"], linewidth=2.5)
+    lf_rb_trajectory_axis.plot(x_offset, y_offset, color=colors["LF + RB"], linewidth=2.5)
     # Mark the first sample so the beginning of the gait cycle is easy to identify.
     lf_rb_trajectory_axis.scatter(
         [x_offset[0]],
@@ -258,8 +260,8 @@ if __name__ == "__main__":
         # Draw an arrow from the earlier sample to the later sample.
         lf_rb_trajectory_axis.annotate(
             "",
-            xy=(x_offset[end_index], -y_offset[end_index]),
-            xytext=(x_offset[start_index], -y_offset[start_index]),
+            xy=(x_offset[end_index], y_offset[end_index]),
+            xytext=(x_offset[start_index], y_offset[start_index]),
             arrowprops={
                 "arrowstyle": "-|>",
                 "color": "black",
@@ -278,7 +280,7 @@ if __name__ == "__main__":
     lf_rb_trajectory_axis.axhline(0.0, color="black", linewidth=1, alpha=0.5)
     # Add 20% padding around the expected stride and lift ranges.
     lf_rb_trajectory_axis.set_xlim(-1.2 * abs(X_STRIDE), 1.2 * abs(X_STRIDE))
-    lf_rb_trajectory_axis.set_ylim(-0.2 * FOOT_ELEVATION, 1.2 * FOOT_ELEVATION)
+    lf_rb_trajectory_axis.set_ylim(0.2 * FOOT_ELEVATION, -1.2 * FOOT_ELEVATION)
     lf_rb_trajectory_axis.grid(True, alpha=0.3)
     lf_rb_trajectory_axis.legend(loc="upper right")
     # Use equal scaling so the plotted trajectory preserves its geometry.
@@ -288,13 +290,13 @@ if __name__ == "__main__":
 
     #---------------------------------------------
     # Fourth plot: foot-tip trajectory of the RF/LB diagonal leg pair.
-    rf_lb_trajectory_axis = axes[1][1]
+    rf_lb_trajectory_axis : Axes = axes[1][1]
 
     # Retrieve the horizontal and vertical offsets for this synchronized pair.
     x_offset, y_offset = legs_groups["RF + LB"]
 
     # Plot lift height against the forward/backward foot displacement.
-    rf_lb_trajectory_axis.plot(x_offset, -y_offset, color=colors["RF + LB"], linewidth=2.5)
+    rf_lb_trajectory_axis.plot(x_offset, y_offset, color=colors["RF + LB"], linewidth=2.5)
     # Mark the first sample so the beginning of the gait cycle is easy to identify.
     rf_lb_trajectory_axis.scatter(
         [x_offset[0]],
@@ -326,8 +328,8 @@ if __name__ == "__main__":
         # Draw an arrow from the earlier sample to the later sample.
         rf_lb_trajectory_axis.annotate(
             "",
-            xy=(x_offset[end_index], -y_offset[end_index]),
-            xytext=(x_offset[start_index], -y_offset[start_index]),
+            xy=(x_offset[end_index], y_offset[end_index]),
+            xytext=(x_offset[start_index], y_offset[start_index]),
             arrowprops={
                 "arrowstyle": "-|>",
                 "color": "black",
@@ -346,7 +348,7 @@ if __name__ == "__main__":
     rf_lb_trajectory_axis.axhline(0.0, color="black", linewidth=1, alpha=0.5)
     # Add 20% padding around the expected stride and lift ranges.
     rf_lb_trajectory_axis.set_xlim(-1.2 * abs(X_STRIDE), 1.2 * abs(X_STRIDE))
-    rf_lb_trajectory_axis.set_ylim(-0.2 * FOOT_ELEVATION, 1.2 * FOOT_ELEVATION)
+    rf_lb_trajectory_axis.set_ylim(0.2 * FOOT_ELEVATION, -1.2 * FOOT_ELEVATION)
     rf_lb_trajectory_axis.grid(True, alpha=0.3)
     rf_lb_trajectory_axis.legend(loc="upper right")
     # Use equal scaling so the plotted trajectory preserves its geometry.
@@ -370,6 +372,9 @@ if __name__ == "__main__":
         x_stride=X_STRIDE,
         colors=colors,
     )
+
+    # gait_animation.save("forward_gait.gif", writer="pillow", fps=30, dpi=120)
+
     plt.show()
 
     plt.show(block=True)
