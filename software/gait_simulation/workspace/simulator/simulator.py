@@ -9,6 +9,23 @@ import pybullet_data
 from .urdf_manager import URDFManager
 from .urdf_object import URDFObject
 
+from collections.abc import Callable
+from enum import Enum
+
+class KeyEvent(Enum):
+    PRESSED = p.KEY_WAS_TRIGGERED
+    HELD = p.KEY_IS_DOWN
+    RELEASED = p.KEY_WAS_RELEASED
+
+class Key(Enum):
+    UP = p.B3G_UP_ARROW
+    DOWN = p.B3G_DOWN_ARROW
+    LEFT = p.B3G_LEFT_ARROW
+    RIGHT = p.B3G_RIGHT_ARROW
+    SPACE = ord(" ")
+    ENTER = 13
+    ESCAPE = 27
+
 class Simulator:
     # ---------------------------------------------------------------------------
     # region Context Management
@@ -31,6 +48,11 @@ class Simulator:
         self._closed = False
 
         self._urdf_manager = URDFManager(self._physics_client)
+
+        self._key_callbacks: dict[
+            tuple[int, KeyEvent],
+            Callable[[], None],
+        ] = {}
 
         p.setAdditionalSearchPath(
             pybullet_data.getDataPath(),
@@ -59,6 +81,16 @@ class Simulator:
         if not self.is_running():
             raise RuntimeError("Simulator is already closed.")
 
+    def _dispatch_keyboard_events(self) -> None:
+        keys = p.getKeyboardEvents(
+            physicsClientId=self._physics_client,
+        )
+
+        # 콜백 안에서 등록을 변경해도 순회에 영향을 주지 않도록 복사
+        for (key_code, event), callback in tuple(self._key_callbacks.items()):
+            if keys.get(key_code, 0) & event.value:
+                callback()
+
     # endregion
     # ---------------------------------------------------------------------------
 
@@ -71,14 +103,42 @@ class Simulator:
         self._ensure_open()
         return self._physics_client
 
+    @property
+    def fps(self) -> int:
+        """Return the FPS configured for this simulation."""
+        return self._fps
+
     def step(self) -> None:
         """Advance the physics world by one configured time step."""
+        self._ensure_open()
+        self._dispatch_keyboard_events()
+
         p.stepSimulation(physicsClientId=self._physics_client)
         time.sleep(1.0 / self._fps)
 
     def is_running(self) -> bool:
         """Return whether the PyBullet connection is still active."""
         return not self._closed and bool(p.isConnected(self._physics_client))
+
+    def register_key_callback(
+        self,
+        key: str | Key | int,
+        event: KeyEvent,
+        callback: Callable[[], None],
+    ) -> None:
+        if isinstance(key, Key):
+            key_code = key.value
+        elif isinstance(key, str):
+            if len(key) != 1:
+                raise ValueError("문자 키는 한 글자여야 합니다.")
+            key_code = ord(key)
+        elif isinstance(key, int):
+            key_code = key
+        else:
+            raise TypeError("key는 str, Key 또는 int여야 합니다.")
+
+        self._key_callbacks[(key_code, event)] = callback
+
 
     def close(self) -> None:
         """Invalidate all objects and close the owned PyBullet world."""

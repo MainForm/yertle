@@ -52,6 +52,10 @@ classDiagram
         +set_multiple_motors_angle(motor_controls: Sequence) void
     }
 
+    class Yertle {
+        
+    }
+
     Simulator "1" *-- "1" URDFManager : owns
     URDFManager "1" *-- "0..*" URDFObject : manages
     Simulator ..> URDFObject : returns and removes
