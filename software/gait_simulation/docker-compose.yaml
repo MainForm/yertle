@@ -1,5 +1,27 @@
 services:
   # Run the forward-gait plots and animation directly.
+  gait_simulation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /app
+    command: python main.py
+    environment:
+      # Forward the host display so Matplotlib can open its GUI windows.
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      # Mount the source tree so edits in VS Code are available immediately.
+      - ./workspace:/app
+      # Mount the robot URDF and its mesh assets as read-only simulation resources.
+      - ../../simulation:/app/simulation:ro
+      # Share the host X11 socket with GUI applications in the container.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    shm_size: 512m
+    init: true
+
+
   show-forward-gait-plot:
     build:
       context: .

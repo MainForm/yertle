@@ -109,6 +109,49 @@ Here is another simulation example from Carter James using Unity.
 - - -
 <br>
 
+## Gait simulation (forward gait):
+
+[software/gait_simulation](software/gait_simulation/README.md) provides a
+standalone PyBullet simulation for developing and testing Yertle's gait without
+the physical robot. **The forward gait is now complete.** It loads the Yertle
+URDF on a ground plane and converts foot trajectories into joint angles using
+inverse kinematics.
+
+The forward gait alternates two diagonal leg pairs: left front + right rear
+and right front + left rear. The pairs move half a cycle apart, with a
+sinusoidal forward/backward foot displacement and foot lift during the swing
+phase.
+
+### Run the gait simulation
+
+Requires Docker Engine, Docker Compose v2, and an X11 display server for the
+PyBullet GUI. From the repository root:
+
+```bash
+cd software/gait_simulation
+docker compose up --build gait_simulation
+```
+
+### Keyboard controls
+
+Click the PyBullet simulation window to give it keyboard focus.
+
+| Input | Action |
+| --- | --- |
+| Hold **↑ (Up arrow)** | Move forward using the completed forward gait. |
+| Release **↑ (Up arrow)** | Stop walking and return the legs to their standing pose. |
+| `Ctrl+C` in the terminal | Stop the simulation. |
+
+Currently, the interactive simulation implements forward walking; backward
+walking and left/right turns are not implemented yet. See the
+[gait simulation README](software/gait_simulation/README.md) for Docker
+development-container setup and Linux GUI configuration. Foot-trajectory plots
+and animations are available in
+[gait_visualization](software/gait_simulation/workspace/gait_visualization).
+
+- - -
+<br>
+
 ## Learned locomotion (reinforcement learning):
 Click [here](learning/README.md) for the RL locomotion pipeline.<br><br>
 Alongside the hand-tuned sinusoidal gait, Yertle now has a reinforcement-learning
@@ -166,6 +209,7 @@ simulation/    URDF model (valid inertials, firmware joint limits) and meshes
 software/
     ESP32/     Robot firmware (C++, Arduino / FreeRTOS)
     yertle_ui/  Python control GUI: IK, PID balance, gait, PyBullet simulation
+    gait_simulation/  Standalone PyBullet forward-gait simulation (Up arrow to walk)
 learning/      RL locomotion, CPU (Gymnasium + PyBullet + PPO) and sim-to-real bridge
 isaac_lab/     RL locomotion, GPU (Isaac Lab + rsl_rl): flat, rough terrain,
                distillation, Isaac ROS 2 bridge
