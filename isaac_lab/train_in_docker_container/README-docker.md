@@ -23,6 +23,27 @@ The `TRAIN_*` values in `.env` are read when the `train` service starts. When
 training finishes, its container remains running for result/log inspection;
 stop it explicitly with `docker compose stop train`.
 
+The supplied `.env.example` selects the current motor API seated reference:
+shoulder 0 degrees, thigh +75 degrees, shin -160 degrees. It samples standing /
+seated equally and explicitly expands simulation joint limits. Copy that
+setting into your local `.env` (existing `.env` files are not overwritten):
+
+```dotenv
+TRAIN_EXTRA_ARGS=--reset-standing-pose-json configs/standing_api_reference.json --reset-pose-json configs/seated_api_reference.json --extend-reset-pose-limits
+```
+
+Standing starts use shoulder 0 / thigh +34.4 / shin -51.6 degrees, seated
+starts use 0 / +75 / -160 degrees. The two reset states are sampled equally;
+the old standing reference remains only for observation/action offsets, not
+as a third reset state. USD joint axes and checkpoint semantics are unchanged.
+
+The paths are relative to `/workspace/yertle/isaac_lab`, where `yertle-train`
+executes. Ensure that the mounted source checkout contains this JSON. Without
+these arguments, Compose/train.py still uses legacy standing randomization;
+editing `.env.example` alone does not change an existing container or model.
+These options do not change command ranges, rewards, motor limits or action
+offsets. Existing checkpoints and historical reset-pose snapshots are retained.
+
 ## Headless policy playback
 
 Set `PLAY_CHECKPOINT` to the **container path** of a model, then start the

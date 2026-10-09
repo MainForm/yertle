@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "purpose": "Requested episode standing reset angles; simulation joint coordinates, not a motor command",
+  "joint_names": ["lb_shoulder", "lf_shoulder", "rb_shoulder", "rf_shoulder", "lb_thigh", "lf_thigh", "rb_thigh", "rf_thigh", "lb_shin", "lf_shin", "rb_shin", "rf_shin"],
+  "angles_rad": [0, 0, 0, 0, 0.6003932626860493, 0.6003932626860493, 0.6003932626860493, 0.6003932626860493, -0.9005898940290741, -0.9005898940290741, -0.9005898940290741, -0.9005898940290741],
+  "angles_deg": [0, 0, 0, 0, 34.4, 34.4, 34.4, 34.4, -51.6, -51.6, -51.6, -51.6]
+}

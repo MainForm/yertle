@@ -10,6 +10,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--pose-json", required=True)
+parser.add_argument("--standing-pose-json")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(args).app
@@ -27,7 +28,8 @@ def main():
     cfg = YertleFlatEnvCfg()
     cfg.scene.num_envs = 64
     pose = load_pose_json(args.pose_json)
-    configure_reset_pose_pool(cfg, [pose], True)
+    standing_pose = load_pose_json(args.standing_pose_json) if args.standing_pose_json else None
+    configure_reset_pose_pool(cfg, [pose], True, standing_pose)
     assert cfg.terminations.base_contact is None
     assert cfg.rewards.base_contact_penalty.weight == -1.
     env = gym.make("Isaac-Velocity-Flat-Yertle-v0", cfg=cfg).unwrapped
@@ -35,12 +37,13 @@ def main():
         robot = env.scene["robot"]
         defaults = robot.data.default_joint_pos.clone()
         desired = defaults.new_tensor([pose[n] for n in robot.joint_names])
+        standing = defaults if standing_pose is None else defaults.new_tensor([standing_pose[n] for n in robot.joint_names]).expand_as(defaults)
         counts = torch.zeros(2, device=env.device)
         for _ in range(4):
             env.reset()
             selected = env.reset_pose_ids
             counts += torch.bincount(selected, minlength=2)
-            expected = torch.where(selected[:, None] == 0, defaults, desired)
+            expected = torch.where(selected[:, None] == 0, standing, desired)
             torch.testing.assert_close(robot.data.joint_pos, expected, atol=1e-5, rtol=0)
             torch.testing.assert_close(robot.root_physx_view.get_dof_limits().to(env.device), robot.data.joint_pos_limits)
             env.action_manager.process_action(torch.zeros(64, 12, device=env.device))

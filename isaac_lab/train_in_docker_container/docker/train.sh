@@ -13,7 +13,8 @@ mkdir -p "${artifacts_dir}/metadata"
 git -C "${source_dir}" rev-parse HEAD > "${artifacts_dir}/metadata/source_commit.txt"
 cd "${project_dir}"
 
-# Set this only in local .env, for example: --lin-vel-x-min -0.5 --vx-only
+# Local .env selects reset poses and other overrides; paths are relative to project_dir.
+# .env.example selects configs/seated_api_reference.json (+75 thigh / -160 shin).
 read -r -a extra_args <<< "${TRAIN_EXTRA_ARGS:-}"
 exec /workspace/isaaclab/isaaclab.sh -p train.py \
     --task "${TRAIN_TASK:-flat}" \

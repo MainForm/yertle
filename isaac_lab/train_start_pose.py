@@ -3,24 +3,27 @@
 import math
 
 
-def configure_reset_pose_pool(env_cfg, poses, extend_limits=False):
+def configure_reset_pose_pool(env_cfg, poses, extend_limits=False, standing_pose=None):
     """Use standing + JSON poses uniformly; an empty pool preserves legacy resets."""
-    if extend_limits and not poses:
-        raise ValueError("--extend-reset-pose-limits requires --reset-pose-json.")
-    if not poses:
+    if extend_limits and not poses and standing_pose is None:
+        raise ValueError("Limit extension requires a seated or standing JSON reset pose.")
+    if not poses and standing_pose is None:
         return
     event = env_cfg.events.reset_robot_joints
     asset_cfg = event.params.get("asset_cfg")
     event.func = reset_pose_pool
     event.params = {"poses": poses, "extend_limits": extend_limits}
+    if standing_pose is not None:
+        event.params["standing_pose"] = standing_pose
     if asset_cfg is not None:
         event.params["asset_cfg"] = asset_cfg
 
 
-def reset_pose_pool(env, env_ids, poses, extend_limits=False, asset_cfg=None):
+def reset_pose_pool(env, env_ids, poses, extend_limits=False, asset_cfg=None, standing_pose=None):
     """Sample independently at each reset, validating the entire pool first.
 
-    Index 0 is the trained standing reference. Limit expansion covers ALL envs
+    Index 0 uses the trained reference unless a standing reset override is given.
+    Overrides never change default observation/action offsets. Expansion covers ALL envs
     and ALL candidate poses, including candidates not selected on this reset.
     Expanded limits remain active throughout the episode, not only at reset.
     """
@@ -31,10 +34,15 @@ def reset_pose_pool(env, env_ids, poses, extend_limits=False, asset_cfg=None):
            else torch.as_tensor(env_ids, device=env.device, dtype=torch.long))
     if ids.numel() == 0:
         return
-    if not poses or any(set(p) != set(robot.joint_names) for p in poses):
+    if (not poses and standing_pose is None) or any(set(p) != set(robot.joint_names) for p in poses):
         raise ValueError("Reset pool must contain complete named robot poses.")
     candidates = robot.data.default_joint_pos[:, None, :].expand(-1, len(poses) + 1, -1).clone()
-    candidates[:, 1:] = candidates.new_tensor([[p[n] for n in robot.joint_names] for p in poses])
+    if standing_pose is not None:
+        if set(standing_pose) != set(robot.joint_names):
+            raise ValueError("Standing reset must contain complete named robot joints.")
+        candidates[:, 0] = candidates.new_tensor([standing_pose[n] for n in robot.joint_names])
+    if poses:
+        candidates[:, 1:] = candidates.new_tensor([[p[n] for n in robot.joint_names] for p in poses])
     if not torch.isfinite(candidates).all():
         raise ValueError("Reset poses must contain finite angles.")
     limits = robot.data.joint_pos_limits.clone()

@@ -93,12 +93,29 @@ unchanged: a folded pose initially settles under gravity from the usual spawn
 height, rather than being teleported into floor contact.
 
 ```bash
-/isaac-sim/python.sh isaac_lab/train.py --headless --task flat --num_envs 1024 --max_iterations 2000 --reset-pose-json /workspace/yertle/isaac_lab/runs/pose_calibration/pose_20261006_113145_861156Z.json --extend-reset-pose-limits
+/isaac-sim/python.sh isaac_lab/train.py --headless --task flat --num_envs 1024 --max_iterations 2000 --reset-standing-pose-json isaac_lab/configs/standing_api_reference.json --reset-pose-json isaac_lab/configs/seated_api_reference.json --extend-reset-pose-limits
 ```
 
+The tracked `configs/seated_api_reference.json` uses the current motor API's
+raw-2048 seated reference: all shoulders **0 degrees**, thighs **+75 degrees**,
+and shins **-160 degrees**. With this option the pool remains 50% standing /
+50% seated. `--reset-standing-pose-json configs/standing_api_reference.json`
+replaces pool index 0 with shoulder 0 / thigh +34.4 / shin -51.6 degrees.
+The old default standing pose is NOT added as a third candidate. The two
+profiles are literal sim joint angles, not a coordinate-conversion layer: USD
+joint axes are unchanged, so sign reversal can change physical geometry.
+Observation/action default offsets stay at 0 / -0.6 / +0.9 radians to retain
+checkpoint semantics when resuming model_11996.pt. These options change only
+episode reset states, not the policy's output reference or a hardware API.
+Earlier run snapshots used thighs -75 / shins +160; those records
+and checkpoints are preserved, not retroactively changed. The JSON affects new
+episode resets only, not trained action offsets or an existing model's weights.
+For direct launches, include both options shown above; `train.py` without a
+JSON option still retains its legacy standing randomization.
+
 Pose JSONs use the calibration editor's schema-1 named joint angles. Limits are
-validated for the whole pool before sampling. The example seated pose has
-160-degree knees, beyond the original 90-degree PhysX upper bound. The explicit
+validated for the whole pool before sampling. The seated reference is outside
+the original PhysX joint bounds (in particular shin -160 degrees). The explicit
 `--extend-reset-pose-limits` flag expands the **runtime hard and soft joint
 limits of every environment for the entire run**, covering every candidate
 pose, within +/-180 degrees. It does not edit the USD, standing defaults,
