@@ -31,7 +31,7 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
-parser.add_argument("--signed-joint-reference", action="store_true", help="Use API-signed model/reference ONLY for policies trained with the same option; legacy checkpoints require it off.")
+parser.add_argument("--signed-joint-reference", action="store_true", help="Use standing reference with original joint axes and changed limits. Only for policies trained with this restored model, not axis-reversed v6.3 checkpoints.")
 parser.add_argument("--start-pose", choices=["random", "default", "json"], default=None,
                     help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
 parser.add_argument("--pose-json", type=str,

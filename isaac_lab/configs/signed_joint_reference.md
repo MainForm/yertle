@@ -1,5 +1,36 @@
 # Signed joint reference for new policies
 
+## CURRENT — coordinate reversal rolled back 2026-10-11
+
+Keep the original USD axes, both local joint frames and angular-drive target
+position/velocity values. Retain the requested 0/+34.4/-51.6-degree reference
+and changed joint limits. The historical `--signed-joint-reference` option now
+selects this ORIGINAL-AXES, limits-only variant, not the old axis-reversed one.
+Its cache name is `yertle_original_axes_limits_v2_*`; old generated v1 files and
+checkpoints are preserved, not overwritten. No original USD/URDF or C++ API
+mapping is modified. Same numerical angles intentionally produce a different
+physical pose from the old axis-reversed v6.3 model.
+
+The already-running v6.3 process retains its loaded axis-reversed model, as the
+user requested. Source rollback does not change that live process. Do not load
+its checkpoint with the restored model and claim equivalent behavior.
+
+Absolute-angle-to-raw conversion remains unchanged and was compared against
+the actual C++ converter on 233 samples, all rounded raw values identical.
+The API's default `fromPolicyActions()` offsets still use 0/-0.6/+0.9 radians;
+`fromJointAnglesRad()` adds no action offsets. Preserving motor calibration
+does not by itself prove policy-action compatibility. That separate integration
+choice remains unresolved; no API/action-offset change is made by this rollback.
+
+Verification: `check_signed_joint_reference_sim.py --headless --usd-only`
+checks original axes/frames/drive targets and same-angle relative rotations,
+while requiring the deliberately retained changed limits.
+
+## HISTORICAL — superseded axis-reversed implementation below
+
+The remaining sections describe the previous implementation and its historical
+tests. They are NOT the specification or stability results of the restored model.
+
 Enable `--signed-joint-reference` in BOTH train and play for policies trained in
 this new coordinate system. Leave it off for all historical checkpoints,
 including the already-running v6.2 run started 2026-10-10_08-45-51.
