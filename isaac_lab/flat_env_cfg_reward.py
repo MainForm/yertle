@@ -9,11 +9,13 @@ import torch
 
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase
 from isaaclab_tasks.manager_based.locomotion.velocity import mdp
 from isaaclab_tasks.manager_based.locomotion.velocity.config.spot.mdp.rewards import GaitReward
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
 from . import phase_generator
+from .motor_operating_range import MotorRawTransform, OperatingRangeCost
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
 SHOULDER_NAMES = ("lf_shoulder", "rf_shoulder", "lb_shoulder", "rb_shoulder")
@@ -58,6 +60,13 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.dof_acc_l2.weight = -5.0e-7
     rewards.dof_pos_limits.weight = -0.25
 
+    rewards.motor_operating_range_penalty = RewTerm(
+        func=MotorOperatingRangePenalty,
+        weight=-10.0,
+        params={"action_name": "joint_pos", "asset_cfg": SceneEntityCfg("robot"),
+                "command_speed_steps_per_s": 200, "excess_scale_raw": 100.0},
+    )
+
     rewards.joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-0.001, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.joint_velocity_excess = RewTerm(
         func=joint_velocity_excess,
@@ -93,6 +102,34 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+class MotorOperatingRangePenalty(ManagerTermBase):
+    """CSV hardware limits on both requested targets and measured positions.
+
+    CSV parsing, name resolution and device allocation happen once per env.
+    Action names are read from Isaac Lab's resolved JointPositionAction order,
+    not assumed to match either asset order or physical motor ID order.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        asset = env.scene[cfg.params["asset_cfg"].name]
+        action = env.action_manager.get_term(cfg.params["action_name"])
+        self.action = action
+        self.target_transform = MotorRawTransform(
+            action._joint_names, device=env.device, dtype=asset.data.joint_pos.dtype)
+        self.measured_transform = MotorRawTransform(
+            asset.joint_names, device=env.device, dtype=asset.data.joint_pos.dtype)
+        self.cost = OperatingRangeCost(
+            command_speed_steps_per_s=cfg.params["command_speed_steps_per_s"],
+            excess_scale_raw=cfg.params["excess_scale_raw"],
+            device=env.device, dtype=asset.data.joint_pos.dtype)
+
+    def __call__(self, env, action_name: str, asset_cfg: SceneEntityCfg,
+                 command_speed_steps_per_s: int, excess_scale_raw: float):
+        return self.cost(self.target_transform(self.action.processed_actions),
+                         self.measured_transform(env.scene[asset_cfg.name].data.joint_pos))
 
 
 def joint_velocity_excess(
