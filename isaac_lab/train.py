@@ -35,6 +35,9 @@ parser.add_argument("--push-interval-max", type=float, default=6.0)
 parser.add_argument("--perturbed-env-fraction", type=float, default=0.30)
 parser.add_argument("--lin-vel-x-min", type=float, default=None, help="Optional lower bound for commanded vx (m/s).")
 parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional upper bound for commanded vx (m/s).")
+parser.add_argument("--vx-only", action="store_true", help="Set vy/yaw commands to zero and disable heading commands.")
+parser.add_argument("--signed-joint-reference", action="store_true", help="New-policy coordinates: reverse thigh/shin axes and use 0/+34.4/-51.6 deg action/observation/reward reference. Not compatible with legacy checkpoints.")
+parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Terminate when absolute roll OR pitch reaches this angle; (0,90] degrees.")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
 parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
 parser.add_argument("--reset-pose-json", action="append", default=[], help="Repeatable pose JSON; sample standing + these poses uniformly on every episode reset.")
@@ -44,6 +47,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
     parser.error("--lin-vel-x-min and --lin-vel-x-max must be supplied together.")
+if args_cli.body_tilt_termination_deg is not None and not 0 < args_cli.body_tilt_termination_deg <= 90:
+    parser.error("--body-tilt-termination-deg must be in (0,90].")
 if args_cli.extend_reset_pose_limits and not args_cli.reset_pose_json and not args_cli.reset_standing_pose_json:
     parser.error("--extend-reset-pose-limits requires --reset-pose-json or --reset-standing-pose-json.")
 # Validate saved poses before launching Kit. Direct script and -m both supported.
@@ -74,6 +79,8 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
+from isaac_lab.train_terminations import configure_body_tilt_termination  # noqa: E402
+from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-v0", YertleFlatEnvCfg, YertleFlatPPORunnerCfg),
@@ -97,9 +104,17 @@ def main():
         )
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
+    if args_cli.signed_joint_reference:
+        configure_signed_joint_reference(env_cfg)
     configure_reset_pose_pool(env_cfg, reset_poses, args_cli.extend_reset_pose_limits, standing_reset_pose)
     if args_cli.lin_vel_x_min is not None:
         env_cfg.commands.base_velocity.ranges.lin_vel_x = (args_cli.lin_vel_x_min, args_cli.lin_vel_x_max)
+    if args_cli.vx_only:
+        env_cfg.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
+        env_cfg.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
+        env_cfg.commands.base_velocity.heading_command = False
+        env_cfg.commands.base_velocity.rel_heading_envs = 0.0
+    configure_body_tilt_termination(env_cfg, args_cli.body_tilt_termination_deg)
     legs = env_cfg.scene.robot.actuators["legs"]
     if args_cli.velocity_limit_sim is not None:
         legs.velocity_limit_sim = args_cli.velocity_limit_sim
@@ -140,6 +155,8 @@ def main():
         flush=True,
     )
     print(f"TRAIN_LOGDIR {log_dir}", flush=True)
+    print(f"TRAIN_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
+    print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} roll_or_pitch=True", flush=True)
     print(f"TRAIN_RESET_POSES standing_plus_json={args_cli.reset_pose_json} "
           f"standing_override={args_cli.reset_standing_pose_json} "
           f"uniform_pool_size={len(reset_poses) + 1 if reset_poses or standing_reset_pose else 0} "

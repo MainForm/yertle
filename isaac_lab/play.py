@@ -31,6 +31,7 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
+parser.add_argument("--signed-joint-reference", action="store_true", help="Use API-signed model/reference ONLY for policies trained with the same option; legacy checkpoints require it off.")
 parser.add_argument("--start-pose", choices=["random", "default", "json"], default=None,
                     help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
 parser.add_argument("--pose-json", type=str,
@@ -76,6 +77,7 @@ from isaac_lab import phase_generator  # noqa: E402
 from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
+from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
 
 try:
     import msvcrt
@@ -158,6 +160,9 @@ def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.signed_joint_reference:
+        configure_signed_joint_reference(env_cfg)
+    print(f"PLAY_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
     configure_play_terminations(env_cfg)
     print("PLAY_TERMINATIONS base_contact=disabled time_out=unchanged", flush=True)
     configure_start_pose(env_cfg, start_pose_mode, start_joint_angles,
