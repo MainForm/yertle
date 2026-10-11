@@ -114,6 +114,8 @@ def main():
         env_cfg.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
         env_cfg.commands.base_velocity.heading_command = False
         env_cfg.commands.base_velocity.rel_heading_envs = 0.0
+        if args_cli.task == "flat":
+            env_cfg.rewards.track_lin_vel_xy_cauchy.params["components"] = (0,)
     configure_body_tilt_termination(env_cfg, args_cli.body_tilt_termination_deg)
     legs = env_cfg.scene.robot.actuators["legs"]
     if args_cli.velocity_limit_sim is not None:
@@ -156,6 +158,8 @@ def main():
     )
     print(f"TRAIN_LOGDIR {log_dir}", flush=True)
     print(f"TRAIN_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
+    if args_cli.task == "flat":
+        print(f"TRAIN_LINEAR_TRACKING_COMPONENTS {env_cfg.rewards.track_lin_vel_xy_cauchy.params['components']}", flush=True)
     print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} roll_or_pitch=True", flush=True)
     print(f"TRAIN_RESET_POSES standing_plus_json={args_cli.reset_pose_json} "
           f"standing_override={args_cli.reset_standing_pose_json} "

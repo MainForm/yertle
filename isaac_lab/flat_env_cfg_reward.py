@@ -36,8 +36,11 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     """
     rewards = cfg.rewards
     rewards.feet_air_time.params["sensor_cfg"].body_names = FEET
-    rewards.feet_air_time.weight = 0.50
-    rewards.feet_air_time.params["threshold"] = 0.50
+    rewards.feet_air_time.weight = 1.00
+    # A 2.2 Hz / 50% duty trot has a ~0.227 s swing. The inherited 0.5 s
+    # threshold penalized its normal touchdowns instead of rewarding them.
+    rewards.feet_air_time.func = feet_air_time_trot
+    rewards.feet_air_time.params["threshold"] = 0.15
     rewards.flat_orientation_l2.weight = -1.0
     rewards.lin_vel_z_l2.weight = -0.5
     rewards.dof_torques_l2.weight = -0.0002
@@ -48,7 +51,8 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.track_lin_vel_xy_cauchy = RewTerm(
         func=track_lin_vel_xy_cauchy,
         weight=2.0,
-        params={"command_name": "base_velocity", "min_scale": 0.05, "relative_scale": 0.50},
+        params={"command_name": "base_velocity", "min_scale": 0.05, "relative_scale": 0.50,
+                "components": (0, 1)},
     )
     rewards.track_ang_vel_z_cauchy = RewTerm(
         func=track_ang_vel_z_cauchy,
@@ -97,7 +101,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.phase_contact_schedule = RewTerm(func=phase_generator.phase_contact_schedule, weight=0.20, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
     rewards.phase_unscheduled_contact_penalty = RewTerm(
         func=phase_generator.phase_unscheduled_contact_penalty,
-        weight=-0.20,
+        weight=-0.40,
         params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"},
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
@@ -160,6 +164,21 @@ def air_time_variance_penalty(env, sensor_cfg: SceneEntityCfg, max_time: float =
     return torch.var(air, dim=1) + torch.var(contact, dim=1)
 
 
+def feet_air_time_trot(env, command_name: str, sensor_cfg: SceneEntityCfg, threshold: float):
+    """Touchdown air-time reward, gated by the same commands as phase rewards.
+
+    Keep the inherited signed (air time - threshold) score and touchdown-only
+    evaluation, but use the shared >0.05 m/s OR >0.10 rad/s moving gate. This
+    gate is based on the command, not measured movement; zero commands remain
+    unpenalized and pure commanded turns can receive a gait reward too.
+    """
+    sensor = env.scene.sensors[sensor_cfg.name]
+    first_contact = sensor.compute_first_contact(env.step_dt)[:, sensor_cfg.body_ids]
+    last_air_time = sensor.data.last_air_time[:, sensor_cfg.body_ids]
+    score = torch.sum((last_air_time - threshold) * first_contact, dim=1)
+    return score * phase_generator._moving(env, command_name)
+
+
 def _command_relative_cauchy(error: torch.Tensor, command: torch.Tensor, min_scale: float, relative_scale: float):
     """Return a Cauchy score with a command-relative half-width.
 
@@ -177,11 +196,19 @@ def track_lin_vel_xy_cauchy(
     command_name: str = "base_velocity",
     min_scale: float = 0.05,
     relative_scale: float = 0.50,
+    components: tuple[int, ...] = (0, 1),
 ):
-    """Mean Cauchy tracking score for independently scaled vx and vy."""
+    """Mean Cauchy score for selected linear components; (0,) is vx-only.
+
+    Full-command runs keep (0, 1). Explicit vx-only training uses (0,), so
+    matching the unused vy=0 command cannot inflate the forward tracking score.
+    The selected-axis score remains in [0, 1]; weights/scales are unchanged.
+    """
+    if not components or len(set(components)) != len(components) or any(i not in (0, 1) for i in components):
+        raise ValueError("components must select unique vx/vy indices: (0,), (1,), or (0, 1)")
     asset = env.scene["robot"]
-    command = env.command_manager.get_command(command_name)[:, :2]
-    error = asset.data.root_lin_vel_b[:, :2] - command
+    command = env.command_manager.get_command(command_name)[:, list(components)]
+    error = asset.data.root_lin_vel_b[:, list(components)] - command
     return _command_relative_cauchy(error, command, min_scale, relative_scale).mean(dim=1)
 
 
