@@ -4,7 +4,7 @@ import math
 import uuid
 from pathlib import Path
 
-REFERENCE_DEG = {"shoulder": 0.0, "thigh": 34.4, "shin": -51.6}
+REFERENCE_DEG = {"shoulder": 0.0, "thigh": 34.0, "shin": -85.0}
 
 
 def create_signed_usd(source_path):

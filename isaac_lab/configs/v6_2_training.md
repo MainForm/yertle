@@ -3,6 +3,10 @@
 Requested 2026-10-10. Fresh PPO, no checkpoint, 7000 updates, 1024 environments,
 seed 0, flat terrain, no automatic disturbance. Preserve all older runs.
 
+Historical run specification: its angles below are unchanged records. The
+current standing JSON was subsequently updated to 0/+34/-85 degrees; it must
+not be treated as the historical v6.2 reset snapshot.
+
 - Reset every episode to `standing_api_reference.json`: shoulder/thigh/knee
   0 / +34.4 / -51.6 degrees. Do not include the seated reset candidate.
 - Commands: vx [0.0, +0.3] m/s, vy = 0 m/s, yaw = 0 rad/s; heading disabled.

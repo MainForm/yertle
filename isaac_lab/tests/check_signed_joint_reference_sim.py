@@ -53,7 +53,7 @@ if args.usd_only:
 env=gym.make('Isaac-Velocity-Flat-Yertle-v0',cfg=cfg).unwrapped
 try:
     env.reset();robot=env.scene['robot'];ref=robot.data.default_joint_pos.clone()
-    for name,angle in [('thigh',34.4),('shin',-51.6),('shoulder',0)]:
+    for name,angle in [('thigh',34),('shin',-85),('shoulder',0)]:
         ids=[i for i,n in enumerate(robot.joint_names) if n.endswith('_'+name)]
         torch.testing.assert_close(ref[:,ids],torch.full_like(ref[:,ids],math.radians(angle)),rtol=0,atol=1e-6)
     assert ((ref>=robot.data.joint_pos_limits[:,:,0])&(ref<=robot.data.joint_pos_limits[:,:,1])).all()

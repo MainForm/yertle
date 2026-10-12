@@ -110,7 +110,7 @@ class TrainStartPoseTests(unittest.TestCase):
         standing = pose_module.load_pose_json(directory / "standing_api_reference.json")
         seated = pose_module.load_pose_json(directory / "seated_api_reference.json")
         for name, angle in standing.items():
-            expected = 0 if name.endswith("shoulder") else 34.4 if name.endswith("thigh") else -51.6
+            expected = 0 if name.endswith("shoulder") else 34 if name.endswith("thigh") else -85
             self.assertAlmostEqual(angle, math.radians(expected))
         module.reset_pose_pool(self.env, None, [seated], True, standing_pose=standing)
         selected = self.env.reset_pose_ids

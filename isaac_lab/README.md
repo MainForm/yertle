@@ -93,19 +93,22 @@ unchanged: a folded pose initially settles under gravity from the usual spawn
 height, rather than being teleported into floor contact.
 
 ```bash
-/isaac-sim/python.sh isaac_lab/train.py --headless --task flat --num_envs 1024 --max_iterations 2000 --reset-standing-pose-json isaac_lab/configs/standing_api_reference.json --reset-pose-json isaac_lab/configs/seated_api_reference.json --extend-reset-pose-limits
+/isaac-sim/python.sh isaac_lab/train.py --headless --task flat --num_envs 1024 --max_iterations 2000 --signed-joint-reference --reset-standing-pose-json isaac_lab/configs/standing_api_reference.json --reset-pose-json isaac_lab/configs/seated_api_reference.json --extend-reset-pose-limits
 ```
 
 The tracked `configs/seated_api_reference.json` uses the current motor API's
 raw-2048 seated reference: all shoulders **0 degrees**, thighs **+75 degrees**,
 and shins **-160 degrees**. With this option the pool remains 50% standing /
 50% seated. `--reset-standing-pose-json configs/standing_api_reference.json`
-replaces pool index 0 with shoulder 0 / thigh +34.4 / shin -51.6 degrees.
+replaces pool index 0 with the current shoulder 0 / thigh +34 / shin -85 degrees.
+For new policies, also pass `--signed-joint-reference` to both train and play
+so the action/observation/reward reference matches this reset pose. This new
+reference is not interchangeable with existing v6.4/v6.5 checkpoints.
 The old default standing pose is NOT added as a third candidate. The two
 profiles are literal sim joint angles, not a coordinate-conversion layer: USD
 joint axes are unchanged, so sign reversal can change physical geometry.
-Observation/action default offsets stay at 0 / -0.6 / +0.9 radians to retain
-checkpoint semantics when resuming model_11996.pt. These options change only
+Without `--signed-joint-reference`, observation/action default offsets stay
+at 0 / -0.6 / +0.9 radians for legacy checkpoints. Reset options change only
 episode reset states, not the policy's output reference or a hardware API.
 Earlier run snapshots used thighs -75 / shins +160; those records
 and checkpoints are preserved, not retroactively changed. The JSON affects new

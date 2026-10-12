@@ -18,9 +18,23 @@ class ReferenceTests(unittest.TestCase):
             module.configure_signed_joint_reference(cfg)
         creator.assert_called_once_with('legacy.usd')
         self.assertEqual(robot.spawn.usd_path,'signed.usda')
-        self.assertEqual(robot.init_state.joint_pos,{'.*_shoulder':0.,'.*_thigh':math.radians(34.4),'.*_shin':math.radians(-51.6)})
+        self.assertEqual(robot.init_state.joint_pos,{'.*_shoulder':0.,'.*_thigh':math.radians(34),'.*_shin':math.radians(-85)})
         self.assertTrue(action.use_default_offset)
         self.assertEqual(action.scale,.25)
+
+    def test_standing_json_matches_all_reference_joints(self):
+        import json
+        data=json.loads((Path(__file__).parents[1]/'configs/standing_api_reference.json').read_text(encoding='utf-8'))
+        for name,radians,degrees in zip(data['joint_names'],data['angles_rad'],data['angles_deg']):
+            kind=name.rsplit('_',1)[1]
+            self.assertEqual(degrees,module.REFERENCE_DEG[kind])
+            self.assertAlmostEqual(radians,math.radians(module.REFERENCE_DEG[kind]),places=12)
+
+    def test_new_compose_template_aligns_train_and_play_references(self):
+        text=(Path(__file__).parents[1]/'train_in_docker_container/.env.example').read_text(encoding='utf-8')
+        for key in ('TRAIN_EXTRA_ARGS','PLAY_EXTRA_ARGS'):
+            value=next(line for line in text.splitlines() if line.startswith(key+'='))
+            self.assertIn('--signed-joint-reference',value)
 
 
 if __name__=='__main__':unittest.main()

@@ -3,8 +3,8 @@
 ## CURRENT — coordinate reversal rolled back 2026-10-11
 
 Keep the original USD axes, both local joint frames and angular-drive target
-position/velocity values. Retain the requested 0/+34.4/-51.6-degree reference
-and changed joint limits. The historical `--signed-joint-reference` option now
+position/velocity values. The current requested reference is 0/+34/-85 degrees;
+the changed joint limits are retained. The historical `--signed-joint-reference` option now
 selects this ORIGINAL-AXES, limits-only variant, not the old axis-reversed one.
 Its cache name is `yertle_original_axes_limits_v2_*`; old generated v1 files and
 checkpoints are preserved, not overwritten. No original USD/URDF or C++ API
@@ -25,6 +25,33 @@ choice remains unresolved; no API/action-offset change is made by this rollback.
 Verification: `check_signed_joint_reference_sim.py --headless --usd-only`
 checks original axes/frames/drive targets and same-angle relative rotations,
 while requiring the deliberately retained changed limits.
+
+## Current standing adjustment — 2026-10-13
+
+The active opt-in train/play reference and `standing_api_reference.json` now
+both use shoulder/thigh/shin 0/+34/-85 degrees. Default-offset actions,
+relative joint observations and stand-still deviation reward follow the same
+reference automatically. Only the current reference changes; axes, frames,
+drive targets, limits, action scale, observation dimensions, reward weights,
+measured operating-range CSV and motor calibration remain unchanged.
+
+The old 0/+34.4/-51.6 policies (v6.4/v6.5) are not equivalent under this new
+reference, despite identical 55/12 dimensions. Preserve their old code/config
+when evaluating them. Existing live training retains its previous loaded
+reference; no interruption or new training is performed by this change.
+Legacy no-flag configuration is retained for old checkpoints, not silently
+switched to negative shin angles with the original positive-shin-limit USD.
+
+Keep all historical sections/results below as historical evidence; their
+angles, geometry measurements and range violations are not current results.
+
+Current bounded verification: 92 CPU tests pass. The actual restored-axis
+simulation confirms reference/action/relative-observation agreement and hard
+limit inclusion; a 3-second zero-action hold had no resets and maximum gravity
+tilt 5.6039 degrees. The new reference has zero measured-envelope excess on all
+12 motors. At the 0.25 m initial spawn height, rubber sole Z is 0.052476 m while
+shin-origin Z is 0.142225 m; this is before settling, not a ground-contact claim.
+The actual sole transform and ten simulation steps pass independent checks.
 
 ## HISTORICAL — superseded axis-reversed implementation below
 

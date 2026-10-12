@@ -29,20 +29,27 @@ seated equally and explicitly expands simulation joint limits. Copy that
 setting into your local `.env` (existing `.env` files are not overwritten):
 
 ```dotenv
-TRAIN_EXTRA_ARGS=--reset-standing-pose-json configs/standing_api_reference.json --reset-pose-json configs/seated_api_reference.json --extend-reset-pose-limits
+TRAIN_EXTRA_ARGS=--signed-joint-reference --reset-standing-pose-json configs/standing_api_reference.json --reset-pose-json configs/seated_api_reference.json --extend-reset-pose-limits
 ```
 
-Standing starts use shoulder 0 / thigh +34.4 / shin -51.6 degrees, seated
+Standing starts now use shoulder 0 / thigh +34 / shin -85 degrees, seated
 starts use 0 / +75 / -160 degrees. The two reset states are sampled equally;
 the old standing reference remains only for observation/action offsets, not
-as a third reset state. USD joint axes and checkpoint semantics are unchanged.
+as a third reset state. For new policies add `--signed-joint-reference` to
+`TRAIN_EXTRA_ARGS` to align action/observation/reward offsets with this current
+standing pose. USD joint axes are unchanged; existing v6.4/v6.5 checkpoints
+require their old reference/configuration, not the new one.
 
 The paths are relative to `/workspace/yertle/isaac_lab`, where `yertle-train`
 executes. Ensure that the mounted source checkout contains this JSON. Without
 these arguments, Compose/train.py still uses legacy standing randomization;
 editing `.env.example` alone does not change an existing container or model.
-These options do not change command ranges, rewards, motor limits or action
-offsets. Existing checkpoints and historical reset-pose snapshots are retained.
+Reset options do not change action offsets on their own; the signed-reference
+option explicitly selects the current new-policy defaults. Command ranges,
+reward weights and motor limits are unchanged. `.env.example` also sets
+`PLAY_EXTRA_ARGS=--signed-joint-reference --start-pose default` for new policies.
+Existing local `.env` files, running containers/checkpoints and historical
+reset-pose snapshots are not rewritten by these template changes.
 
 ## Headless policy playback
 
