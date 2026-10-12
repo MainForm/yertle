@@ -86,10 +86,13 @@ def phase_unscheduled_contact_penalty(env, sensor_cfg: SceneEntityCfg, command_n
     return unscheduled.to(torch.float32).mean(dim=1) * _moving(env, command_name)
 
 
+def _foot_sole_heights(env):
+    from .foot_geometry import foot_sole_heights
+    return foot_sole_heights(env)
+
+
 def phase_swing_clearance(env, command_name: str = "base_velocity", min_height_m: float = 0.045, transition_m: float = 0.015) -> torch.Tensor:
-    asset = env.scene["robot"]
-    body_ids = [asset.data.body_names.index(name) for name in _FOOT_NAMES]
-    height = asset.data.body_pos_w[:, body_ids, 2]
+    height = _foot_sole_heights(env)
     shortfall = ((min_height_m - height).clamp_min(0.0) / transition_m).square()
     return (shortfall * ~_desired_contact(env, command_name)).mean(dim=1) * _moving(env, command_name)
 

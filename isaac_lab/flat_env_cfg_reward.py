@@ -282,9 +282,8 @@ def stance_width_barrier(env, sensor_cfg: SceneEntityCfg, lower_m: float = 0.12,
 
 
 def swing_foot_clearance_barrier(env, sensor_cfg: SceneEntityCfg, min_height_m: float = 0.035, transition_m: float = 0.015):
-    asset = env.scene["robot"]
-    ids = [asset.data.body_names.index(name) for name in FOOT_NAMES]
-    shortfall = ((min_height_m - asset.data.body_pos_w[:, ids, 2]).clamp_min(0.0) / transition_m).square()
+    height = phase_generator._foot_sole_heights(env)
+    shortfall = ((min_height_m - height).clamp_min(0.0) / transition_m).square()
     return torch.sum(shortfall * ~_foot_contact(env, sensor_cfg), dim=1)
 
 
