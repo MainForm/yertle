@@ -91,7 +91,6 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.swing_foot_clearance_barrier = RewTerm(func=swing_foot_clearance_barrier, weight=-0.03, params={"sensor_cfg": CONTACT_SENSOR})
-    rewards.body_height_barrier = RewTerm(func=body_height_barrier, weight=-0.08, params={"asset_cfg": SceneEntityCfg("robot")})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
     rewards.energy = RewTerm(func=joint_energy_l1, weight=-2.0e-5, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
@@ -285,10 +284,6 @@ def swing_foot_clearance_barrier(env, sensor_cfg: SceneEntityCfg, min_height_m: 
     height = phase_generator._foot_sole_heights(env)
     shortfall = ((min_height_m - height).clamp_min(0.0) / transition_m).square()
     return torch.sum(shortfall * ~_foot_contact(env, sensor_cfg), dim=1)
-
-
-def body_height_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower_m: float = 0.20, upper_m: float = 0.30, transition_m: float = 0.02):
-    return _interval_barrier(env.scene[asset_cfg.name].data.root_pos_w[:, 2], lower_m, upper_m, transition_m)
 
 
 def foot_workspace_barrier(env, lower_x_m: float = -0.20, upper_x_m: float = 0.20, lower_abs_y_m: float = 0.03, upper_abs_y_m: float = 0.20, transition_m: float = 0.03):

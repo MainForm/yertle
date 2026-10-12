@@ -19,6 +19,7 @@ try:
     from isaac_lab.flat_env_cfg import YertleFlatEnvCfg
     from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy
     cfg=YertleFlatEnvCfg()
+    assert getattr(cfg.rewards,'body_height_barrier',None) is None
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
     changed={'feet_air_time','track_lin_vel_xy_cauchy','phase_unscheduled_contact_penalty'}
     unchanged=0
