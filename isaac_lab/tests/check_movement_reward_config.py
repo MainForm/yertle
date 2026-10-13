@@ -17,7 +17,7 @@ try:
     root=Path(__file__).resolve().parents[2]
     sys.path.insert(0,str(root))
     from isaac_lab.flat_env_cfg import YertleFlatEnvCfg
-    from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy
+    from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy, feet_slide_sole
     cfg=YertleFlatEnvCfg()
     assert getattr(cfg.rewards,'body_height_barrier',None) is None
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
@@ -29,6 +29,9 @@ try:
         assert term.weight==float(old[name]['weight']),(name,term.weight,old[name]['weight'])
         unchanged+=1
     assert cfg.rewards.feet_air_time.func is feet_air_time_trot
+    assert cfg.rewards.feet_slide.func is feet_slide_sole
+    assert cfg.rewards.feet_slide.weight == -.10
+    assert cfg.rewards.feet_slide.params['surface_band_m'] == .001
     assert cfg.rewards.feet_air_time.weight==1.0
     assert cfg.rewards.feet_air_time.params['threshold']==.15
     assert cfg.rewards.track_lin_vel_xy_cauchy.func is track_lin_vel_xy_cauchy

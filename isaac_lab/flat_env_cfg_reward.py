@@ -15,6 +15,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.spot.mdp.rewards im
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
 from . import phase_generator
+from .foot_geometry import foot_sole_contact_velocities
 from .motor_operating_range import MotorRawTransform, OperatingRangeCost
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
@@ -80,7 +81,8 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
         },
     )
-    rewards.feet_slide = RewTerm(func=mdp.feet_slide, weight=-0.10, params={"asset_cfg": SceneEntityCfg("robot", body_names=FEET), "sensor_cfg": CONTACT_SENSOR})
+    rewards.feet_slide = RewTerm(func=feet_slide_sole, weight=-0.10,
+                               params={"sensor_cfg": CONTACT_SENSOR, "surface_band_m": 0.001})
     rewards.undesired_contacts = RewTerm(func=mdp.undesired_contacts, weight=-0.50, params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=NON_FEET)})
     rewards.base_contact_penalty = RewTerm(
         func=mdp.undesired_contacts, weight=-1.0,
@@ -151,6 +153,20 @@ def joint_velocity_excess(
     velocity = env.scene[asset_cfg.name].data.joint_vel[:, asset_cfg.joint_ids]
     excess = (velocity.abs() / velocity_limit_rad_s - 1.0).clamp_min(0.0)
     return excess.square().sum(dim=1)
+
+
+def feet_slide_sole(env, sensor_cfg: SceneEntityCfg, surface_band_m: float = 0.001):
+    """Sum planar sole-point speed on contacting feet; keep the old contact gate.
+
+    Geometry velocity is in FOOT_NAMES order; resolved sensor IDs may use a
+    different articulation order. Match by name, not by coincidental indices.
+    No command/phase gate: an actual contacting foot should not slide at rest.
+    """
+    sensor = env.scene.sensors[sensor_cfg.name]
+    contacts = sensor.data.net_forces_w_history[:, :, sensor_cfg.body_ids, :].norm(dim=-1).amax(dim=1) > 1.0
+    order = [FOOT_NAMES.index(sensor.body_names[i]) for i in sensor_cfg.body_ids]
+    velocity = foot_sole_contact_velocities(env, surface_band_m)[:, order, :2]
+    return torch.sum(torch.linalg.vector_norm(velocity, dim=-1) * contacts, dim=1)
 
 
 def air_time_variance_penalty(env, sensor_cfg: SceneEntityCfg, max_time: float = 0.5):

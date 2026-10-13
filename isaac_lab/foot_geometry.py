@@ -100,5 +100,46 @@ def foot_sole_heights(env):
         tensor = torch.tensor(padded, device=asset.device, dtype=asset.data.body_pos_w.dtype)
         ids = [asset.body_names.index(name) for name in FOOT_NAMES]
         env._yertle_sole_geometry = (ids, tensor)
+        env._yertle_sole_vertex_mask = torch.tensor(
+            [[i < len(p) for i in range(maximum)] for p in points], device=asset.device)
     ids, points = env._yertle_sole_geometry
     return minimum_surface_height(asset.data.body_pos_w[:, ids], asset.data.body_quat_w[:, ids], points)
+
+
+def lowest_surface_point_velocity(body_pos_w, body_quat_w, com_pos_w, com_vel_w,
+                                  ang_vel_w, local_points, surface_band_m=0.001, vertex_mask=None):
+    """Velocity at the centroid of sole vertices within 1 mm of lowest world Z.
+
+    This is an authored-surface contact proxy, NOT a PhysX solver contact point.
+    Select the patch in the rotated geometry, then use rigid-body point velocity
+    v_COM + omega x (point_world - COM_world). Do not use a link-origin offset
+    with a COM velocity. Padding vertices do not bias the patch centroid.
+    """
+    if not 0.0 <= surface_band_m < float('inf'):
+        raise ValueError('surface_band_m must be finite and nonnegative')
+    w, x, y, z = body_quat_w.unbind(-1)
+    row_z = torch.stack((2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)), dim=-1)
+    height = sum(row_z[..., d, None] * local_points[None, ..., d] for d in range(3))
+    valid = torch.ones_like(height, dtype=torch.bool) if vertex_mask is None else vertex_mask[None].expand_as(height)
+    lowest = height.masked_fill(~valid, float('inf')).amin(dim=-1, keepdim=True)
+    selected = valid & (height <= lowest + surface_band_m)
+    count = selected.sum(dim=-1).clamp_min(1)
+    local = torch.stack([(local_points[None, ..., d] * selected).sum(dim=-1) / count
+                         for d in range(3)], dim=-1)
+    xyz = body_quat_w[..., 1:]
+    cross = torch.linalg.cross(xyz, local, dim=-1)
+    rotated = local + 2*(body_quat_w[..., :1]*cross + torch.linalg.cross(xyz, cross, dim=-1))
+    lever = body_pos_w + rotated - com_pos_w
+    return com_vel_w + torch.linalg.cross(ang_vel_w, lever, dim=-1)
+
+
+def foot_sole_contact_velocities(env, surface_band_m=0.001):
+    """Live estimated sole contact-point velocities in FOOT_NAMES order [m/s]."""
+    if not hasattr(env, '_yertle_sole_geometry'):
+        foot_sole_heights(env)
+    ids, points = env._yertle_sole_geometry
+    data = env.scene['robot'].data
+    return lowest_surface_point_velocity(
+        data.body_pos_w[:, ids], data.body_quat_w[:, ids], data.body_com_pos_w[:, ids],
+        data.body_lin_vel_w[:, ids], data.body_ang_vel_w[:, ids], points, surface_band_m,
+        getattr(env, '_yertle_sole_vertex_mask', None))
