@@ -51,13 +51,13 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.track_ang_vel_z_exp = None
     rewards.track_lin_vel_xy_cauchy = RewTerm(
         func=track_lin_vel_xy_cauchy,
-        weight=2.0,
+        weight=1.0,
         params={"command_name": "base_velocity", "min_scale": 0.05, "relative_scale": 0.50,
                 "components": (0, 1)},
     )
     rewards.track_ang_vel_z_cauchy = RewTerm(
         func=track_ang_vel_z_cauchy,
-        weight=0.75,
+        weight=0.5,
         params={"command_name": "base_velocity", "min_scale": 0.10, "relative_scale": 0.50},
     )
     rewards.action_rate_l2.weight = -0.04

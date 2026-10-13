@@ -17,7 +17,7 @@ stub = ModuleType('isaaclab.managers')
 stub.SceneEntityCfg = object
 with patch.dict(sys.modules, {'isaaclab.managers': stub}):
     spec.loader.exec_module(phase)
-names = {'feet_air_time_trot', '_command_relative_cauchy', 'track_lin_vel_xy_cauchy'}
+names = {'feet_air_time_trot', '_command_relative_cauchy', 'track_lin_vel_xy_cauchy', 'track_ang_vel_z_cauchy'}
 namespace = {'torch': torch, 'SceneEntityCfg': object, 'phase_generator': phase}
 exec(compile(ast.Module(body=[n for n in TREE.body if isinstance(n, ast.FunctionDef) and n.name in names], type_ignores=[]), str(ROOT / 'flat_env_cfg_reward.py'), 'exec'), namespace)
 linear = namespace['track_lin_vel_xy_cauchy']
@@ -104,7 +104,7 @@ class MovementRewardTests(unittest.TestCase):
 
     def test_real_registration(self):
         configure=next(n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name=='configure_rewards')
-        selected=[n for n in configure.body if isinstance(n,ast.Assign) and any('rewards.feet_air_time' in ast.unparse(t) or ast.unparse(t) in ('rewards.track_lin_vel_xy_cauchy','rewards.phase_unscheduled_contact_penalty') for t in n.targets)]
+        selected=[n for n in configure.body if isinstance(n,ast.Assign) and any('rewards.feet_air_time' in ast.unparse(t) or ast.unparse(t) in ('rewards.track_lin_vel_xy_cauchy','rewards.track_ang_vel_z_cauchy','rewards.phase_unscheduled_contact_penalty') for t in n.targets)]
         rewards=NS(feet_air_time=NS(params={'sensor_cfg':NS()}))
         ns=dict(namespace,rewards=rewards,FEET='.*_shin',CONTACT_SENSOR=NS(),RewTerm=lambda **kw:NS(**kw))
         exec(compile(ast.Module(body=selected,type_ignores=[]),'<registration>','exec'),ns)
@@ -112,7 +112,8 @@ class MovementRewardTests(unittest.TestCase):
         self.assertEqual(rewards.feet_air_time.params['threshold'],.15)
         self.assertEqual(rewards.feet_air_time.weight,1.0)
         self.assertEqual(rewards.track_lin_vel_xy_cauchy.params['components'],(0,1))
-        self.assertEqual(rewards.track_lin_vel_xy_cauchy.weight,2)
+        self.assertEqual(rewards.track_lin_vel_xy_cauchy.weight,1.0)
+        self.assertEqual(rewards.track_ang_vel_z_cauchy.weight,.5)
         self.assertEqual(rewards.phase_unscheduled_contact_penalty.weight,-.4)
 
     def test_train_vx_only_selects_vx_only_for_flat_not_rough(self):
