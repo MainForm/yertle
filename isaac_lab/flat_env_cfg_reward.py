@@ -16,6 +16,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import Lo
 
 from . import phase_generator
 from .foot_geometry import foot_sole_contact_velocities
+from .ground_contact import GroundContactPenalty
 from .motor_operating_range import MotorRawTransform, OperatingRangeCost
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
@@ -85,11 +86,15 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.feet_slide = RewTerm(func=feet_slide_sole, weight=-0.10,
                                params={"sensor_cfg": CONTACT_SENSOR, "surface_band_m": 0.001})
-    rewards.undesired_contacts = RewTerm(func=mdp.undesired_contacts, weight=-0.50, params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=NON_FEET)})
+    rewards.undesired_contacts = RewTerm(func=GroundContactPenalty, weight=-0.50,
+        params={"body_names": [f"{leg}_{joint}" for leg in ("lf","rf","lb","rb") for joint in ("shoulder","thigh")],
+                "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002})
     rewards.base_contact_penalty = RewTerm(
-        func=mdp.undesired_contacts, weight=-1.0,
-        params={"threshold": 1.0, "sensor_cfg": SceneEntityCfg("contact_forces", body_names=BASE)},
+        func=GroundContactPenalty, weight=-1.0,
+        params={"body_names": [BASE], "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002},
     )
+    rewards.nonsole_foot_contact_penalty = RewTerm(func=GroundContactPenalty, weight=-0.50,
+        params={"body_names": list(FOOT_NAMES), "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002})
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})

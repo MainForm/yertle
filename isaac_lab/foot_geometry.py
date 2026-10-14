@@ -8,7 +8,7 @@ import torch
 FOOT_NAMES = ('lf_shin', 'rf_shin', 'lb_shin', 'rb_shin')
 
 
-def load_sole_points(usd_path):
+def load_sole_points(usd_path, triangles=False):
     """Return rubber surface vertices in each shin body's local coordinates.
 
     Use authored Rubber material face subsets (even if a parent overrides the
@@ -65,9 +65,13 @@ def load_sole_points(usd_path):
                 starts.append(starts[-1] + count)
             relative = cache.GetLocalToWorldTransform(mesh.GetPrim()) * inverse
             for face in subset.GetIndicesAttr().Get():
-                for vertex in indices[starts[face]:starts[face+1]]:
-                    point = relative.Transform(vertices[vertex])
-                    points.add(tuple(float(x) for x in point))
+                face_points = [tuple(float(x) for x in relative.Transform(vertices[vertex]))
+                               for vertex in indices[starts[face]:starts[face+1]]]
+                if triangles:
+                    for i in range(1, len(face_points)-1):
+                        points.add(face_points[0] + face_points[i] + face_points[i+1])
+                else:
+                    points.update(face_points)
         if not points:
             raise ValueError(f'No authored rubber sole surface for {name} in {usd_path}')
         results.append(sorted(points))

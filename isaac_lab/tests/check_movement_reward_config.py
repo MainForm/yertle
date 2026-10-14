@@ -21,7 +21,7 @@ try:
     cfg=YertleFlatEnvCfg()
     assert getattr(cfg.rewards,'body_height_barrier',None) is None
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
-    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','action_second_difference_l2'}
+    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','action_second_difference_l2','nonsole_foot_contact_penalty'}
     unchanged=0
     for name,term in vars(cfg.rewards).items():
         if not hasattr(term,'weight') or name in changed:
