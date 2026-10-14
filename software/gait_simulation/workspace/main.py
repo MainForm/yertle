@@ -1,4 +1,4 @@
-"""Run a minimal PyBullet simulation without loading URDF files."""
+"""Run a PyBullet simulation with a ground plane and the Yertle robot."""
 
 import pybullet as p
 from pathlib import Path
@@ -19,10 +19,10 @@ def main() -> None:
 
         with Simulator(fps=240, use_gui=True) as simulator:
 
-            # Load plane urdf
+            # Load the ground plane as a fixed base.
             simulator.load_urdf("plane.urdf", use_fixed_base=True)
 
-            # Load the quadruped robot model named yertle
+            # Load the Yertle quadruped robot model.
             yertle = Yertle(
                 simulator.load_urdf(
                     robot_urdf,
@@ -33,24 +33,22 @@ def main() -> None:
             
             print("Simulation is running. Press Ctrl+C to stop.")
 
-            walking = False
-
+            # Start walking when the up arrow key is pressed.
             def start_walking() -> None:
-                nonlocal walking  # main() 내부에 정의한 함수인 경우
-                if walking == False:
+
+                # Start walking only if the robot is currently stopped.
+                if yertle.get_gait_direction() is None:
                     yertle.move(gait_manager.Direction.FORWARD)
 
-                walking = True
-
+            # Stop walking when the up arrow key is released.
             def stop_walking() -> None:
-                nonlocal walking
 
-                if walking == True:
+                # Restore the standing pose only if the robot is walking.
+                if yertle.get_gait_direction() is not None:
                     yertle.stop()
                     yertle.set_leg_standing_angles()
-                    
-                walking = False
 
+            # Register the key callbacks with the simulator.
             simulator.register_key_callback(
                 Key.UP, KeyEvent.PRESSED, start_walking,
             )
@@ -59,7 +57,9 @@ def main() -> None:
             )
 
             while simulator.is_running():
+                # Update the leg angles for the current gait.
                 yertle.update_gait(1.0 / simulator.fps)
+
                 simulator.step()
 
     except KeyboardInterrupt:

@@ -37,6 +37,10 @@ class GaitManager:
 
         self._direction = direction
 
+    @property
+    def direction(self) -> Direction:
+        return self._direction
+
     def reset(self) -> None:
         """Stop walking and reset the gait phase."""
 

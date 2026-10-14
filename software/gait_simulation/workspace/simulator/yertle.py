@@ -140,17 +140,23 @@ class Yertle:
             init_thigh_cartiesian[1] + init_shin_cartiesian[1]
         )
 
+    def get_gait_direction(self) -> gait_manager.Direction:
+        return self.gait_manager.direction
+
     def stop(self) -> None:
         """Stop walking and reset the gait phase."""
 
         self.gait_manager.reset()
 
     def update_gait(self, delta_time) -> None:
-        if self.gait_manager._direction is None:
+        # Skip gait updates while the robot is standing.
+        if self.get_gait_direction() is None:
             return
 
+        # Advance the gait and get the foot offsets for each diagonal leg pair.
         lf_rb_next_pos, rf_lb_next_pos = self.gait_manager.step_gait(delta_time)
 
+        # Add the gait offsets to the initial foot position to get Cartesian targets.
         lf_rb_target_pos = (
             lf_rb_next_pos[0] + self._init_foot_pos[0],
             lf_rb_next_pos[1] + self._init_foot_pos[1]
@@ -161,6 +167,7 @@ class Yertle:
             rf_lb_next_pos[1] + self._init_foot_pos[1]
         )
 
+        # Compute the target thigh and shin angles using inverse kinematics.
         lf_rb_angles = self._calculate_inverse_kinematics(
             lf_rb_target_pos,
             (self.THIGH_LENGTH, self.get_leg_joint_angle(
@@ -181,6 +188,7 @@ class Yertle:
                 LegJointType.SHIN )),
         )
 
+        # Apply the computed joint angles to each diagonal leg pair.
         self.set_leg_joint_angle(LegType.LEFT_FRONT, LegJointType.THIGH, lf_rb_angles[0])
         self.set_leg_joint_angle(LegType.LEFT_FRONT, LegJointType.SHIN, lf_rb_angles[1])
 
