@@ -69,7 +69,7 @@ class ActionSecondDifferenceTests(unittest.TestCase):
         assignment=next(n for n in configure.body if isinstance(n,ast.Assign) and ast.unparse(n.targets[0])=='rewards.action_second_difference_l2')
         values={k.arg:k.value for k in assignment.value.keywords}
         self.assertEqual(ast.unparse(values['func']),'ActionSecondDifferencePenalty')
-        self.assertEqual(ast.literal_eval(values['weight']),-.01)
+        self.assertEqual(ast.literal_eval(values['weight']),-.05)
         self.assertEqual(ast.literal_eval(values['params']),{'action_name':'joint_pos'})
 
 if __name__=='__main__':unittest.main()

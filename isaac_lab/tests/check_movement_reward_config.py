@@ -31,7 +31,7 @@ try:
     assert cfg.rewards.feet_air_time.func is feet_air_time_trot
     assert cfg.rewards.feet_slide.func is feet_slide_sole
     assert cfg.rewards.action_second_difference_l2.func is ActionSecondDifferencePenalty
-    assert cfg.rewards.action_second_difference_l2.weight == -.01
+    assert cfg.rewards.action_second_difference_l2.weight == -.05
     assert cfg.rewards.action_second_difference_l2.params == {'action_name': 'joint_pos'}
     assert cfg.rewards.feet_slide.weight == -.10
     assert cfg.rewards.feet_slide.params['surface_band_m'] == .001

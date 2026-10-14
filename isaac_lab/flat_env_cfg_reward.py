@@ -62,7 +62,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.action_rate_l2.weight = -0.04
     rewards.action_second_difference_l2 = RewTerm(
-        func=ActionSecondDifferencePenalty, weight=-0.01, params={"action_name": "joint_pos"})
+        func=ActionSecondDifferencePenalty, weight=-0.05, params={"action_name": "joint_pos"})
     rewards.ang_vel_xy_l2.weight = -0.05
     rewards.dof_acc_l2.weight = -5.0e-7
     rewards.dof_pos_limits.weight = -0.25
