@@ -61,6 +61,8 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         params={"command_name": "base_velocity", "min_scale": 0.10, "relative_scale": 0.50},
     )
     rewards.action_rate_l2.weight = -0.04
+    rewards.action_second_difference_l2 = RewTerm(
+        func=ActionSecondDifferencePenalty, weight=-0.01, params={"action_name": "joint_pos"})
     rewards.ang_vel_xy_l2.weight = -0.05
     rewards.dof_acc_l2.weight = -5.0e-7
     rewards.dof_pos_limits.weight = -0.25
@@ -107,6 +109,45 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.06, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+class ActionSecondDifferencePenalty(ManagerTermBase):
+    """Sum squared second differences of dimensionless joint-position actions.
+
+    Suppress the first two samples after each environment reset. Maintain
+    histories per environment and compute once per control step, including
+    diagnostic reward reevaluations. This is not measured joint acceleration
+    and deliberately has no dt^-4 scaling or command/phase gate.
+    """
+
+    def __init__(self, cfg, env):
+        super().__init__(cfg, env)
+        self.action = env.action_manager.get_term(cfg.params["action_name"])
+        actions = self.action.raw_actions
+        self.previous = torch.zeros_like(actions)
+        self.previous_previous = torch.zeros_like(actions)
+        self.samples = torch.zeros(actions.shape[0], dtype=torch.long, device=actions.device)
+        self.value = torch.zeros(actions.shape[0], dtype=actions.dtype, device=actions.device)
+        self.last_step = None
+
+    def reset(self, env_ids=None):
+        ids = slice(None) if env_ids is None else env_ids
+        self.previous[ids] = 0
+        self.previous_previous[ids] = 0
+        self.samples[ids] = 0
+        self.value[ids] = 0
+
+    def __call__(self, env, action_name: str):
+        if self.last_step == env.common_step_counter:
+            return self.value
+        actions = self.action.raw_actions
+        difference = actions - 2*self.previous + self.previous_previous
+        self.value.copy_(difference.square().sum(dim=1) * (self.samples >= 2))
+        self.previous_previous.copy_(self.previous)
+        self.previous.copy_(actions)
+        self.samples.add_(1).clamp_(max=2)
+        self.last_step = env.common_step_counter
+        return self.value
 
 
 class MotorOperatingRangePenalty(ManagerTermBase):

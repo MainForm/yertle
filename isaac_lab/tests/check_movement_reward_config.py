@@ -17,11 +17,11 @@ try:
     root=Path(__file__).resolve().parents[2]
     sys.path.insert(0,str(root))
     from isaac_lab.flat_env_cfg import YertleFlatEnvCfg
-    from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy, feet_slide_sole
+    from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy, feet_slide_sole, ActionSecondDifferencePenalty
     cfg=YertleFlatEnvCfg()
     assert getattr(cfg.rewards,'body_height_barrier',None) is None
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
-    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty'}
+    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','action_second_difference_l2'}
     unchanged=0
     for name,term in vars(cfg.rewards).items():
         if not hasattr(term,'weight') or name in changed:
@@ -30,6 +30,9 @@ try:
         unchanged+=1
     assert cfg.rewards.feet_air_time.func is feet_air_time_trot
     assert cfg.rewards.feet_slide.func is feet_slide_sole
+    assert cfg.rewards.action_second_difference_l2.func is ActionSecondDifferencePenalty
+    assert cfg.rewards.action_second_difference_l2.weight == -.01
+    assert cfg.rewards.action_second_difference_l2.params == {'action_name': 'joint_pos'}
     assert cfg.rewards.feet_slide.weight == -.10
     assert cfg.rewards.feet_slide.params['surface_band_m'] == .001
     assert cfg.rewards.feet_air_time.weight==1.0
