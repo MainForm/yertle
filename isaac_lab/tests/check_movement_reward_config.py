@@ -21,7 +21,7 @@ try:
     cfg=YertleFlatEnvCfg()
     assert getattr(cfg.rewards,'body_height_barrier',None) is None
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
-    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','action_second_difference_l2','nonsole_foot_contact_penalty'}
+    changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','phase_swing_clearance','action_second_difference_l2','nonsole_foot_contact_penalty'}
     unchanged=0
     for name,term in vars(cfg.rewards).items():
         if not hasattr(term,'weight') or name in changed:
@@ -39,9 +39,12 @@ try:
     assert cfg.rewards.feet_air_time.params['threshold']==.15
     assert cfg.rewards.track_lin_vel_xy_cauchy.func is track_lin_vel_xy_cauchy
     assert cfg.rewards.track_lin_vel_xy_cauchy.params['components']==(0,1)
-    assert cfg.rewards.track_lin_vel_xy_cauchy.weight==1.0
-    assert cfg.rewards.track_ang_vel_z_cauchy.weight==.5
+    assert cfg.rewards.track_lin_vel_xy_cauchy.weight==2.0
+    assert cfg.rewards.track_ang_vel_z_cauchy.weight==.75
     assert cfg.rewards.phase_unscheduled_contact_penalty.weight==-.4
+    assert cfg.rewards.phase_swing_clearance.weight==-.20
+    assert cfg.rewards.phase_swing_clearance.params['min_height_m']==.045
+    assert cfg.rewards.phase_swing_clearance.params['transition_m']==.015
     assert cfg.scene.robot.actuators['legs'].velocity_limit_sim==4.6
     assert cfg.scene.robot.actuators['legs'].effort_limit_sim==1.9
     assert cfg.actions.joint_pos.scale==.25

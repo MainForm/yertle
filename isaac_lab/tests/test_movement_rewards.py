@@ -112,8 +112,10 @@ class MovementRewardTests(unittest.TestCase):
         self.assertEqual(rewards.feet_air_time.params['threshold'],.15)
         self.assertEqual(rewards.feet_air_time.weight,1.0)
         self.assertEqual(rewards.track_lin_vel_xy_cauchy.params['components'],(0,1))
-        self.assertEqual(rewards.track_lin_vel_xy_cauchy.weight,1.0)
-        self.assertEqual(rewards.track_ang_vel_z_cauchy.weight,.5)
+        self.assertEqual(rewards.track_lin_vel_xy_cauchy.weight,2.0)
+        self.assertEqual(rewards.track_ang_vel_z_cauchy.weight,.75)
+        clearance=next(n for n in configure.body if isinstance(n,ast.Assign) and any(ast.unparse(t)=='rewards.phase_swing_clearance' for t in n.targets))
+        self.assertEqual(ast.literal_eval(next(k.value for k in clearance.value.keywords if k.arg=='weight')),-.20)
         self.assertEqual(rewards.phase_unscheduled_contact_penalty.weight,-.4)
 
     def test_train_vx_only_selects_vx_only_for_flat_not_rough(self):
