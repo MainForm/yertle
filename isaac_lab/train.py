@@ -40,7 +40,7 @@ parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional 
 parser.add_argument("--vx-only", action="store_true", help="Set vy/yaw commands to zero and disable heading commands.")
 parser.add_argument("--yaw-rate-command", action="store_true", help="Sample yaw rate directly from its range instead of heading-angle control.")
 parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg reference with original axes and reward-only position envelope (no PhysX position stops). Existing checkpoints trained with fixed stops now see different physics.")
-parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Terminate when absolute roll OR pitch reaches this angle; (0,90] degrees.")
+parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Terminate only when (absolute roll OR pitch reaches this angle) AND a nonsole body-ground contact exists; (0,90] degrees. Use 45 for the current experiment.")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
 parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
 parser.add_argument("--reset-pose-json", action="append", default=[], help="Repeatable pose JSON; sample standing + these poses uniformly on every episode reset.")
@@ -174,7 +174,7 @@ def main():
     print(f"TRAIN_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
     if args_cli.task == "flat":
         print(f"TRAIN_LINEAR_TRACKING_COMPONENTS {env_cfg.rewards.track_lin_vel_xy_cauchy.params['components']}", flush=True)
-    print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} roll_or_pitch=True", flush=True)
+    print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} condition=roll_or_pitch_AND_nonsole_ground_contact term=body_tilt_and_nonsole_contact", flush=True)
     print(f"TRAIN_RESET_POSES standing_plus_json={args_cli.reset_pose_json} "
           f"standing_override={args_cli.reset_standing_pose_json} "
           f"uniform_pool_size={len(reset_poses) + 1 if reset_poses or standing_reset_pose else 0} "

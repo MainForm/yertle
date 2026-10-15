@@ -21,7 +21,31 @@ def configure_body_tilt_termination(env_cfg, limit_degrees):
     if not math.isfinite(limit_degrees) or not 0 < limit_degrees <= 90:
         raise ValueError("Body tilt termination angle must be in (0, 90] degrees.")
     from isaaclab.managers import SceneEntityCfg, TerminationTermCfg
-    env_cfg.terminations.body_tilt = TerminationTermCfg(
-        func=body_roll_pitch_limit,
+    # Do not leave the old tilt-only term active: that would defeat AND semantics.
+    env_cfg.terminations.body_tilt = None
+    env_cfg.terminations.body_tilt_and_nonsole_contact = TerminationTermCfg(
+        func=body_tilt_and_nonsole_ground_contact,
         params={"limit_angle": math.radians(limit_degrees), "asset_cfg": SceneEntityCfg("robot")},
     )
+
+
+def body_tilt_and_nonsole_ground_contact(env, limit_angle, asset_cfg,
+                                       separation_tolerance_m=0.001, sole_tolerance_m=0.002):
+    """Fall only when excessive roll/pitch AND forbidden ground contact coexist.
+
+    Reuse the reward contact classifier: base/shoulder/thigh contact or a shin
+    contact outside the authored Rubber surface. No contact-force threshold.
+    This observes the last physics substep, not a latched history of contacts.
+    """
+    if not math.isfinite(separation_tolerance_m) or separation_tolerance_m < 0:
+        raise ValueError('Contact separation tolerance must be finite and nonnegative')
+    if not math.isfinite(sole_tolerance_m) or sole_tolerance_m < 0:
+        raise ValueError('Sole tolerance must be finite and nonnegative')
+    tilted = body_roll_pitch_limit(env, limit_angle, asset_cfg)
+    if not tilted.any():
+        return tilted
+    if not hasattr(env, '_yertle_ground_contacts'):
+        from .ground_contact import GroundContacts
+        env._yertle_ground_contacts = GroundContacts(env)
+    forbidden = env._yertle_ground_contacts.read(env, separation_tolerance_m, sole_tolerance_m)
+    return tilted & forbidden.any(dim=1)

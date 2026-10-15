@@ -1,4 +1,4 @@
-"""Force-independent ground contact classification, used only by rewards.
+"""Force-independent ground contact classification for rewards and termination.
 
 Do not mutate collider geometry, joint frames or policy observations. Inspect
 individual PhysX contacts, never averaged contact positions or net forces.
