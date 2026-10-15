@@ -38,6 +38,7 @@ parser.add_argument("--perturbed-env-fraction", type=float, default=0.30)
 parser.add_argument("--lin-vel-x-min", type=float, default=None, help="Optional lower bound for commanded vx (m/s).")
 parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional upper bound for commanded vx (m/s).")
 parser.add_argument("--vx-only", action="store_true", help="Set vy/yaw commands to zero and disable heading commands.")
+parser.add_argument("--yaw-rate-command", action="store_true", help="Sample yaw rate directly from its range instead of heading-angle control.")
 parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg reference with original axes and reward-only position envelope (no PhysX position stops). Existing checkpoints trained with fixed stops now see different physics.")
 parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Terminate when absolute roll OR pitch reaches this angle; (0,90] degrees.")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
@@ -112,6 +113,9 @@ def main():
     configure_reset_pose_pool(env_cfg, reset_poses, args_cli.extend_reset_pose_limits, standing_reset_pose)
     if args_cli.lin_vel_x_min is not None:
         env_cfg.commands.base_velocity.ranges.lin_vel_x = (args_cli.lin_vel_x_min, args_cli.lin_vel_x_max)
+    if args_cli.yaw_rate_command:
+        env_cfg.commands.base_velocity.heading_command = False
+        env_cfg.commands.base_velocity.rel_heading_envs = 0.0
     if args_cli.vx_only:
         env_cfg.commands.base_velocity.ranges.lin_vel_y = (0.0, 0.0)
         env_cfg.commands.base_velocity.ranges.ang_vel_z = (0.0, 0.0)
