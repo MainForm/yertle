@@ -47,9 +47,9 @@ class Yertle:
         )
 
         self.gait_manager = GaitManager(
-            gait_frequency,         # 1 second
-            self.X_STRIDE,          # 7 cm
-            self.FOOT_ELEVATION,    # 4 cm
+            gait_frequency,         # 1.5 second
+            self.X_STRIDE,          # 4 cm
+            self.FOOT_ELEVATION,    # 1.5 cm
             self.THIGH_LENGTH,      # 13 cm
             self.SHIN_LENGTH        # 13 cm
         )
