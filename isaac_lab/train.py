@@ -27,6 +27,8 @@ parser.add_argument("--num_envs", type=int, default=4096)
 parser.add_argument("--max_iterations", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--checkpoint", default=None, help="Optional compatible 55-D model_*.pt to resume.")
+parser.add_argument("--resume-env-state", choices=['auto', 'required', 'off'], default='auto',
+                    help="Restore saved environment/RNG state when present; required rejects legacy checkpoints, off explicitly resets the env.")
 parser.add_argument("--enable-disturbance", action="store_true")
 parser.add_argument("--force-body-weight", type=float, default=1.0)
 parser.add_argument("--push-duration", type=float, default=0.10)
@@ -81,6 +83,7 @@ from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunne
 from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
 from isaac_lab.train_terminations import configure_body_tilt_termination  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
+from isaac_lab.stateful_runner import StatefulOnPolicyRunner  # noqa: E402
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-v0", YertleFlatEnvCfg, YertleFlatPPORunnerCfg),
@@ -136,7 +139,14 @@ def main():
     env = gym.make(TASK, cfg=env_cfg, render_mode=None)
     env = RslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
 
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    if args_cli.task == 'flat':
+        runner = StatefulOnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device,
+                                       resume_env_state=args_cli.resume_env_state)
+    else:
+        if args_cli.resume_env_state == 'required':
+            raise ValueError('Environment continuation is currently supported only for flat')
+        runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        print('RESUME_ENV_STATE unsupported_rough_task: using legacy runner', flush=True)
     if args_cli.checkpoint:
         runner.load(args_cli.checkpoint, load_optimizer=True, map_location=agent_cfg.device)
         print(f"RESUME_CHECKPOINT {args_cli.checkpoint}", flush=True)
