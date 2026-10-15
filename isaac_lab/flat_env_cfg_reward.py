@@ -80,7 +80,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         func=joint_velocity_excess,
         weight=-0.10,
         params={
-            "velocity_limit_rad_s": 2.30,
+            "velocity_limit_rad_s": 10.0,
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
         },
     )
@@ -185,7 +185,7 @@ class MotorOperatingRangePenalty(ManagerTermBase):
 
 def joint_velocity_excess(
     env,
-    velocity_limit_rad_s: float = 2.30,
+    velocity_limit_rad_s: float = 10.0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ):
     """Sum squared normalized speed excess; the reward weight must be negative.
