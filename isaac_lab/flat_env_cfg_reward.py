@@ -66,11 +66,12 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         func=ActionSecondDifferencePenalty, weight=-0.05, params={"action_name": "joint_pos"})
     rewards.ang_vel_xy_l2.weight = -0.05
     rewards.dof_acc_l2.weight = -5.0e-7
-    rewards.dof_pos_limits.weight = -0.25
+    # Independent per-joint soft intervals cannot describe the measured linkage.
+    rewards.dof_pos_limits = None
 
     rewards.motor_operating_range_penalty = RewTerm(
         func=MotorOperatingRangePenalty,
-        weight=-10.0,
+        weight=-100.0,
         params={"action_name": "joint_pos", "asset_cfg": SceneEntityCfg("robot"),
                 "command_speed_steps_per_s": 200, "excess_scale_raw": 100.0},
     )

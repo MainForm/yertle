@@ -185,7 +185,7 @@ class OperatingRangeTests(unittest.TestCase):
         namespace.update(rewards=SimpleNamespace(), RewTerm=lambda **kw: SimpleNamespace(**kw))
         exec(compile(ast.Module(body=[assignment], type_ignores=[]), str(source), "exec"), namespace)
         cfg = namespace["rewards"].motor_operating_range_penalty
-        self.assertEqual(cfg.weight, -10)
+        self.assertEqual(cfg.weight, -100)
         q = self.raw([inverse_raw([2048] * 12)])
         # Action order intentionally differs from the asset joint order.
         order = list(reversed(range(12)))
@@ -198,7 +198,7 @@ class OperatingRangeTests(unittest.TestCase):
         target = [2048] * 12
         target[2] = 2773
         action.processed_actions = self.raw([inverse_raw(target)])[:, order]
-        torch.testing.assert_close(reward(env, **cfg.params) * cfg.weight, self.raw([-20]))
+        torch.testing.assert_close(reward(env, **cfg.params) * cfg.weight, self.raw([-200]))
 
 
 if __name__ == "__main__":

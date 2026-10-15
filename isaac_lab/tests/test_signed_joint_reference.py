@@ -14,8 +14,10 @@ class ReferenceTests(unittest.TestCase):
         robot=SimpleNamespace(spawn=SimpleNamespace(usd_path='legacy.usd'),init_state=SimpleNamespace(joint_pos={'old':123}))
         action=SimpleNamespace(use_default_offset=False,scale=.25)
         cfg=SimpleNamespace(scene=SimpleNamespace(robot=robot),actions=SimpleNamespace(joint_pos=action))
-        with patch.object(module,'create_signed_usd',return_value='signed.usda') as creator:
+        with patch.object(module,'create_signed_usd',return_value='signed.usda') as creator, \
+             patch.object(module,'configure_reward_only_position_limits') as release:
             module.configure_signed_joint_reference(cfg)
+        release.assert_called_once_with(cfg)
         creator.assert_called_once_with('legacy.usd')
         self.assertEqual(robot.spawn.usd_path,'signed.usda')
         self.assertEqual(robot.init_state.joint_pos,{'.*_shoulder':0.,'.*_thigh':math.radians(34),'.*_shin':math.radians(-85)})

@@ -7,6 +7,12 @@ from pathlib import Path
 REFERENCE_DEG = {"shoulder": 0.0, "thigh": 34.0, "shin": -85.0}
 
 
+def configure_reward_only_position_limits(cfg):
+    # Lazy import preserves standalone reference/calibration unit-test loading.
+    from isaac_lab.joint_position_limits import configure_reward_only_position_limits as configure
+    configure(cfg)
+
+
 def create_signed_usd(source_path):
     """Retain changed limits, but do NOT reverse axes, frames or drive targets.
 
@@ -50,8 +56,13 @@ def create_signed_usd(source_path):
 
 
 def configure_signed_joint_reference(env_cfg):
-    """Share one reference between action offsets, observations and rewards."""
+    """Share the reference and use the requested reward-only position envelope.
+
+    Axes/frames remain original. Position stops are removed in a separate
+    spawn variant; old signed-reference checkpoints now see changed physics.
+    """
     robot = env_cfg.scene.robot
     robot.spawn.usd_path = create_signed_usd(robot.spawn.usd_path)
     robot.init_state.joint_pos = {f".*_{kind}": math.radians(angle) for kind, angle in REFERENCE_DEG.items()}
     env_cfg.actions.joint_pos.use_default_offset = True
+    configure_reward_only_position_limits(env_cfg)

@@ -28,8 +28,8 @@ verified=0
 for prim in original.Traverse():
     if not prim.IsA(UsdPhysics.RevoluteJoint) or not prim.GetName().endswith(('_thigh','_shin')):continue
     old=UsdPhysics.RevoluteJoint(prim);new=UsdPhysics.RevoluteJoint(converted.GetPrimAtPath(prim.GetPath()))
-    assert new.GetLowerLimitAttr().Get()==-old.GetUpperLimitAttr().Get()
-    assert new.GetUpperLimitAttr().Get()==-old.GetLowerLimitAttr().Get()
+    assert new.GetLowerLimitAttr().Get()==-math.inf
+    assert new.GetUpperLimitAttr().Get()==math.inf
     assert new.GetLocalPos0Attr().Get()==old.GetLocalPos0Attr().Get()
     assert new.GetLocalPos1Attr().Get()==old.GetLocalPos1Attr().Get()
     assert new.GetAxisAttr().Get()==old.GetAxisAttr().Get()
@@ -46,7 +46,7 @@ for prim in original.Traverse():
         assert difference<1e-5,(prim.GetName(),q,difference)
     verified+=1
 assert verified==8
-print('ORIGINAL_AXES_USD_PASS 8 joints; same-angle rotations identical at 3 angles; frames/axes/drive targets unchanged; changed limits retained',flush=True)
+print('ORIGINAL_AXES_USD_PASS 8 joints; same-angle rotations identical at 3 angles; frames/axes/drive targets unchanged; position stops removed',flush=True)
 if args.usd_only:
     app.close()
     sys.exit(0)

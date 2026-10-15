@@ -31,7 +31,7 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
-parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg standing reference with original axes and changed limits. Only for policies trained with these reference angles; not old v6.3/v6.4/v6.5 checkpoints.")
+parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg reference with original axes and reward-only position envelope (no PhysX position stops). Existing fixed-stop checkpoints see different physics; not for original-reference v6.0 policies.")
 parser.add_argument("--start-pose", choices=["random", "default", "json"], default=None,
                     help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
 parser.add_argument("--pose-json", type=str,
