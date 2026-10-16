@@ -42,7 +42,7 @@ try:
     assert cfg.rewards.track_lin_vel_xy_cauchy.weight==2.0
     assert cfg.rewards.track_ang_vel_z_cauchy.weight==.75
     assert cfg.rewards.phase_unscheduled_contact_penalty.weight==-.4
-    assert cfg.rewards.phase_swing_clearance.weight==-.20
+    assert cfg.rewards.phase_swing_clearance.weight==-.08
     assert cfg.rewards.phase_swing_clearance.params['min_height_m']==.045
     assert cfg.rewards.phase_swing_clearance.params['transition_m']==.015
     assert cfg.rewards.dof_pos_limits is None
