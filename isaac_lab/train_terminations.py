@@ -15,6 +15,19 @@ def body_roll_pitch_limit(env, limit_angle, asset_cfg):
     return (roll >= limit_angle) | (pitch >= limit_angle)
 
 
+def configure_base_contact_termination(env_cfg):
+    """Restore the original base_link >1 N contact termination, no tilt gate."""
+    from isaaclab.managers import SceneEntityCfg, TerminationTermCfg
+    from isaaclab.envs import mdp
+    env_cfg.terminations.body_tilt=None
+    env_cfg.terminations.body_tilt_and_nonsole_contact=None
+    env_cfg.terminations.base_contact=TerminationTermCfg(
+        func=mdp.illegal_contact,
+        params={'sensor_cfg':SceneEntityCfg('contact_forces',body_names='base_link'),'threshold':1.0},
+    )
+    env_cfg.rewards.fall_termination_penalty.params['term_name']='base_contact'
+
+
 def configure_body_tilt_termination(env_cfg, limit_degrees):
     if limit_degrees is None:
         return

@@ -15,6 +15,7 @@ from rsl_rl.runners import OnPolicyRunner
 from rsl_rl.utils import store_code_state
 
 from .checkpoint_state import FlatEnvState, rng_state, restore_rng, normalize_config
+from .attitude_metrics import AttitudeMetrics
 
 
 class StatefulOnPolicyRunner(OnPolicyRunner):
@@ -104,8 +105,11 @@ class StatefulOnPolicyRunner(OnPolicyRunner):
         old_handlers = {s: signal.signal(s, self._request_stop) for s in (signal.SIGINT, signal.SIGTERM)}
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
+        attitude_metrics = AttitudeMetrics(self.env.unwrapped)
+        attitude_metrics.install()
         try:
             for it in range(start_iter, tot_iter):
+                attitude_metrics.reset()
                 start = time.time()
                 with torch.inference_mode():
                     for _ in range(self.num_steps_per_env):
@@ -135,6 +139,8 @@ class StatefulOnPolicyRunner(OnPolicyRunner):
                                       rewbuffer=list(rewbuffer), lenbuffer=list(lenbuffer))
                 if self.log_dir is not None and not self.disable_logs:
                     self.log(locals())
+                    for name, value in attitude_metrics.scalars().items():
+                        self.writer.add_scalar(name, value, it)
                     if it % self.save_interval == 0 or self._stop_requested:
                         self.save(os.path.join(self.log_dir, f'model_{it}.pt'))
                 ep_infos.clear()
@@ -145,4 +151,5 @@ class StatefulOnPolicyRunner(OnPolicyRunner):
             if self.log_dir is not None and not self.disable_logs:
                 self.save(os.path.join(self.log_dir, f'model_{self.current_learning_iteration}.pt'))
         finally:
+            attitude_metrics.close()
             for s, handler in old_handlers.items(): signal.signal(s, handler)

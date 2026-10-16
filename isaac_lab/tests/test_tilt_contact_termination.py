@@ -67,5 +67,38 @@ class TiltContactTerminationTests(unittest.TestCase):
         for value in (0,-1,91,float('nan'),float('inf')):
             with self.assertRaises(ValueError):m.configure_body_tilt_termination(cfg,value)
 
+    def test_optional_seventy_degree_boundary_retains_and_semantics(self):
+        poses=[(45,0),(69.9,0),(70,0),(-70,0),(0,70),(0,-70),(80,0),(0,0)]
+        flags=[[True]]*6+[[False],[True]]
+        result=m.body_tilt_and_nonsole_ground_contact(self.env(poses,flags),math.radians(70),NS(name='robot'))
+        self.assertEqual(result.tolist(),[False,False,True,True,True,True,False,False])
+
+    def test_v619_profile_fresh_and_base_contact_only(self):
+        import json
+        profile=json.loads((Path(__file__).parents[1]/'configs/v6_19_training.json').read_text())
+        args=profile['train_args']
+        self.assertTrue(profile['fresh'])
+        self.assertNotIn('--checkpoint',args)
+        self.assertNotIn('--body-tilt-termination-deg',args)
+        self.assertIn('--base-contact-termination',args)
+        self.assertEqual(profile['sole_tolerance_m'],.005)
+        self.assertEqual(profile['fall_cost_at_control_dt_0p02'],-5.)
+
+    def test_base_contact_registration_disables_tilt_and_retargets_fall_cost(self):
+        managers=ModuleType('isaaclab.managers');managers.SceneEntityCfg=lambda name,**kw:NS(name=name,**kw);managers.TerminationTermCfg=lambda **kw:NS(**kw)
+        mdp=NS(illegal_contact=lambda *a,**kw:None)
+        envs=ModuleType('isaaclab.envs');envs.mdp=mdp
+        cfg=NS(terminations=NS(body_tilt='old',body_tilt_and_nonsole_contact='old',time_out='keep'),
+               rewards=NS(fall_termination_penalty=NS(weight=-250.,params={'term_name':'body_tilt_and_nonsole_contact'})))
+        with patch.dict(sys.modules,{'isaaclab.managers':managers,'isaaclab.envs':envs}):m.configure_base_contact_termination(cfg)
+        self.assertIsNone(cfg.terminations.body_tilt)
+        self.assertIsNone(cfg.terminations.body_tilt_and_nonsole_contact)
+        self.assertEqual(cfg.terminations.time_out,'keep')
+        self.assertIs(cfg.terminations.base_contact.func,mdp.illegal_contact)
+        self.assertEqual(cfg.terminations.base_contact.params['threshold'],1.)
+        self.assertEqual(cfg.terminations.base_contact.params['sensor_cfg'].body_names,'base_link')
+        self.assertEqual(cfg.rewards.fall_termination_penalty.params['term_name'],'base_contact')
+        self.assertEqual(cfg.rewards.fall_termination_penalty.weight,-250.)
+
 
 if __name__=='__main__':unittest.main()

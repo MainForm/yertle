@@ -40,7 +40,8 @@ parser.add_argument("--lin-vel-x-max", type=float, default=None, help="Optional 
 parser.add_argument("--vx-only", action="store_true", help="Set vy/yaw commands to zero and disable heading commands.")
 parser.add_argument("--yaw-rate-command", action="store_true", help="Sample yaw rate directly from its range instead of heading-angle control.")
 parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg reference with original axes and reward-only position envelope (no PhysX position stops). Existing checkpoints trained with fixed stops now see different physics.")
-parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Terminate only when (absolute roll OR pitch reaches this angle) AND a nonsole body-ground contact exists; (0,90] degrees. Use 45 for the current experiment.")
+parser.add_argument("--body-tilt-termination-deg", type=float, default=None, help="Optional historical tilt AND nonsole-contact termination angle in (0,90] degrees.")
+parser.add_argument("--base-contact-termination", action="store_true", help="Terminate on base_link contact force >1 N, with no roll/pitch threshold (v6.19).")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
 parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
 parser.add_argument("--reset-pose-json", action="append", default=[], help="Repeatable pose JSON; sample standing + these poses uniformly on every episode reset.")
@@ -48,6 +49,8 @@ parser.add_argument("--reset-standing-pose-json", help="Replace only pool index 
 parser.add_argument("--extend-reset-pose-limits", action="store_true", help="Explicitly expand simulation joint limits to include all reset poses for the entire run.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.base_contact_termination and args_cli.body_tilt_termination_deg is not None:
+    parser.error("Use either --base-contact-termination or --body-tilt-termination-deg, not both.")
 if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
     parser.error("--lin-vel-x-min and --lin-vel-x-max must be supplied together.")
 if args_cli.body_tilt_termination_deg is not None and not 0 < args_cli.body_tilt_termination_deg <= 90:
@@ -82,7 +85,7 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
-from isaac_lab.train_terminations import configure_body_tilt_termination  # noqa: E402
+from isaac_lab.train_terminations import configure_body_tilt_termination, configure_base_contact_termination  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
 from isaac_lab.stateful_runner import StatefulOnPolicyRunner  # noqa: E402
 
@@ -123,7 +126,10 @@ def main():
         env_cfg.commands.base_velocity.rel_heading_envs = 0.0
         if args_cli.task == "flat":
             env_cfg.rewards.track_lin_vel_xy_cauchy.params["components"] = (0,)
-    configure_body_tilt_termination(env_cfg, args_cli.body_tilt_termination_deg)
+    if args_cli.base_contact_termination:
+        configure_base_contact_termination(env_cfg)
+    else:
+        configure_body_tilt_termination(env_cfg, args_cli.body_tilt_termination_deg)
     legs = env_cfg.scene.robot.actuators["legs"]
     if args_cli.velocity_limit_sim is not None:
         legs.velocity_limit_sim = args_cli.velocity_limit_sim
@@ -174,7 +180,10 @@ def main():
     print(f"TRAIN_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
     if args_cli.task == "flat":
         print(f"TRAIN_LINEAR_TRACKING_COMPONENTS {env_cfg.rewards.track_lin_vel_xy_cauchy.params['components']}", flush=True)
-    print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} condition=roll_or_pitch_AND_nonsole_ground_contact term=body_tilt_and_nonsole_contact", flush=True)
+    if args_cli.base_contact_termination:
+        print('TRAIN_BASE_CONTACT_TERMINATION body=base_link threshold_N=1.0 no_angle_gate=True term=base_contact',flush=True)
+    else:
+        print(f"TRAIN_BODY_TILT_TERMINATION deg={args_cli.body_tilt_termination_deg} condition=roll_or_pitch_AND_nonsole_ground_contact term=body_tilt_and_nonsole_contact", flush=True)
     print(f"TRAIN_RESET_POSES standing_plus_json={args_cli.reset_pose_json} "
           f"standing_override={args_cli.reset_standing_pose_json} "
           f"uniform_pool_size={len(reset_poses) + 1 if reset_poses or standing_reset_pose else 0} "
