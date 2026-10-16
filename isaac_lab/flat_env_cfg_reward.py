@@ -43,7 +43,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     # threshold penalized its normal touchdowns instead of rewarding them.
     rewards.feet_air_time.func = feet_air_time_trot
     rewards.feet_air_time.params["threshold"] = 0.15
-    rewards.flat_orientation_l2.weight = -1.0
+    rewards.flat_orientation_l2.weight = -1.5
     rewards.lin_vel_z_l2.weight = -0.5
     rewards.dof_torques_l2.weight = -0.0002
     # Slow commands demand a tight match; the acceptable error grows with the
@@ -98,7 +98,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         params={"body_names": list(FOOT_NAMES), "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002})
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
-    rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.05, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})
+    rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.swing_foot_clearance_barrier = RewTerm(func=swing_foot_clearance_barrier, weight=-0.03, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
