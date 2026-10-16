@@ -37,13 +37,19 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     Yertle-specific additions.
     """
     rewards = cfg.rewards
+    # RewardManager multiplies by control dt: -250 * 0.02 = -5 per fall.
+    # Read the existing termination result; do not broaden the failure condition.
+    rewards.fall_termination_penalty = RewTerm(
+        func=fall_termination_penalty, weight=-250.0,
+        params={"term_name": "body_tilt_and_nonsole_contact"},
+    )
     rewards.feet_air_time.params["sensor_cfg"].body_names = FEET
     rewards.feet_air_time.weight = 1.00
     # A 2.2 Hz / 50% duty trot has a ~0.227 s swing. The inherited 0.5 s
     # threshold penalized its normal touchdowns instead of rewarding them.
     rewards.feet_air_time.func = feet_air_time_trot
     rewards.feet_air_time.params["threshold"] = 0.15
-    rewards.flat_orientation_l2.weight = -1.5
+    rewards.flat_orientation_l2.weight = -3.0
     rewards.lin_vel_z_l2.weight = -0.5
     rewards.dof_torques_l2.weight = -0.0002
     # Slow commands demand a tight match; the acceptable error grows with the
@@ -113,8 +119,22 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         weight=-0.40,
         params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"},
     )
-    rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-0.08, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
+    rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-1.0, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+def fall_termination_penalty(env, term_name: str = "body_tilt_and_nonsole_contact"):
+    """One event on the named fall termination; timeout alone is not a fall.
+
+    A configuration without that optional termination produces zero. Read the
+    manager's already computed flag before auto-reset, avoiding another contact
+    query or changes to the termination decision. Coincident timeout and fall
+    still count as a fall.
+    """
+    manager = env.termination_manager
+    if term_name not in manager.active_terms:
+        return torch.zeros(env.num_envs, device=env.device)
+    return manager.get_term(term_name).float()
 
 
 class ActionSecondDifferencePenalty(ManagerTermBase):
