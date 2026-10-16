@@ -36,7 +36,7 @@ try:
                 assert (distances<=.002).any() and (distances>.1).any(),distances
                 print('LF_POINT_AUDIT local='+str(local.cpu().tolist())+' rubber_distance_m='+str(distances.cpu().tolist())+' gaps='+str(gap.reshape(-1)[start_id:start_id+number].cpu().tolist()),flush=True)
         assert sum(c for name,c in counts if name.endswith('_shin'))>0,counts
-        flags=contacts.read(env,.001,.002)
+        flags=contacts.read(env,.001,.005)
         print('GROUND_CONTACT_COUNTS '+str(counts),flush=True)
         print('GROUND_CONTACT_FLAGS '+str(flags.cpu().tolist()),flush=True)
         assert torch.isfinite(flags.float()).all()

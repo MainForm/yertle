@@ -39,7 +39,7 @@ def inverse_rotate(q, vector):
 
 
 def forbidden_flags(counts, starts, points, separation, position, quaternion,
-                    triangles=None, separation_tolerance_m=.001, sole_tolerance_m=.002):
+                    triangles=None, separation_tolerance_m=.001, sole_tolerance_m=.005):
     """One flag per body/environment if ANY qualifying contact is forbidden.
 
     Counts and starts are unaggregated sensor/ground-pair buffers. No force
@@ -116,7 +116,7 @@ class GroundContactPenalty(ManagerTermBase):
     def reset(self,env_ids=None):
         self.contacts.last_step=None
 
-    def __call__(self,env,body_names,separation_tolerance_m=.001,sole_tolerance_m=.002):
+    def __call__(self,env,body_names,separation_tolerance_m=.001,sole_tolerance_m=.005):
         if not 0<=separation_tolerance_m<float('inf') or not 0<=sole_tolerance_m<float('inf'):
             raise ValueError('Contact distance tolerances must be finite and nonnegative')
         return self.contacts.read(env,separation_tolerance_m,sole_tolerance_m)[:,self.indices].float().sum(-1)

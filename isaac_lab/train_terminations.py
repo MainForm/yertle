@@ -25,12 +25,13 @@ def configure_body_tilt_termination(env_cfg, limit_degrees):
     env_cfg.terminations.body_tilt = None
     env_cfg.terminations.body_tilt_and_nonsole_contact = TerminationTermCfg(
         func=body_tilt_and_nonsole_ground_contact,
-        params={"limit_angle": math.radians(limit_degrees), "asset_cfg": SceneEntityCfg("robot")},
+        params={"limit_angle": math.radians(limit_degrees), "asset_cfg": SceneEntityCfg("robot"),
+                "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.005},
     )
 
 
 def body_tilt_and_nonsole_ground_contact(env, limit_angle, asset_cfg,
-                                       separation_tolerance_m=0.001, sole_tolerance_m=0.002):
+                                       separation_tolerance_m=0.001, sole_tolerance_m=0.005):
     """Fall only when excessive roll/pitch AND forbidden ground contact coexist.
 
     Reuse the reward contact classifier: base/shoulder/thigh contact or a shin

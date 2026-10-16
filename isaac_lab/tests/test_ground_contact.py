@@ -32,6 +32,13 @@ class GroundContactTests(unittest.TestCase):
         self.assertEqual(actual.tolist(),[True,False])
     def test_empty_buffer(self):
         self.assertEqual(self.flags([0,0],[0,0],[],[],self.triangle).tolist(),[False,False])
+    def test_expanded_5mm_region_allows_top_and_sides_but_not_distant_shin(self):
+        points=[[.2,.2,.0049],[-.0049,.2,0],[.2,.2,-.0049],
+                [.2,.2,.0051],[-.0051,.2,0],[.2,.2,.02]]
+        self.assertEqual(self.flags([1]*6,list(range(6)),points,[0]*6,self.triangle).tolist(),
+                         [False,False,False,True,True,True])
+    def test_base_contact_stays_forbidden_despite_sole_expansion(self):
+        self.assertEqual(self.flags([1],[0],[[0,0,0]],[0],triangles=None).tolist(),[True])
     def test_rigid_transform_does_not_change_classification(self):
         position=torch.tensor([[1.,2.,3.]])
         q=torch.tensor([[2**-.5,0,0,2**-.5]])

@@ -95,13 +95,13 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
                                params={"sensor_cfg": CONTACT_SENSOR, "surface_band_m": 0.001})
     rewards.undesired_contacts = RewTerm(func=GroundContactPenalty, weight=-0.50,
         params={"body_names": [f"{leg}_{joint}" for leg in ("lf","rf","lb","rb") for joint in ("shoulder","thigh")],
-                "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002})
+                "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.005})
     rewards.base_contact_penalty = RewTerm(
         func=GroundContactPenalty, weight=-1.0,
-        params={"body_names": [BASE], "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002},
+        params={"body_names": [BASE], "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.005},
     )
     rewards.nonsole_foot_contact_penalty = RewTerm(func=GroundContactPenalty, weight=-0.50,
-        params={"body_names": list(FOOT_NAMES), "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.002})
+        params={"body_names": list(FOOT_NAMES), "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.005})
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})

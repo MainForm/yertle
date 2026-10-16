@@ -57,6 +57,8 @@ class TiltContactTerminationTests(unittest.TestCase):
         term=cfg.terminations.body_tilt_and_nonsole_contact
         self.assertIs(term.func,m.body_tilt_and_nonsole_ground_contact)
         self.assertAlmostEqual(term.params['limit_angle'],math.pi/4)
+        self.assertEqual(term.params['sole_tolerance_m'],.005)
+        self.assertEqual(term.params['separation_tolerance_m'],.001)
 
     def test_none_and_invalid_angles(self):
         cfg=NS(terminations=NS(body_tilt='old'))
