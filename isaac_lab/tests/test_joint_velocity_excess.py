@@ -69,16 +69,18 @@ class JointVelocityExcessTests(unittest.TestCase):
         term = rewards.joint_velocity_excess
         self.assertIs(term.func, reward)
         self.assertEqual(term.weight, -0.10)
-        self.assertEqual(term.params["velocity_limit_rad_s"], 10.0)
+        self.assertEqual(term.params["velocity_limit_rad_s"], 2.30)
         self.assertEqual(term.params["asset_cfg"].joint_names, ".*")
-        env = SimpleNamespace(scene={"robot": SimpleNamespace(data=SimpleNamespace(joint_vel=torch.tensor([[20.0]])))})
+        env = SimpleNamespace(scene={"robot": SimpleNamespace(data=SimpleNamespace(joint_vel=torch.tensor([[4.60]])))})
         weighted = term.func(env, **term.params) * term.weight
         torch.testing.assert_close(weighted, torch.tensor([-0.10]))
 
-    def test_current_default_has_no_cost_through_ten_rad_s(self):
+    def test_current_default_has_no_cost_through_two_point_three_rad_s(self):
         env = SimpleNamespace(scene={"robot": SimpleNamespace(data=SimpleNamespace(
-            joint_vel=torch.tensor([[0., 2.3, -4.6, 10., -10.]])))})
+            joint_vel=torch.tensor([[0., 0.31, -2.29, 2.30, -2.30]])))})
         torch.testing.assert_close(reward(env), torch.zeros(1))
+        env.scene['robot'].data.joint_vel=torch.tensor([[4.60]])
+        torch.testing.assert_close(reward(env), torch.ones(1))
 
 
 if __name__ == "__main__":

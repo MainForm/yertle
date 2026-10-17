@@ -1,0 +1,27 @@
+{
+  "version": "v6.20.3",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "4.6", "--effort-limit-sim", "1.9",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "solver_position_iterations": 32,
+  "solver_velocity_iterations": 0,
+  "joint_velocity_excess_threshold_rad_s": 2.30,
+  "joint_velocity_excess_weight": -0.10,
+  "phase_stance_missing_contact_penalty_weight": -1.0,
+  "all_feet_airborne_penalty_weight": -2.0,
+  "stance_contact_threshold_n": 1.0,
+  "airborne_contact_threshold_n": 0.1,
+  "transition_grace_s": 0.02,
+  "sole_tolerance_m": 0.005,
+  "shoulder_posture_threshold_deg": 10.0,
+  "gait": "fixed trot 2.2 Hz, duty 0.5; diagonal-pair support with brief double-support grace",
+  "termination": "base_link contact force > 1 N; unchanged from v6.20.2",
+  "compatibility": "No changes to joint axes, API mapping, observation/action layout or calibrated reference. New penalties are opt-in."
+}

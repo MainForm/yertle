@@ -45,6 +45,9 @@ try:
     assert cfg.rewards.phase_swing_clearance.weight==-1.0
     assert cfg.rewards.flat_orientation_l2.weight==-3.0
     assert cfg.rewards.shoulder_posture_barrier.weight==-.20
+    import math
+    assert cfg.rewards.shoulder_posture_barrier.params['lower']==-math.radians(10)
+    assert cfg.rewards.shoulder_posture_barrier.params['upper']==math.radians(10)
     assert cfg.rewards.fall_termination_penalty.weight==-250.0
     assert cfg.rewards.fall_termination_penalty.params=={'term_name':'body_tilt_and_nonsole_contact'}
     assert cfg.rewards.phase_swing_clearance.params['min_height_m']==.045

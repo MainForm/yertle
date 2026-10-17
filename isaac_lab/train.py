@@ -23,6 +23,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train Yertle locomotion in Isaac Lab (rsl_rl).")
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
+parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 missing-stance and all-feet-airborne costs with 20ms diagonal-swap grace.')
 parser.add_argument("--num_envs", type=int, default=4096)
 parser.add_argument("--max_iterations", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0)
@@ -88,6 +89,7 @@ from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
 from isaac_lab.train_terminations import configure_body_tilt_termination, configure_base_contact_termination  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
 from isaac_lab.stateful_runner import StatefulOnPolicyRunner  # noqa: E402
+from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards  # noqa: E402
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-v0", YertleFlatEnvCfg, YertleFlatPPORunnerCfg),
@@ -98,6 +100,9 @@ _TASKS = {
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.trot_support_penalties:
+        configure_trot_support_rewards(env_cfg)
+        print('TROT_SUPPORT_PENALTIES enabled=True stance_weight=-1.0 airborne_weight=-2.0 transition_grace_s=0.02', flush=True)
     if args_cli.task == "flat" and args_cli.enable_disturbance:
         env_cfg.sim.physx.enable_external_forces_every_iteration = True
         env_cfg.events.base_external_force_torque = None

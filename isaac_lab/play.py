@@ -28,6 +28,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a trained Yertle policy in Isaac Lab.")
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
+parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
@@ -78,6 +79,7 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
+from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards  # noqa: E402
 
 try:
     import msvcrt
@@ -159,7 +161,12 @@ class ForcePulse:
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.trot_support_penalties:
+        configure_trot_support_rewards(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs
+    # AppLauncher selects the app device, but does not override this separately
+    # constructed environment config. Honor --device for physics and inference.
+    env_cfg.sim.device = args_cli.device
     if args_cli.signed_joint_reference:
         configure_signed_joint_reference(env_cfg)
     print(f"PLAY_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)
@@ -175,6 +182,7 @@ def main():
         env_cfg.commands.base_velocity.heading_command = False
         env_cfg.commands.base_velocity.debug_vis = False
     agent_cfg = RunnerCfg()
+    agent_cfg.device = env_cfg.sim.device
 
     env = gym.make(TASK, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     if args_cli.video:

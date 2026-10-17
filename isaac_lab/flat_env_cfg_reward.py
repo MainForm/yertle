@@ -87,7 +87,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         func=joint_velocity_excess,
         weight=-0.10,
         params={
-            "velocity_limit_rad_s": 10.0,
+            "velocity_limit_rad_s": 2.30,
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
         },
     )
@@ -104,7 +104,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         params={"body_names": list(FOOT_NAMES), "separation_tolerance_m": 0.001, "sole_tolerance_m": 0.005})
     rewards.air_time_variance_penalty = RewTerm(func=air_time_variance_penalty, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
-    rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES)})
+    rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES), "lower": -0.17453292519943295, "upper": 0.17453292519943295})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.swing_foot_clearance_barrier = RewTerm(func=swing_foot_clearance_barrier, weight=-0.03, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
@@ -121,6 +121,25 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-1.0, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+def configure_trot_support_rewards(cfg):
+    """Opt-in v6.20.3 support constraints; preserve v6.20.2 configs/digests.
+
+    Negative weights are continuous costs, multiplied by control dt by Isaac
+    Lab. They guide behavior but do not hard-lock joint actions or contacts.
+    """
+    cfg.rewards.phase_stance_missing_contact_penalty = RewTerm(
+        func=phase_generator.phase_stance_missing_contact_penalty, weight=-1.0,
+        params={'sensor_cfg': CONTACT_SENSOR, 'command_name': 'base_velocity',
+                'contact_threshold_n': 1.0, 'transition_grace_s': 0.02})
+    cfg.rewards.all_feet_airborne_penalty = RewTerm(
+        func=phase_generator.all_feet_airborne_penalty, weight=-2.0,
+        params={'sensor_cfg': CONTACT_SENSOR, 'contact_threshold_n': 0.1})
+    # Permit brief double support while diagonal pairs exchange roles. The
+    # default v6.20.2 terms keep their original zero-grace behavior.
+    cfg.rewards.phase_unscheduled_contact_penalty.params['transition_grace_s'] = 0.02
+    cfg.rewards.phase_touchdown_timing.params['transition_grace_s'] = 0.02
 
 
 def fall_termination_penalty(env, term_name: str = "body_tilt_and_nonsole_contact"):
@@ -206,7 +225,7 @@ class MotorOperatingRangePenalty(ManagerTermBase):
 
 def joint_velocity_excess(
     env,
-    velocity_limit_rad_s: float = 10.0,
+    velocity_limit_rad_s: float = 2.30,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ):
     """Sum squared normalized speed excess; the reward weight must be negative.
@@ -347,7 +366,7 @@ def wrong_side_foot_placement(env, sensor_cfg: SceneEntityCfg, contact_threshold
     return torch.sum((crossing / violation_scale_m) * (force > contact_threshold), dim=1)
 
 
-def shoulder_posture_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower: float = -0.35, upper: float = 0.35, transition: float = 0.12):
+def shoulder_posture_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower: float = -0.17453292519943295, upper: float = 0.17453292519943295, transition: float = 0.12):
     asset = env.scene[asset_cfg.name]
     return torch.sum(_interval_barrier(asset.data.joint_pos[:, asset_cfg.joint_ids], lower, upper, transition), dim=1)
 

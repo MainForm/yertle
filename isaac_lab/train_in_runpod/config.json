@@ -1,0 +1,23 @@
+{
+  "repository": "https://github.com/MainForm/yertle.git",
+  "branch": "feature/isaac-lab-rl-locomotion",
+  "image": "runpod/base:1.0.2-ubuntu2204",
+  "gpu_ids": ["NVIDIA GeForce RTX 3090", "NVIDIA RTX A6000", "NVIDIA GeForce RTX 4090"],
+  "min_cuda": "12.8",
+  "max_gpu_hourly_usd": 0.90,
+  "max_planned_usd": 1.10,
+  "max_seconds": 7200,
+  "container_disk_gb": 80,
+  "network_volume_gb": 10,
+  "volume_monthly_usd_per_gb": 0.07,
+  "disk_monthly_usd_per_gb": 0.10,
+  "profile": "isaac_lab/configs/v6_20_3_training.json",
+  "iterations": 300,
+  "num_envs": 1024,
+  "isaac_sim_version": "5.1.0",
+  "isaac_lab_version": "2.3.2",
+  "torch_version": "2.7.0",
+  "rsl_rl_version": "3.1.2",
+  "ssh_key": "C:/Users/ik/Desktop/runpod_issac_sim/runpod_isaac_sim_ed25519",
+  "backup_dir": "D:/project/yertle/runpod_temp"
+}
