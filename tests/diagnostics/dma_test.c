@@ -20,8 +20,13 @@ DMA_Channel_Type test_dma4,test_dma5;
 uint32_t SystemCoreClock=64000000U;
 static uint32_t tick=1000U;
 static bool complete_tx, inject_sync;
+static uint8_t motion_reply_error, current_reply_error;
 static int omit_id;
 static unsigned tx_simulations;
+static bool inject_offset;
+static uint16_t offset_raw;
+static uint8_t offset_error, offset_reply_id, offset_data_length = 2U;
+static bool offset_bad_checksum;
 void USART1_IRQHandler(void);
 void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
@@ -36,7 +41,8 @@ static void inject_bytes(const uint8_t *data,size_t size) {
     USART1->SR=USART_SR_TC;
 }
 static size_t reply(uint8_t *p,uint8_t id,uint8_t len) {
-    p[0]=0xff; p[1]=0xff; p[2]=id; p[3]=len+2; p[4]=0;
+    p[0]=0xff; p[1]=0xff; p[2]=id; p[3]=len+2;
+    p[4]=len==8 ? motion_reply_error : current_reply_error;
     memset(p+5,0,len); p[5]=id;
     if (len==8) {
         p[11]=64; p[12]=30;
@@ -65,6 +71,19 @@ void vTaskDelay(uint32_t ticks) {
             for (uint8_t id=1;id<=YERTLE_MOTOR_COUNT;++id) if (id!=omit_id) size+=reply(packets+size,id,q[6]);
             inject_bytes(packets,size);
         }
+        if (inject_offset && q[4]==0x02) {
+            assert(q[5]==0x1f && q[6]==2U && q[3]==4U); /* EEPROM READ only */
+            uint8_t packet[16];
+            const size_t size=reply(packet,offset_reply_id ? offset_reply_id : q[2],offset_data_length);
+            packet[4]=offset_error;
+            packet[5]=(uint8_t)offset_raw;
+            if (offset_data_length==2U) packet[6]=(uint8_t)(offset_raw>>8U);
+            unsigned sum=0U;
+            for (unsigned i=2U;i<size-1U;++i) sum+=packet[i];
+            packet[size-1U]=(uint8_t)~sum;
+            if (offset_bad_checksum) packet[size-1U]^=1U;
+            inject_bytes(packet,size);
+        }
     }
 }
 static uint32_t transport_words[16], diagnostic_words[16];
@@ -80,6 +99,8 @@ static void capture(void *ctx,uint8_t type,const uint8_t *p,uint16_t length) {
     }
 }
 int main(void) {
+    motor_position_offset_t not_initialized;
+    assert(motor_device_read_position_offset(1U,&not_initialized)==MOTOR_DEVICE_NOT_INITIALIZED);
     motor_dma_init();
     assert(USART1->BRR==0x40);
     assert(!(USART1->CR1 & USART_CR1_RXNEIE));
@@ -173,5 +194,51 @@ int main(void) {
     assert(transport_words[6]==1 && transport_words[7]==1 && transport_words[5]==1);
     assert(transport_words[8]==4 && transport_words[9]==2);
     assert(transport_words[10]==2 && transport_words[11]==1);
-    puts("DMA driver tests passed: twelve replies/multiple IDLE, missing ID, TX wire completion, abort, errors, bounds, statistics (mock registers, not board)");
+    motor_position_offset_t offset;
+    const unsigned before_invalid=tx_simulations;
+    assert(motor_device_read_position_offset(0U,&offset)==MOTOR_DEVICE_INVALID_ARGUMENT);
+    assert(motor_device_read_position_offset(13U,&offset)==MOTOR_DEVICE_INVALID_ARGUMENT);
+    assert(motor_device_read_position_offset(1U,NULL)==MOTOR_DEVICE_INVALID_ARGUMENT);
+    assert(tx_simulations==before_invalid);
+    inject_offset=true;
+    const uint16_t raws[]={0U,123U,2047U,0x087bU,0x0fffU,0x0800U};
+    const int16_t expected[]={0,123,2047,-123,-2047,0};
+    for (unsigned i=0U;i<6U;++i) {
+        offset_raw=raws[i];
+        assert(motor_device_read_position_offset(12U,&offset)==MOTOR_DEVICE_OK);
+        assert(offset.raw==raws[i] && offset.offset_steps==expected[i] && offset.servo_error==0U);
+        assert(!(DMA1_Channel5->CCR & DMA_CCR_EN));
+    }
+    offset_raw=0x1000U;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
+    offset_raw=42U; offset_reply_id=2U;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
+    offset_reply_id=0U; offset_data_length=1U;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
+    offset_data_length=2U; offset_error=4U;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
+    assert(offset.servo_error==4U);
+    offset_error=0U; offset_bad_checksum=true;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
+    offset_bad_checksum=false; inject_offset=false;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_UART_ERROR);
+    assert(!(DMA1_Channel5->CCR & DMA_CCR_EN));
+    complete_tx=false;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_UART_ERROR);
+    assert(!(DMA1_Channel4->CCR & DMA_CCR_EN) && !(DMA1_Channel5->CCR & DMA_CCR_EN));
+    complete_tx=true;
+    inject_offset=true;
+    assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_OK && offset.offset_steps==42);
+    inject_offset=false; omit_id=0;
+    const uint8_t motion_errors[]={4U,4U,0U,0U};
+    const uint8_t current_errors[]={0U,8U,8U,0U};
+    const uint8_t merged_errors[]={4U,12U,8U,0U};
+    for (unsigned test=0U;test<4U;++test) {
+        motion_reply_error=motion_errors[test]; current_reply_error=current_errors[test];
+        assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_OK);
+        assert(feedback.valid_mask==YERTLE_ALL_MOTORS_MASK);
+        for (unsigned id=0U;id<YERTLE_MOTOR_COUNT;++id)
+            assert(feedback.motor[id].servo_error==merged_errors[test]);
+    }
+    puts("DMA driver/offset tests passed (mock registers, not board)");
 }

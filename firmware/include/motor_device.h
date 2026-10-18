@@ -47,10 +47,19 @@ typedef enum {
     MOTOR_DEVICE_PARTIAL_FEEDBACK
 } motor_device_status_t;
 
+typedef struct {
+    uint16_t raw;
+    int16_t offset_steps;
+    uint8_t servo_error;
+} motor_position_offset_t;
+
 bool motor_device_init(void);
 bool motor_device_validate_targets(const motor_target_set_t *targets);
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *targets);
 motor_device_status_t motor_device_set_torque(bool enabled);
 motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback);
+/* Read-only EEPROM address 31..32. Bit 11 is sign, bits 0..10 magnitude.
+ * No torque, calibration, EEPROM unlock or write is performed. */
+motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset);
 
 #endif /* MOTOR_DEVICE_H */
