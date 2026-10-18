@@ -1,12 +1,15 @@
 #include "host_uart.h"
 
 #include "stm32f1xx.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include "board_clock.h"
 #include "uart_diagnostics.h"
 
 #define HOST_UART_BAUD 115200U
 #define HOST_RX_CAPACITY 256U
+#define HOST_TX_TIMEOUT_MS 20U
 
 static uint8_t rx_buffer[HOST_RX_CAPACITY];
 static volatile uint16_t rx_head;
@@ -93,14 +96,29 @@ void host_uart_init(void)
     NVIC_EnableIRQ(USART2_IRQn);
 }
 
-void host_uart_write_bytes(const uint8_t *data, size_t length)
+static bool wait_tx_flag(uint32_t flag, TickType_t started)
 {
-    for (size_t index = 0U; index < length; ++index) {
-        while ((USART2->SR & USART_SR_TXE) == 0U) {
+    while ((USART2->SR & flag) == 0U) {
+        if ((TickType_t)(xTaskGetTickCount() - started) >= pdMS_TO_TICKS(HOST_TX_TIMEOUT_MS)) {
+            uart_diagnostics_timeout(1U);
+            return false;
         }
+    }
+    return true;
+}
+
+bool host_uart_write_bytes(const uint8_t *data, size_t length)
+{
+    if (length == 0U) return true;
+    if (data == NULL) return false;
+    const TickType_t started = xTaskGetTickCount();
+    for (size_t index = 0U; index < length; ++index) {
+        if (!wait_tx_flag(USART_SR_TXE, started)) return false;
         USART2->DR = data[index];
         uart_diagnostics_tx_byte(1U);
     }
+    /* TC includes the final stop bit; interrupts remain enabled while waiting. */
+    return wait_tx_flag(USART_SR_TC, started);
 }
 
 bool host_uart_try_read(uint8_t *byte, bool *discontinuity)

@@ -49,5 +49,8 @@ void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
 host_fsm_state_t host_protocol_get_state(void);
 bool host_protocol_is_armed(void);
+/* Includes pending fault/timeout requests before the FSM publishes a state.
+ * Actuator must enter safe-stop, not immediate torque-off, when this is true. */
+bool host_protocol_is_stop_requested(void);
 
 #endif /* HOST_PROTOCOL_H */

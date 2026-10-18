@@ -33,7 +33,8 @@ int main(void)
 
     created = xTaskCreate(host_protocol_task,
                           "host-proto",
-                          configMINIMAL_STACK_SIZE * 3U,
+                          /* Result FIFO + nested diagnostic serialization. */
+                          configMINIMAL_STACK_SIZE * 4U,
                           NULL,
                           tskIDLE_PRIORITY + 3U,
                           NULL);

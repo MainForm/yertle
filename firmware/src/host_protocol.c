@@ -21,6 +21,13 @@
 #define YERTLE_PROTOCOL_MAX_ENCODED (YERTLE_PROTOCOL_MAX_RAW + 2U)
 #define YERTLE_HEARTBEAT_PERIOD_MS         1000U
 #define YERTLE_HOST_TIMEOUT_MS             1000U
+#define YERTLE_RX_BYTES_PER_CYCLE           128U
+#define YERTLE_RX_FRAMES_PER_CYCLE            2U
+#define YERTLE_RX_BUDGET_MS                    8U
+#define YERTLE_RESULT_QUEUE_CAPACITY           8U
+#define YERTLE_RESULT_MAX_ATTEMPTS             3U
+#define YERTLE_RESULT_RETRY_MS                10U
+#define YERTLE_RESULT_MAX_AGE_MS             250U
 
 enum message_type {
     MESSAGE_HELLO = 0x01U,
@@ -29,6 +36,7 @@ enum message_type {
     MESSAGE_GET_UART_STATS = 0x08U,
     MESSAGE_GET_SENSOR_FEEDBACK = 0x09U,
     MESSAGE_GET_FSM_STATE = 0x0AU,
+    MESSAGE_GET_POSITION_OFFSETS = 0x0BU,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -36,7 +44,8 @@ enum message_type {
     MESSAGE_F103_HEARTBEAT = 0x84U,
     MESSAGE_MOTOR_FEEDBACK = 0x8BU,
     MESSAGE_IMU_FEEDBACK = 0x8CU,
-    MESSAGE_FSM_STATE = 0x8DU
+    MESSAGE_FSM_STATE = 0x8DU,
+    MESSAGE_POSITION_OFFSETS = 0x8EU
 };
 
 enum error_code {
@@ -48,7 +57,8 @@ enum error_code {
     ERROR_INVALID_FLAGS = 7U,
     ERROR_INVALID_TARGET = 8U,
     ERROR_TARGET_BUSY = 9U,
-    ERROR_FEEDBACK_UNAVAILABLE = 10U
+    ERROR_FEEDBACK_UNAVAILABLE = 10U,
+    ERROR_QUERY_BUSY = 11U
 };
 
 enum event_code {
@@ -67,16 +77,30 @@ enum state_cause {
 };
 
 typedef struct {
+    uint8_t type;
+    uint8_t payload[4];
+    uint8_t attempts;
+    uint16_t sequence;
+    TickType_t created_tick;
+    TickType_t last_attempt_tick;
+} pending_result_t;
+
+typedef struct {
     uint8_t encoded[YERTLE_PROTOCOL_MAX_ENCODED];
     size_t encoded_length;
     uint8_t decoded[YERTLE_PROTOCOL_MAX_RAW];
     bool host_connected;
     bool lease_established;
     host_fsm_state_t state;
-    TickType_t last_host_tick;
+    TickType_t last_host_heartbeat_tick;
     TickType_t last_f103_heartbeat_tick;
     host_unsafe_reason_t last_reported_unsafe_reason;
     uint16_t tx_sequence;
+    /* Host-task owned: response retries never re-execute a request. */
+    pending_result_t results[YERTLE_RESULT_QUEUE_CAPACITY];
+    uint8_t result_head, result_count;
+    uint32_t result_tx_failures, result_retry_attempts, result_retry_successes;
+    uint32_t result_dropped;
 } protocol_context_t;
 
 static volatile host_fsm_state_t published_state = HOST_FSM_BOOT;
@@ -157,16 +181,15 @@ static size_t cobs_encode(const uint8_t *input, size_t input_length, uint8_t *ou
     return write_index;
 }
 
-static void send_frame(protocol_context_t *context, uint8_t type,
-                       const uint8_t *payload, uint16_t payload_length)
+static bool send_frame_sequence(uint16_t sequence, uint8_t type,
+                                const uint8_t *payload, uint16_t payload_length)
 {
     uint8_t raw[YERTLE_PROTOCOL_MAX_RAW];
-    uint8_t encoded[YERTLE_PROTOCOL_MAX_ENCODED];
+    uint8_t wire[YERTLE_PROTOCOL_MAX_ENCODED + 2U];
     const size_t raw_length = YERTLE_PROTOCOL_HEADER_SIZE + payload_length + YERTLE_PROTOCOL_CRC_SIZE;
-    const uint16_t sequence = context->tx_sequence++;
 
     if (payload_length > YERTLE_PROTOCOL_MAX_PAYLOAD) {
-        return;
+        return false;
     }
 
     raw[0] = YERTLE_PROTOCOL_VERSION;
@@ -184,20 +207,73 @@ static void send_frame(protocol_context_t *context, uint8_t type,
     raw[raw_length - 2U] = (uint8_t) crc;
     raw[raw_length - 1U] = (uint8_t) (crc >> 8U);
 
-    const size_t encoded_length = cobs_encode(raw, raw_length, encoded);
-    const uint8_t delimiter = 0U;
-    host_uart_write_bytes(&delimiter, 1U);
-    host_uart_write_bytes(encoded, encoded_length);
-    host_uart_write_bytes(&delimiter, 1U);
+    wire[0] = 0U;
+    const size_t encoded_length = cobs_encode(raw, raw_length, wire + 1U);
+    wire[encoded_length + 1U] = 0U;
+    return host_uart_write_bytes(wire, encoded_length + 2U);
+}
+
+static bool send_frame(protocol_context_t *context, uint8_t type,
+                       const uint8_t *payload, uint16_t payload_length)
+{
+    return send_frame_sequence(context->tx_sequence++, type, payload, payload_length);
+}
+
+static void remove_result(protocol_context_t *context)
+{
+    context->result_head = (uint8_t)((context->result_head + 1U) % YERTLE_RESULT_QUEUE_CAPACITY);
+    --context->result_count;
+}
+
+static void service_result_tx(protocol_context_t *context)
+{
+    if (context->result_count == 0U) return;
+    pending_result_t *result = &context->results[context->result_head];
+    const TickType_t now = xTaskGetTickCount();
+    if ((TickType_t)(now - result->created_tick) >= pdMS_TO_TICKS(YERTLE_RESULT_MAX_AGE_MS)) {
+        ++context->result_dropped;
+        remove_result(context);
+        return;
+    }
+    if (result->attempts != 0U &&
+        (TickType_t)(now - result->last_attempt_tick) < pdMS_TO_TICKS(YERTLE_RESULT_RETRY_MS)) return;
+    if (result->attempts != 0U) ++context->result_retry_attempts;
+    ++result->attempts;
+    /* One bounded TX attempt per service call; no delay/retry loop here.
+     * Reuse the complete frame's sequence and original request result. */
+    const bool sent = send_frame_sequence(result->sequence, result->type,
+                                           result->payload, sizeof(result->payload));
+    result->last_attempt_tick = xTaskGetTickCount();
+    if (sent) {
+        if (result->attempts > 1U) ++context->result_retry_successes;
+        remove_result(context);
+    } else {
+        ++context->result_tx_failures;
+        if (result->attempts >= YERTLE_RESULT_MAX_ATTEMPTS) {
+            ++context->result_dropped;
+            remove_result(context);
+        }
+    }
 }
 
 static void send_result(protocol_context_t *context, uint8_t result_type,
                         uint8_t request_type, uint16_t request_sequence, uint8_t code)
 {
-    const uint8_t payload[4] = {
-        request_type, (uint8_t) request_sequence, (uint8_t) (request_sequence >> 8U), code
+    /* process_host_rx reserves space before consuming the next request. */
+    if (context->result_count == YERTLE_RESULT_QUEUE_CAPACITY) {
+        ++context->result_dropped;
+        return;
+    }
+    const bool was_empty = context->result_count == 0U;
+    const unsigned tail = (context->result_head + context->result_count) % YERTLE_RESULT_QUEUE_CAPACITY;
+    context->results[tail] = (pending_result_t){
+        .type = result_type,
+        .payload = { request_type, (uint8_t)request_sequence, (uint8_t)(request_sequence >> 8U), code },
+        .sequence = context->tx_sequence++,
+        .created_tick = xTaskGetTickCount()
     };
-    send_frame(context, result_type, payload, sizeof(payload));
+    ++context->result_count;
+    if (was_empty) service_result_tx(context);
 }
 
 static void send_diagnostic_frame(void *context, uint8_t type,
@@ -239,6 +315,24 @@ static void send_fsm_state(protocol_context_t *context, uint16_t request_sequenc
         (uint8_t)context->state
     };
     send_frame(context, MESSAGE_FSM_STATE, payload, sizeof(payload));
+}
+
+static void send_position_offsets(protocol_context_t *context, const motor_position_offsets_t *offsets)
+{
+    uint8_t payload[8U + YERTLE_MOTOR_COUNT * 4U] = { 0 };
+    payload[0] = (uint8_t)offsets->request_sequence;
+    payload[1] = (uint8_t)(offsets->request_sequence >> 8U);
+    for (uint8_t b = 0U; b < 4U; ++b) payload[2U + b] = (uint8_t)(offsets->uptime_ms >> (8U*b));
+    payload[6] = (uint8_t)offsets->valid_mask;
+    payload[7] = (uint8_t)(offsets->valid_mask >> 8U);
+    for (uint8_t i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+        const size_t p = 8U + (size_t)i * 4U;
+        payload[p] = (uint8_t)offsets->motor[i].raw;
+        payload[p + 1U] = (uint8_t)(offsets->motor[i].raw >> 8U);
+        payload[p + 2U] = offsets->motor[i].servo_error;
+        payload[p + 3U] = (uint8_t)offsets->status[i];
+    }
+    send_frame(context, MESSAGE_POSITION_OFFSETS, payload, sizeof(payload));
 }
 
 static void send_motor_feedback(protocol_context_t *context, const motor_feedback_set_t *feedback)
@@ -320,6 +414,16 @@ static void request_safe_stop(void)
     pending_safety_action = HOST_SAFETY_ACTION_SAFE_STOP;
 }
 
+static void enter_safe_stop(protocol_context_t *context, host_fsm_state_t next,
+                            uint8_t cause)
+{
+    context->lease_established = false;
+    /* Publish the safety request BEFORE the state or any blocking event TX.
+     * The higher-priority actuator must never see DISARMED without its stop. */
+    request_safe_stop();
+    transition_state(context, next, cause, true);
+}
+
 static void set_host_connected(protocol_context_t *context, bool connected)
 {
     if (context->host_connected == connected) {
@@ -335,14 +439,67 @@ static bool can_arm(const protocol_context_t *context)
 {
     return context->host_connected && context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
-           (pending_safety_action == HOST_SAFETY_ACTION_NONE) &&
-           (requested_fault_reason == HOST_FAULT_NONE);
+           !host_protocol_is_stop_requested();
 }
 
 static void try_enter_control_ready(protocol_context_t *context)
 {
     if (can_arm(context)) {
         transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_LEASE_READY, true);
+    }
+}
+
+static void expire_host_link(protocol_context_t *context)
+{
+    const TickType_t now = xTaskGetTickCount();
+    /* Only accepted PC heartbeat RX keeps an established link alive.
+     * Expire before sending telemetry; local TX cannot prove host liveness. */
+    if (context->host_connected &&
+        ((TickType_t)(now - context->last_host_heartbeat_tick) >= pdMS_TO_TICKS(YERTLE_HOST_TIMEOUT_MS))) {
+        if (context->state == HOST_FSM_ARMED) {
+            enter_safe_stop(context, HOST_FSM_DISARMED, STATE_CAUSE_HEARTBEAT_TIMEOUT);
+        }
+        set_host_connected(context, false);
+    }
+}
+
+static void service_safety_state(protocol_context_t *context)
+{
+    if (safe_stop_completed) {
+        safe_stop_completed = false;
+        pending_safety_action = HOST_SAFETY_ACTION_NONE;
+        if (context->state == HOST_FSM_FAULT) {
+            requested_fault_reason = HOST_FAULT_NONE;
+            /* Require a heartbeat received after FAULT recovery. */
+            context->lease_established = false;
+            requested_target_timeout = false;
+            transition_state(context, HOST_FSM_DISARMED,
+                             STATE_CAUSE_SAFE_STOP_COMPLETE, true);
+        }
+    }
+
+    if ((requested_fault_reason != HOST_FAULT_NONE) && (context->state != HOST_FSM_FAULT)) {
+        enter_safe_stop(context, HOST_FSM_FAULT, STATE_CAUSE_FAULT);
+    }
+    if (requested_target_timeout) {
+        if (context->state == HOST_FSM_ARMED) {
+            enter_safe_stop(context, HOST_FSM_DISARMED, STATE_CAUSE_TARGET_TIMEOUT);
+        }
+        /* Do not clear the request before publishing its replacement stop. */
+        requested_target_timeout = false;
+    }
+}
+
+static void service_link_heartbeat(protocol_context_t *context)
+{
+    service_safety_state(context);
+    expire_host_link(context);
+
+    const TickType_t attempted_at = xTaskGetTickCount();
+    if ((TickType_t)(attempted_at - context->last_f103_heartbeat_tick) >=
+        pdMS_TO_TICKS(YERTLE_HEARTBEAT_PERIOD_MS)) {
+        context->last_f103_heartbeat_tick = attempted_at;
+        send_f103_heartbeat(context);
     }
 }
 
@@ -388,7 +545,19 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         return;
     }
 
+    /* Safety and link freshness precede every valid request, even when RX
+     * remains nonempty or a previous response took time to transmit. */
+    service_safety_state(context);
+    expire_host_link(context);
+
     switch (type) {
+    case MESSAGE_GET_POSITION_OFFSETS: {
+        /* Read-only, asynchronous: no host lease/FSM/torque side effects. */
+        const bool accepted = sensor_request_position_offsets(sequence);
+        send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
+                    type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);
+        break;
+    }
     case MESSAGE_GET_FSM_STATE:
         /* Read-only: never refreshes the host lease or changes the FSM. */
         send_fsm_state(context, sequence);
@@ -410,7 +579,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             break;
         }
         if (!context->host_connected || context->state != HOST_FSM_ARMED ||
-            pending_safety_action != HOST_SAFETY_ACTION_NONE) {
+            host_protocol_is_stop_requested()) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
             break;
         }
@@ -436,7 +605,9 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         uart_diagnostics_send(context, send_diagnostic_frame);
         break;
     case MESSAGE_HELLO:
-        context->last_host_tick = xTaskGetTickCount();
+        /* New connection gets a first-heartbeat grace period. Repeated HELLO
+         * on an established link must not refresh the heartbeat watchdog. */
+        if (!context->host_connected) context->last_host_heartbeat_tick = xTaskGetTickCount();
         set_host_connected(context, true);
         send_hello_ack(context);
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
@@ -446,7 +617,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_NOT_CONNECTED);
             break;
         }
-        context->last_host_tick = xTaskGetTickCount();
+        context->last_host_heartbeat_tick = xTaskGetTickCount();
         context->lease_established = true;
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
         break;
@@ -456,71 +627,60 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
 }
 
+static void process_host_rx(protocol_context_t *context)
+{
+    const TickType_t started = xTaskGetTickCount();
+    unsigned bytes = 0U, frames = 0U;
+    while (context->result_count < YERTLE_RESULT_QUEUE_CAPACITY &&
+           bytes < YERTLE_RX_BYTES_PER_CYCLE && frames < YERTLE_RX_FRAMES_PER_CYCLE &&
+           (TickType_t)(xTaskGetTickCount() - started) < pdMS_TO_TICKS(YERTLE_RX_BUDGET_MS)) {
+        uint8_t byte;
+        bool discontinuity = false;
+        const bool available = host_uart_try_read(&byte, &discontinuity);
+        if (discontinuity) context->encoded_length = 0U;
+        if (!available) break;
+        ++bytes;
+        if (byte == 0U) {
+            if (context->encoded_length > 0U) {
+                ++frames;
+                size_t decoded_length = 0U;
+                if (cobs_decode(context->encoded, context->encoded_length,
+                                context->decoded, &decoded_length)) {
+                    handle_frame(context, context->decoded, decoded_length);
+                }
+            }
+            context->encoded_length = 0U;
+        } else if (context->encoded_length < sizeof(context->encoded)) {
+            context->encoded[context->encoded_length++] = byte;
+        } else {
+            context->encoded_length = 0U;
+        }
+    }
+}
+
 void host_protocol_task(void *argument)
 {
     protocol_context_t context = { 0 };
-    uint8_t byte;
 
     (void) argument;
-    context.last_host_tick = xTaskGetTickCount();
-    context.last_f103_heartbeat_tick = context.last_host_tick;
+    context.last_host_heartbeat_tick = xTaskGetTickCount();
+    context.last_f103_heartbeat_tick = context.last_host_heartbeat_tick;
     transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_BOOT_COMPLETE, false);
     request_safe_stop();
 
     for (;;) {
-        for (;;) {
-            bool discontinuity = false;
-            const bool available = host_uart_try_read(&byte, &discontinuity);
-            if (discontinuity) {
-                context.encoded_length = 0U;
-            }
-            if (!available) {
-                break;
-            }
-            if (byte == 0U) {
-                if (context.encoded_length > 0U) {
-                    size_t decoded_length = 0U;
-                    if (cobs_decode(context.encoded, context.encoded_length,
-                                    context.decoded, &decoded_length)) {
-                        handle_frame(&context, context.decoded, decoded_length);
-                    }
-                }
-                context.encoded_length = 0U;
-            } else if (context.encoded_length < sizeof(context.encoded)) {
-                context.encoded[context.encoded_length++] = byte;
-            } else {
-                context.encoded_length = 0U;
-            }
-        }
+        service_safety_state(&context);
+        expire_host_link(&context);
+        service_result_tx(&context);
+        /* A failed TX can consume 20 ms; recheck safety before accepting RX. */
+        service_safety_state(&context);
+        expire_host_link(&context);
+        process_host_rx(&context);
+        service_safety_state(&context);
+        expire_host_link(&context);
 
-        const TickType_t now = xTaskGetTickCount();
-        if (safe_stop_completed) {
-            safe_stop_completed = false;
-            pending_safety_action = HOST_SAFETY_ACTION_NONE;
-            if (context.state == HOST_FSM_FAULT) {
-                requested_fault_reason = HOST_FAULT_NONE;
-                /* Stay DISARMED until a heartbeat received after recovery. */
-                context.lease_established = false;
-                requested_target_timeout = false;
-                transition_state(&context, HOST_FSM_DISARMED,
-                                 STATE_CAUSE_SAFE_STOP_COMPLETE, true);
-            }
-        }
-
-        if ((requested_fault_reason != HOST_FAULT_NONE) && (context.state != HOST_FSM_FAULT)) {
-            transition_state(&context, HOST_FSM_FAULT, STATE_CAUSE_FAULT, true);
-            request_safe_stop();
-        }
-
-        if (requested_target_timeout) {
-            requested_target_timeout = false;
-            if (context.state == HOST_FSM_ARMED) {
-                /* Require a fresh host lease before accepting another target. */
-                context.lease_established = false;
-                transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_TARGET_TIMEOUT, true);
-                request_safe_stop();
-            }
-        }
+        motor_position_offsets_t offsets;
+        if (sensor_take_position_offsets(&offsets)) send_position_offsets(&context, &offsets);
 
         if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
             context.last_reported_unsafe_reason = requested_unsafe_reason;
@@ -530,22 +690,11 @@ void host_protocol_task(void *argument)
             send_frame(&context, MESSAGE_EVENT, payload, sizeof(payload));
         }
 
-        if (context.host_connected &&
-            ((now - context.last_host_tick) >= pdMS_TO_TICKS(YERTLE_HOST_TIMEOUT_MS))) {
-            set_host_connected(&context, false);
-            if (context.state == HOST_FSM_ARMED) {
-                transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_HEARTBEAT_TIMEOUT, true);
-                request_safe_stop();
-            }
-        }
+        service_link_heartbeat(&context);
 
         /* The FSM owns the transition; heartbeat only provides a healthy lease. */
         try_enter_control_ready(&context);
 
-        if ((now - context.last_f103_heartbeat_tick) >= pdMS_TO_TICKS(YERTLE_HEARTBEAT_PERIOD_MS)) {
-            context.last_f103_heartbeat_tick = now;
-            send_f103_heartbeat(&context);
-        }
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
@@ -592,4 +741,10 @@ host_fsm_state_t host_protocol_get_state(void)
 bool host_protocol_is_armed(void)
 {
     return published_state == HOST_FSM_ARMED;
+}
+
+bool host_protocol_is_stop_requested(void)
+{
+    return pending_safety_action != HOST_SAFETY_ACTION_NONE ||
+           requested_fault_reason != HOST_FAULT_NONE || requested_target_timeout;
 }
