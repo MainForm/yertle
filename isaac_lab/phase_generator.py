@@ -27,7 +27,8 @@ def _mode_ids(env, command_name: str) -> torch.Tensor:
 def _gait_state(env, command_name: str):
     mode = _mode_ids(env, command_name)
     device = mode.device
-    frequencies = torch.full((env.num_envs,), _TROT_FREQUENCY_HZ, device=device)
+    frequency_hz = getattr(getattr(env, 'cfg', None), 'trot_frequency_hz', _TROT_FREQUENCY_HZ)
+    frequencies = torch.full((env.num_envs,), frequency_hz, device=device)
     duties = torch.full((env.num_envs,), _TROT_DUTY_FACTOR, device=device)
     offsets = torch.tensor(_TROT_PHASE_OFFSETS, device=device, dtype=torch.float32).repeat(env.num_envs, 1)
     phase = torch.remainder(env.episode_length_buf.to(torch.float32) * env.step_dt * frequencies, 1.0)
@@ -91,7 +92,8 @@ def phase_unscheduled_contact_penalty(env, sensor_cfg: SceneEntityCfg, command_n
 
 def _trot_transition(env, command_name: str, grace_s: float) -> torch.Tensor:
     """Symmetric grace around each diagonal-pair swap; does not change the clock."""
-    if not math.isfinite(grace_s) or not 0 <= grace_s < 0.25 / _TROT_FREQUENCY_HZ:
+    frequency_hz = getattr(getattr(env, 'cfg', None), 'trot_frequency_hz', _TROT_FREQUENCY_HZ)
+    if not math.isfinite(grace_s) or not 0 <= grace_s < 0.25 / frequency_hz:
         raise ValueError('Transition grace must be finite and below a quarter trot cycle')
     phase, _, frequency, _, _ = _gait_state(env, command_name)
     if grace_s == 0:

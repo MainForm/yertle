@@ -22,6 +22,8 @@ from rsl_rl.runners import OnPolicyRunner  # noqa: E402
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train Yertle locomotion in Isaac Lab (rsl_rl).")
+parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Override fixed trot clock; pass the same value during play.')
+parser.add_argument('--motor-travel-balance', action='store_true', help='Enable rolling measured thigh/shin servo travel imbalance penalty (-0.5).')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 missing-stance and all-feet-airborne costs with 20ms diagonal-swap grace.')
 parser.add_argument("--num_envs", type=int, default=4096)
@@ -50,6 +52,8 @@ parser.add_argument("--reset-standing-pose-json", help="Replace only pool index 
 parser.add_argument("--extend-reset-pose-limits", action="store_true", help="Explicitly expand simulation joint limits to include all reset poses for the entire run.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.trot_frequency_hz is not None and not 0.1 <= args_cli.trot_frequency_hz <= 10.0:
+    parser.error('--trot-frequency-hz must be finite and within 0.1..10 Hz')
 if args_cli.base_contact_termination and args_cli.body_tilt_termination_deg is not None:
     parser.error("Use either --base-contact-termination or --body-tilt-termination-deg, not both.")
 if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
@@ -89,7 +93,7 @@ from isaac_lab.train_start_pose import configure_reset_pose_pool  # noqa: E402
 from isaac_lab.train_terminations import configure_body_tilt_termination, configure_base_contact_termination  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
 from isaac_lab.stateful_runner import StatefulOnPolicyRunner  # noqa: E402
-from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards  # noqa: E402
+from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards, configure_motor_travel_balance  # noqa: E402
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-v0", YertleFlatEnvCfg, YertleFlatPPORunnerCfg),
@@ -100,6 +104,10 @@ _TASKS = {
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.trot_frequency_hz is not None:
+        env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
+    if args_cli.motor_travel_balance:
+        configure_motor_travel_balance(env_cfg)
     if args_cli.trot_support_penalties:
         configure_trot_support_rewards(env_cfg)
         print('TROT_SUPPORT_PENALTIES enabled=True stance_weight=-1.0 airborne_weight=-2.0 transition_grace_s=0.02', flush=True)

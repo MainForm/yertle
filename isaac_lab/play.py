@@ -27,6 +27,8 @@ from rsl_rl.runners import OnPolicyRunner
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a trained Yertle policy in Isaac Lab.")
+parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Fixed gait clock used for training; v6.21 requires 1.0.')
+parser.add_argument('--motor-travel-balance', action='store_true', help='Enable v6.21 measured servo travel penalty for diagnostics.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
@@ -51,6 +53,8 @@ parser.add_argument("--push-body-weight", type=float, default=0.20, help="Manual
 parser.add_argument("--push-duration", type=float, default=0.10)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+if args_cli.trot_frequency_hz is not None and not 0.1 <= args_cli.trot_frequency_hz <= 10.0:
+    parser.error('--trot-frequency-hz must be finite and within 0.1..10 Hz')
 try:
     start_pose_mode, start_joint_angles = select_start_pose(args_cli.start_pose, args_cli.pose_json)
     if args_cli.extend_start_pose_limits and start_pose_mode != "json":
@@ -79,7 +83,7 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
-from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards  # noqa: E402
+from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards, configure_motor_travel_balance  # noqa: E402
 
 try:
     import msvcrt
@@ -161,6 +165,10 @@ class ForcePulse:
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.trot_frequency_hz is not None:
+        env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
+    if args_cli.motor_travel_balance:
+        configure_motor_travel_balance(env_cfg)
     if args_cli.trot_support_penalties:
         configure_trot_support_rewards(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs

@@ -1,0 +1,20 @@
+{
+  "version": "v6.21",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "4.6", "--effort-limit-sim", "1.9",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.0", "--motor-travel-balance",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "gait": "fixed diagonal trot 1.0 Hz, duty 0.5, 20 ms swap grace",
+  "motor_travel_balance_penalty_weight": -0.5,
+  "motor_travel_window_s": 1.0,
+  "motor_travel_floor_rad": 0.08726646259971647,
+  "baseline": "v6.20.3; solver32, torque1.9 Nm, PhysX speed4.6 rad/s, excess reward threshold2.3 rad/s",
+  "compatibility": "Original joint axes, API mapping, raw calibration, 55 observations and 12 position actions unchanged. Gait clock input VALUES intentionally change to 1 Hz; use --trot-frequency-hz 1.0 for play."
+}

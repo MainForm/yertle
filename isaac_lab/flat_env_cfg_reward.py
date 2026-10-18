@@ -18,6 +18,7 @@ from . import phase_generator
 from .foot_geometry import foot_sole_contact_velocities
 from .ground_contact import GroundContactPenalty
 from .motor_operating_range import MotorRawTransform, OperatingRangeCost
+from .motor_travel_balance import MotorTravelBalancePenalty
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
 SHOULDER_NAMES = ("lf_shoulder", "rf_shoulder", "lb_shoulder", "rb_shoulder")
@@ -121,6 +122,15 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     )
     rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-1.0, params={"command_name": "base_velocity", "min_height_m": 0.045, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
+
+
+def configure_motor_travel_balance(cfg):
+    """Opt-in v6.21, one configured gait cycle of measured servo travel."""
+    frequency = getattr(cfg, 'trot_frequency_hz', 2.2)
+    cfg.rewards.motor_travel_balance_penalty = RewTerm(
+        func=MotorTravelBalancePenalty, weight=-0.5,
+        params={'asset_cfg': SceneEntityCfg('robot'), 'command_name': 'base_velocity',
+                'window_s': 1.0 / frequency, 'travel_floor_rad': 0.08726646259971647})
 
 
 def configure_trot_support_rewards(cfg):
