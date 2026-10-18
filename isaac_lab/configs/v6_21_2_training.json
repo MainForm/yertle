@@ -1,0 +1,17 @@
+{
+  "version": "v6.21.2",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "4.6", "--effort-limit-sim", "1.9",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.7",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "gait": "fixed diagonal trot 1.7 Hz, duty 0.5, 20 ms swap grace",
+  "baseline": "v6.20.3 reward settings, fixed trot 1.7 Hz; thigh/shin travel matching reward removed",
+  "compatibility": "Original joint axes, API mapping, raw calibration, 55 observations and 12 position actions unchanged. Use --trot-frequency-hz 1.7 for play. Legacy profile defaults remain unchanged."
+}

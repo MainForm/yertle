@@ -28,7 +28,6 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a trained Yertle policy in Isaac Lab.")
 parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Fixed gait clock used for training; v6.21 requires 1.0.')
-parser.add_argument('--motor-travel-balance', action='store_true', help='Enable v6.21 measured servo travel penalty for diagnostics.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
@@ -83,7 +82,7 @@ from isaac_lab.flat_env_cfg import YertleFlatEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rough_env_cfg import YertleRoughEnvCfg_PLAY  # noqa: E402
 from isaac_lab.rsl_rl_ppo_cfg import YertleFlatPPORunnerCfg, YertleRoughPPORunnerCfg  # noqa: E402
 from isaac_lab.signed_joint_reference import configure_signed_joint_reference  # noqa: E402
-from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards, configure_motor_travel_balance  # noqa: E402
+from isaac_lab.flat_env_cfg_reward import configure_trot_support_rewards  # noqa: E402
 
 try:
     import msvcrt
@@ -167,8 +166,6 @@ def main():
     env_cfg = EnvCfg()
     if args_cli.trot_frequency_hz is not None:
         env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
-    if args_cli.motor_travel_balance:
-        configure_motor_travel_balance(env_cfg)
     if args_cli.trot_support_penalties:
         configure_trot_support_rewards(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs
