@@ -14,7 +14,8 @@ static jmp_buf finished;
 static TickType_t tick;
 static host_safety_action_t safety_action;
 static host_fsm_state_t state;
-static motor_target_set_t queued_targets;
+static uint8_t queued_targets[256];
+static unsigned queue_item_size;
 static bool queued;
 static bool stuck;
 static bool fault_on_stop;
@@ -34,14 +35,15 @@ static unsigned writes_at_first_successful_off;
 
 QueueHandle_t xQueueCreate(unsigned length, unsigned item_size)
 {
-    assert(length == 1U && item_size == sizeof(motor_target_set_t));
+    assert(length == 1U && item_size <= sizeof(queued_targets));
+    queue_item_size = item_size;
     return &queued_targets;
 }
 
 BaseType_t xQueueOverwrite(QueueHandle_t queue, const void *item)
 {
     assert(queue == &queued_targets);
-    queued_targets = *(const motor_target_set_t *)item;
+    memcpy(queued_targets, item, queue_item_size);
     queued = true;
     return pdPASS;
 }
@@ -50,7 +52,7 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t timeout)
 {
     assert(queue == &queued_targets && timeout == 0U);
     if (!queued) return 0;
-    *(motor_target_set_t *)item = queued_targets;
+    memcpy(item, queued_targets, queue_item_size);
     queued = false;
     return pdTRUE;
 }
@@ -78,6 +80,8 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
 host_safety_action_t host_protocol_get_pending_safety_action(void) { return safety_action; }
 host_fsm_state_t host_protocol_get_state(void) { return state; }
 bool host_protocol_is_armed(void) { return state == HOST_FSM_ARMED; }
+bool host_protocol_is_stop_requested(void)
+{ return safety_action != HOST_SAFETY_ACTION_NONE || state == HOST_FSM_FAULT; }
 void host_protocol_complete_safe_stop(void)
 {
     ++completed_stops;

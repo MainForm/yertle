@@ -26,11 +26,38 @@ motor_device and Mowibox protocol using mock registers/RTOS calls. It covers
 multiple IDLE events, twelve replies, missing IDs, buffer ownership, wire-TC wait,
 RX residue/no double counting, UART errors, both DMA errors, buffer exhaustion,
 no response/partial response timeout, restart and transport/cycle counters.
+It also verifies motion/current servo-error bit merging and next-cycle clearing.
 It does not emulate DMA bus arbitration or electrical/interruption timing.
 
 The safe-stop test also covers single FAULT return attempts, torque-off-only
 fallback, successful completion and continued OFF failure. These tests do not
 execute the host FSM or the physical board.
+
+`firmware_heartbeat_test` exercises the real host frame handler and heartbeat
+service with a mock UART: 1000 ms telemetry cadence, PC-heartbeat-only refresh,
+timeout despite successful TX, TX failure independence, fresh-PC-lease isolation,
+repeated HELLO/query/invalid CRC rejection and tick wrap. It does not verify
+physical UART TC timing or remote receipt.
+
+`firmware_target_timeout_test` runs the real actuator loop with queue/clock
+stubs: enqueue timestamps, delayed dequeue, stale-command rejection before
+motor I/O, equal-target refresh, latest-only overwrite, failed/invalid/unarmed
+submissions and tick wrap. It does not simulate actual RTOS task interleavings.
+
+`firmware_control_safety_test` combines the actual host FSM and actuator source
+with mocked queue/UART/clock/feedback. It covers expired-link target rejection,
+pending fault/timeout target rejection, SAFE_STOP publication before state-event
+TX, return before torque-off during a forced task switch, bounded query/garbage
+RX draining, byte/frame/time budgets, and each of twelve blocked motors while
+the others move. It checks centered-motor timer refresh and all-or-nothing
+progress updates for invalid samples. Interleavings are selected simulations,
+not a proof of every possible RTOS race or a physical-board safety test.
+
+`firmware_result_tx_test` covers immediate ACK, failed-TX recovery, exact original
+frame/sequence preservation, NACK retry, no repeated target enqueue or watchdog
+refresh, maximum attempts, queue-age expiry, FIFO order/backpressure, fault/link
+handling while the queue is full, and tick wrap. UART success/failure and elapsed
+time are simulated; remote receipt and physical UART timing are not verified.
 
 Run all tests under GCC in the container:
 

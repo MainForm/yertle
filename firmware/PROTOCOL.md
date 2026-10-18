@@ -76,7 +76,7 @@ All integers are little-endian. Previews are prefixes, not complete packet logs;
 the current transaction can be in progress when sampled. TX preview does not
 prove physical transmission, and RX preview excludes ISR-discarded bytes.
 Snapshots never hold IRQ masking while sending responses. Host task stack is
-1536 bytes to accommodate the additional bounded snapshot buffers.
+2048 bytes to accommodate the result FIFO and nested diagnostic serialization.
 These diagnostics identify the internal failure stage, not a definitive wiring,
 motor power or baud-rate root cause. ISR measurement itself adds CPU overhead.
 
@@ -130,22 +130,34 @@ u16  crc16_ccitt          # CRC-16/CCITT-FALSE over preceding raw bytes
 | PC/RPi → F103 | Value | Result |
 |---|---:|---|
 | `HELLO` | `0x01` | Marks host link connected, then sends `HELLO_ACK` and `ACK` |
-| `HEARTBEAT` | `0x02` | Refreshes the 1 s host lease; the F103 FSM may autonomously enter `ARMED` after a safe stop completes |
+| `HEARTBEAT` | `0x02` | Refreshes the 1 s link timer and grants a control lease; the F103 FSM may enter `ARMED` after a safe stop completes |
 | `GET_UART_STATS` | `0x08` | Read-only cumulative counters; replies with `UART_STATS`, no ARM or lease refresh |
 | `GET_FSM_STATE` | `0x0A` | Read-only FSM query; replies with `FSM_STATE`, without refreshing the lease |
+| `GET_POSITION_OFFSETS` | `0x0B` | Empty payload; schedules EEPROM offset reads for IDs 1..12, then returns `POSITION_OFFSETS` |
 
 `SET_JOINT_TARGETS` (`0x06`) has a fixed 60-byte payload: for IDs 1..12 in
 ascending order, five bytes each: position u16 LE [step], speed u16 LE [raw],
 acceleration u8 [raw]. All 12 targets are required. It is accepted only while
-connected and ARMED; position must be 0..4095 and speed 0..3400. ACK means
+connected and ARMED with no pending fault, target timeout or SAFE_STOP request;
+position must be 0..4095 and speed 0..3400. ACK means
 queued, not that the servo reached its goal. Invalid length/state/target or
 queue failure returns NACK codes 2/5/8/9 respectively.
 The actuator repeats its most recent valid target every 10 ms, but enters
 DISARMED and starts a bounded 2048-step return before torque-off after 500 ms
 without a fresh target.
+The deadline is measured from successful target acceptance into the actuator
+queue. That timestamp travels with the targets; dequeue never starts a new
+500 ms interval. Failed/rejected enqueues and repeated motor-bus writes do not
+refresh it. A queued target already 500 ms old is discarded before execution.
 That target timeout invalidates the host lease; a later fresh HEARTBEAT can
 make the FSM ready again once the return and torque-off have completed.
-An independent host HEARTBEAT timeout remains 1000 ms.
+An independent link timeout remains 1000 ms and is refreshed ONLY by an
+accepted PC HEARTBEAT. Initial HELLO starts a first-heartbeat grace period;
+repeated HELLO on an established link does not refresh it. F103 sends
+`F103_HEARTBEAT` every 1000 ms for PC status monitoring only: neither successful
+nor failed TX refreshes the F103 watchdog. UART TC (final stop bit transmitted)
+does not confirm PC receipt. The separate 500 ms target watchdog and
+fresh-PC-heartbeat re-arm rule remain unchanged.
 
 `GET_SENSOR_FEEDBACK` (`0x09`) is read-only and returns three `MOTOR_FEEDBACK`
 (`0x8B`) frames, four IDs per frame. Each 56-byte payload contains sample
@@ -165,6 +177,55 @@ and all raw fields are zero; motor feedback remains available. The IMU uses
 PB6=SCL and PB7=SDA with external pull-ups to 3.3 V; AD0 must be low for
 I2C address 0x68. It is probed again once per second after a failure.
 
+## EEPROM position-offset query
+
+`GET_POSITION_OFFSETS` (`0x0B`) is read-only in every FSM state. It does not
+connect the host, refresh a control lease, submit a target, change torque, or
+unlock/write EEPROM. `ACK` means the query was scheduled, not completed.
+Only one query/result may be pending; another request gets `NACK` code 11
+(query busy). The sensor task makes one attempt per iteration, interleaved with
+normal feedback; the host task continues processing the FSM and host traffic.
+Each transaction uses the existing motor-bus mutex and DMA. Healthy completion
+normally takes about 240 ms, but bus contention/failures can take longer.
+Each ID gets up to five total attempts (initial attempt included), stopping
+at its first valid reply. Failed attempts do not advance to the next ID until
+the fifth failure. On exhaustion the last attempt's raw/servo error/status is
+returned with that ID invalid; other IDs are still read. Normal all-success
+queries still use just 12 attempts; worst case uses 60 attempts (nominally
+1.2 s at the 20 ms sensor period, not a guaranteed bound with contention/errors).
+Retry counters reset at each ID and each new job. No prior query's values are
+reused. The valid-value criteria below are unchanged. The PC default wait is
+5 s with early completion; an explicit positive `--listen-ms` overrides it.
+
+The eventual `POSITION_OFFSETS` (`0x8E`) payload is exactly 56 bytes, all
+multi-byte fields little-endian:
+
+```text
+u16 request_sequence
+u32 completion_uptime_ms
+u16 valid_mask                 # bits 0..11 correspond to IDs 1..12
+12 entries, ascending ID order:
+    u16 raw_offset             # EEPROM addresses 31..32 (0x1F..0x20)
+    u8  servo_error
+    u8  driver_status
+```
+
+Driver status uses `motor_device_status_t`: 0 OK, 1 invalid argument,
+2 not initialized, 3 bus busy, 4 protocol error, 5 UART error,
+6 partial feedback (not emitted by this single-ID read API).
+Valid requires status 0, matching reply ID, exactly two data bytes, valid
+checksum, servo_error 0, and reserved bits 12..15 zero. Missing/failed motors
+remain invalid; their zero-initialized values are NOT a measured zero offset.
+The result is returned even if some or all IDs fail. Existing motor diagnostics
+provide the detailed UART/parse failure reason.
+
+Decode magnitude as `raw_offset & 0x07FF`; bit 11 (`0x0800`) denotes negative.
+This is NOT a two's-complement integer. Range is -2047..2047 step; display
+angle is `offset_steps * 360 / 4096` degrees. Zero is a legitimate stored
+offset, not proof that calibration was never run. The value does not establish
+physical calibration accuracy. Motors are read sequentially, not atomically.
+Update firmware and client together; older firmware rejects request 0x0B.
+
 ## Implemented responses
 
 | F103 → PC/RPi | Value | Payload |
@@ -178,6 +239,28 @@ I2C address 0x68. It is probed again once per second after a failure.
 | `MOTOR_FEEDBACK` | `0x8B` | One of three four-motor cached feedback blocks described above |
 | `IMU_FEEDBACK` | `0x8C` | Cached IMU sample described above |
 | `FSM_STATE` | `0x8D` | Request sequence u16 LE, FSM state u8; no ACK for the query |
+| `POSITION_OFFSETS` | `0x8E` | Correlated 56-byte result for all 12 EEPROM offset reads; see above |
+
+### ACK/NACK local-TX retry
+
+The ACK/NACK payload is unchanged: request type u8, request sequence u16 LE,
+result code u8. Success ACK reports request acceptance, not servo execution or
+arrival. If local UART TX fails, the original complete response is retained in
+an eight-entry fixed FIFO. Up to three attempts total are made, with at least
+10 ms between a failed attempt's completion and its retry. Responses age out
+at 250 ms (checked when serviced); every individual UART attempt remains bounded
+to 20 ms. Success removes the response, while expiry or exhausted attempts drop
+it. A new frame begins with a zero delimiter to recover from partial TX.
+
+Retries keep the original F103 frame sequence AND request/result payload.
+The target command is not re-executed, and neither watchdog is refreshed by
+response transmission. Retries/other telemetry can make F103 frame sequences
+arrive out of numerical order; match replies using the payload request sequence.
+When the FIFO is full, request consumption pauses until space is available;
+safety checks and RX interrupts continue. Sustained overload can still exceed
+the RX ring capacity. USART2 timeout diagnostics record failed UART attempts.
+No new message type, PC retry policy, or remote receipt acknowledgement is added.
+Local success with loss downstream still causes the PC's existing ACK timeout.
 
 ## UART statistics
 
@@ -192,7 +275,8 @@ RX errors count UART IRQs with one or more receive-error flags. Overflow counts
 buffer-full events, not lost bytes. Peak is the observed since-boot DMA received
 position for USART1 (capacity 256), or queued RX bytes for USART2 (capacity 255).
 Timeouts count motor TX waits/RX byte waits that expire.
-USART2 timeouts are zero because that driver has no timed waits.
+USART2 timeouts count failed bounded TX waits (20 ms per frame, including
+final UART TC); successful local TX does not confirm remote receipt.
 
 PC rates use differences between snapshots divided by MCU elapsed time.
 For 8N1, wire utilization is bytes/sec * 10 / baud * 100. USART1 reports
@@ -223,8 +307,14 @@ heartbeat. FAULT is released into DISARMED when safe stop or fallback torque-off
 transmission succeeds; this clears the fault reason and revokes the host lease,
 requiring a heartbeat received after completion before re-arming. There is no
 remote fault reset command. The PC cannot command immediate disarm/stop. Ceasing targets
-triggers the 500 ms target watchdog; loss of heartbeat triggers the 1000 ms
-link watchdog. Neither means torque is removed immediately: the F103 first
+triggers the 500 ms target watchdog; no accepted PC heartbeat RX for 1000 ms
+triggers the link watchdog, regardless of outgoing F103 heartbeat TX.
+Expiry and pending safety requests are handled before each valid request, not
+after accepting a target. Once the link expires, HEARTBEAT alone is rejected;
+HELLO must establish a new connection first. This does not change wire layouts.
+RX processing yields after 128 bytes, two delimited frames, or an 8 ms budget
+checked between requests. A request's complete reply may exceed that budget.
+Neither means torque is removed immediately: the F103 first
 attempts to return to 2048. An independent physical emergency stop is needed
 where immediate torque removal is required.
 
@@ -244,6 +334,14 @@ axes within 16 steps. It then sends broadcast torque-off and calls
 overall and 0.5 s without measurable progress; repeated motor-bus failures,
 missing feedback or a blocked joint trigger FAULT. At boot with no commanded
 torque, it skips movement and attempts torque-off immediately.
+The stop request is published before the DISARMED/FAULT state and its EVENT;
+the actuator also observes pending fault/timeout flags before the host task
+publishes a state. Progress is checked per motor, not by summed center error:
+each motor outside the 16-step tolerance must improve its best error by at
+least 12 steps within 500 ms. Fresh complete error-free samples refresh the
+timers of already-centered motors. Missing/invalid feedback refreshes none.
+Motion/current reply servo-error bits are OR-combined per feedback cycle; the
+next cycle starts clear. Feedback validity is not a fault-free guarantee.
 In FAULT, the actuator performs one additional full return-and-torque-off
 attempt. It sends the center goal before explicitly enabling torque, uses
 fresh feedback, and has independent 0.5 s no-progress and 15 s total deadlines.
@@ -259,3 +357,5 @@ The host must send fresh targets after the F103 autonomously re-enters ARMED.
 
 Target and feedback messages are implemented as described above. IMU feedback
 is telemetry only; this version does not use it for actuator safety decisions.
+Current/voltage/load automatic limits are not enabled; their measurements are
+provided to the PC for host-side handling. No numeric unsafe threshold is added.
