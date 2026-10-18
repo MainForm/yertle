@@ -59,6 +59,14 @@ refresh, maximum attempts, queue-age expiry, FIFO order/backpressure, fault/link
 handling while the queue is full, and tick wrap. UART success/failure and elapsed
 time are simulated; remote receipt and physical UART timing are not verified.
 
+`firmware_host_rx_dma_test` compiles the actual host UART and circular RX DMA
+driver with register stubs. It checks BRR and disabled RXNE/IDLE interrupts,
+short bursts without a boundary IRQ, multiple wraps, pending/preempted TC,
+DMA overwrite before/during a task copy, delimiter resynchronization, UART
+Overrun/Framing errors, DMA transfer-error restart and 0x8A host metadata.
+It verifies byte counts and separate event/overflow semantics. Selected DMA/IRQ
+interleavings are simulated, not physical DMA bus timing or USB serial quality.
+
 Run all tests under GCC in the container:
 
 ```sh

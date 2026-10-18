@@ -13,9 +13,11 @@ The FSM is owned by `host_protocol_task`; there is no separate FSM task.
 
 ## Host receive sequence
 
-USART2 RXNE/error interrupts invoke `USART2_IRQHandler` through the startup
-vector table. The ISR reads SR/DR and stores bytes in a 256-byte ring buffer
-(255 usable bytes). It performs no protocol parsing and calls no FreeRTOS API.
+DMA1 Channel6 continuously copies USART2 DR bytes to a 1024-byte circular buffer.
+`USART2_IRQHandler` handles receive errors only; RXNEIE and IDLEIE stay disabled.
+`DMA1_Channel6_IRQHandler` handles half/full boundaries and transfer errors.
+Neither ISR parses protocol frames or calls a FreeRTOS API. Short packets are
+visible immediately through task-side CNDTR polling without waiting for a DMA IRQ.
 `host_protocol_task` consumes the buffer through `host_uart_try_read`, then
 sleeps for 2 ms. Each receive pass is bounded to 128 bytes, two delimited frames,
 or an 8 ms budget checked between reads/requests. A single request/response may
@@ -23,10 +25,13 @@ exceed 8 ms; transmission is not interrupted in the middle of a frame. Partial
 COBS data survives across passes. Safety requests and link expiry are processed
 before/after the pass and before every valid request, so continuous input cannot
 indefinitely postpone the FSM or keep the lower-priority sensor task from running.
-The driver masks USART2 IRQ briefly while updating the consumer index.
-On overflow or a UART receive error, queued partial data is flushed, the task
-is told to clear its partial COBS frame, and the ISR discards input through the
-next zero delimiter. RX is interrupt-driven; host TX remains polling.
+`host_rx_dma.c` combines CNDTR with completed/pending TC wraps through a bounded
+retry snapshot. Normal reads never mask an IRQ. It rechecks overwrite after
+copying a byte, so preemption cannot silently publish an overwritten candidate.
+On overwrite or UART/DMA error, the driver reports discontinuity, and task-side
+resynchronization discards through the next zero delimiter. Error recovery
+briefly guards only USART2/DMA6 while restarting the peripheral. TX remains the
+bounded polling implementation in `host_uart.c`. See `HOST_LINK.md` for limits.
 
 ## Host heartbeat and timeouts
 
@@ -65,8 +70,8 @@ The next attempt's leading COBS zero delimiter terminates any partial old frame.
 
 Safety/link checks run before and after the retry service. When all eight slots
 are occupied, RX consumption pauses rather than accepting another command with
-nowhere to store its result; bounded retries/expiry free slots. The USART2 ISR
-continues receiving, but sustained overload may still overflow its 255-byte ring
+nowhere to store its result; bounded retries/expiry free slots. USART2 DMA
+continues receiving, but sustained overload may still overwrite its 1024-byte ring
 and invoke the documented resynchronization. Results are only response records:
 retry never submits a target again or refreshes heartbeat/target timestamps.
 Telemetry/events remain best-effort and can have later frame sequences before
@@ -102,8 +107,9 @@ No new task, HAL/RS485 DE layer, pin, baud, clock or FSM change is introduced.
 
 DMA replaces per-byte USART1 RX interrupts, not all interrupts. The active
 handlers are USART1 IDLE/error, DMA1 Channel4 TX completion/error and DMA1
-Channel5 RX full/error. USART1 RXNEIE stays disabled. USART2 still uses its
-own RX ISR/ring and polling TX. Its implementation is not a retired motor path.
+Channel5 RX full/error. USART1 RXNEIE stays disabled. USART2 uses circular RX
+DMA1 Channel6 plus an error IRQ, and bounded polling TX. Both UARTs retain the
+interrupts needed by their DMA/error handling, with no per-byte RXNE interrupt.
 Upstream submodules remain unmodified; the G4 HAL source is excluded by CMake.
 Diagnostic snapshots directly read uart_diagnostics storage, not UART-driver
 wrapper APIs. Transaction ownership uses one active flag; separate completion

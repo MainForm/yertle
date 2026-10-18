@@ -5,7 +5,8 @@
 
 static volatile uart_isr_stats_t ports[2];
 static volatile uint32_t tx_bytes[2], timeouts[2];
-static volatile uint32_t rx_tail_bytes[2]; /* Bus-owning task: DMA residue on stop. */
+static volatile uint32_t rx_tail_bytes[2]; /* Task-owned DMA progress/residue. */
+static volatile uint32_t rx_task_peak[2], rx_task_overflows[2];
 static volatile uint32_t transport[16]; /* Per-field single writer; word 0 packed uptime. */
 static uint64_t last_cycles[2]; /* Sole reader's cache; bounded retry fallback. */
 static volatile uint32_t reasons[DIAG_REASON_COUNT];
@@ -31,17 +32,25 @@ volatile uart_isr_stats_t *uart_diagnostics_port(unsigned port) { return &ports[
 void uart_diagnostics_tx_byte(unsigned port) { ++tx_bytes[port]; }
 void uart_diagnostics_tx_bytes(unsigned port, uint32_t count) { tx_bytes[port] += count; }
 void uart_diagnostics_rx_tail_bytes(unsigned port, uint32_t count) { rx_tail_bytes[port] += count; }
+void uart_diagnostics_rx_buffered(unsigned port, uint32_t count)
+{ if (count > rx_task_peak[port]) rx_task_peak[port] = count; }
+void uart_diagnostics_rx_overflow(unsigned port) { ++rx_task_overflows[port]; }
 void uart_diagnostics_timeout(unsigned port) { ++timeouts[port]; }
 void motor_transport_dma_mode(uint32_t capacity) { transport[1] = 1U; transport[12] = capacity; }
 void motor_transport_record(enum motor_transport_event event) { ++transport[event]; }
+void host_transport_rx_dma_mode(uint32_t capacity) { transport[13] = 1U; transport[14] = capacity; }
+void host_transport_rx_dma_error(void) { ++transport[15]; }
 
 void uart_diagnostics_get_stats(unsigned port, uart_stats_t *o)
 {
     volatile uart_isr_stats_t *s = &ports[port];
     o->tx_bytes = tx_bytes[port]; o->timeouts = timeouts[port];
     o->rx_bytes = s->rx_bytes + rx_tail_bytes[port]; o->rx_interrupts = s->rx_interrupts;
-    o->rx_errors = s->rx_errors; o->rx_overflows = s->rx_overflows;
-    o->rx_peak = s->rx_peak; o->isr_calls = s->isr_calls;
+    o->rx_errors = s->rx_errors;
+    o->rx_overflows = s->rx_overflows + rx_task_overflows[port];
+    const uint32_t task_peak = rx_task_peak[port], isr_peak = s->rx_peak;
+    o->rx_peak = task_peak > isr_peak ? task_peak : isr_peak;
+    o->isr_calls = s->isr_calls;
     /* Task cannot run halfway through its UART ISR on this single-core MCU.
      * If an ISR rolls low over between loads, retry high/low/high. Never mask
      * IRQs or wait on a writer flag; retain the last sample after 3 retries. */

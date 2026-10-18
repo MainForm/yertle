@@ -74,3 +74,15 @@ else()
     target_compile_options(firmware_result_tx_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME firmware_result_tx_test COMMAND firmware_result_tx_test)
+
+add_executable(firmware_host_rx_dma_test host_rx_dma_test.c
+    ../../firmware/src/host_uart.c ../../firmware/src/host_rx_dma.c
+    ../../firmware/src/uart_diagnostics.c)
+target_include_directories(firmware_host_rx_dma_test PRIVATE . ../../firmware/include)
+target_compile_definitions(firmware_host_rx_dma_test PRIVATE HOST_RX_DMA_TEST=1)
+if(MSVC)
+    target_compile_options(firmware_host_rx_dma_test PRIVATE /W4 /WX /UNDEBUG)
+else()
+    target_compile_options(firmware_host_rx_dma_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME firmware_host_rx_dma_test COMMAND firmware_host_rx_dma_test)

@@ -8,6 +8,7 @@ add_executable(yertle_f103rb
     src/main.c
     src/board_clock.c
     src/host_uart.c
+    src/host_rx_dma.c
     src/host_protocol.c
     src/motor_uart.c
     src/motor_dma.c

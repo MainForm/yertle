@@ -44,18 +44,38 @@ Do not shorten safety/watchdog deadlines simply in proportion to baud.
 about 2.4 ms, excluding ACK/heartbeat and other processing. Sending that sensor
 set at 50 Hz consumes about 12,000 byte/s in the F103-to-PC direction.
 
-USART2 intentionally still uses a per-byte RX ISR and a 256-byte ring with
-255 usable bytes. At continuous full-rate RX it fills in **2.55 ms**. It has
-no hardware flow control. Raising baud alone does not guarantee sustained
+USART2 now uses **DMA1 Channel6 circular RX with a 1024-byte buffer**. At
+continuous full-rate RX the buffer covers **10.24 ms**. RXNEIE and IDLEIE are
+disabled. The task polls CNDTR for partial bursts; half/full DMA interrupts
+maintain wrap bookkeeping, and the USART IRQ handles hardware errors only.
+DMA does not depend on the task reading DR within a 10 us byte interval.
+Normal reads use a bounded lock-free producer snapshot and check that DMA did
+not overwrite the candidate while the task was preempted. Only hardware
+restart briefly guards the USART2/DMA6 IRQs; TX and diagnostic copies never do.
+There is no hardware flow control. DMA alone does not guarantee sustained
 100,000-byte/s parsing: the host pass consumes at most 128 bytes / two frames /
 8 ms and then delays 2 ms. Diagnostic TX and higher-priority actuator work can
 delay draining further. Pace application requests and do not flood the line.
 
-Inspect Overrun Error, ring overflows, RX peak and ISR CPU time under the actual
-combined target/feedback workload. If sustained high RX traffic is required,
-consider a separate USART2 DMA/ring and parser-budget change. DMA1 channels 6
-(USART2 RX) and 7 (USART2 TX) are separate from motor channels 5/4. This migration
-does not silently change the UART receive architecture or task scheduling.
+Inspect Overrun Error, DMA overwrite count, RX peak and ISR CPU time under the
+actual combined target/feedback workload. The task must drain the buffer, and
+the DMA full interrupt must be serviced at least once per buffer revolution
+for wrap accounting. A delayed IRQ cannot reconstruct arbitrarily many wraps.
+On UART/DMA errors RX pauses, the task rearms it and discards through the next
+COBS delimiter. Overwritten data is also discarded with a parser discontinuity.
+Parser budget/overload behavior still needs review if sustained maximum RX is
+required. USART2 RX channel6 is independent of motor channels5/4; channel7 TX
+is unused and host TX stays polling. Task periods and timeouts are unchanged.
+
+`GET_UART_STATS` now uses former reserved 0x8A words13..15 for host RX mode,
+capacity and DMA errors. USART2 rx_irq counts UART error events, not bytes;
+ISR profiling includes DMA6 half/full/error handlers. RX bytes and peak come
+from task-observed DMA progress/backlog. Rebuild either PC client to display
+capacity1024 and these semantics correctly.
+
+The DMA regression suite includes short bursts, repeated/pending/preempted
+wraps, overwrite before/during CPU copying, error pause/restart and delimiter
+resynchronization. USART2 DMA ISR bodies do not parse frames or use RTOS APIs.
 
 ## Verification and rollout
 
@@ -92,8 +112,16 @@ commits in separate repositories, not one combined snapshot:
 | pc-connect-api | `c8c2913` | Body-velocity support transitions and zero-velocity diagnostics |
 
 The next commit in each repository contains only that repository's 1 Mbps
-configuration, related diagnostics/tests and documentation. Final verification:
+configuration, related diagnostics/tests and documentation. Initial 1 Mbps
+migration verification (before circular RX DMA):
 F103RB Compose build/artifact checks passed, firmware CTest 8/8, PC CLI CTest
 40/40 and API CTest 35/35 (including the installed external consumer). Linux
 serial/transport syntax checks passed with `B1000000`. Physical serial traffic
 was not exercised, and no firmware flashing or motor command was performed.
+
+Circular RX DMA verification: F103RB Compose build/artifact checks passed,
+firmware tests 9/9 on both Windows and GCC, PC CLI tests 40/40 and API tests
+35/35 including the installed consumer. ELF symbols resolve USART2 and DMA6 to
+the new strong handlers. RX-only transport changes leave TX, task periods,
+watchdogs and motor bus configuration unchanged. Hardware error rate after
+flashing remains to be measured.

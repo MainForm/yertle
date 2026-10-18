@@ -7,7 +7,8 @@ u32 words: uptime_ms, mode (1 = F103 DMA port of Mowibox pattern), TX starts,
 TX wire completions observed by task, UART IDLE events, RX buffer-full events,
 TX DMA errors, RX DMA errors, SyncRead attempts, complete twelve-ID SyncReads,
 feedback cycle attempts, complete two-block/twelve-ID feedback cycles, RX buffer
-capacity (256), three reserved zero words. No new request is needed.
+capacity (256), host RX mode (0=legacy ring, 1=circular DMA), host RX capacity
+(1024 in circular mode), host RX DMA error count. No new request is needed.
 Each counter has one serialized writer (bus task or equal-priority ISRs).
 Complete SyncRead means all IDs 1..12 parsed; complete feedback means both
 motion/current blocks for all twelve. Counts are since boot; PC summary subtracts
@@ -19,7 +20,14 @@ reads by CPU. rx_interrupts counts UART IDLE/error events; UART_ISR_STATS port1
 aggregates USART1 plus DMA1 Channel4/5 handler bodies. DMA errors are distinct
 from UART Overrun/Framing/Noise/Parity flags. Do not interpret error-events per
 DMA byte as corrupted byte count, bit error rate or packet failure rate.
-USART2 semantics remain unchanged. All six diagnostic frames remain <=64 bytes.
+USART2 circular mode uses DMA1 Channel6. Its RX bytes are DMA progress observed
+by the host task, including later discarded bytes; rx_irq counts UART error
+events only. Its ISR timing aggregates USART2 and DMA6 half/full/error handlers.
+RX peak is task-observed backlog (capped at capacity), not an exact historical
+hardware high-water mark. Overflows count detected DMA overwrite events, not
+lost bytes. UART errors keep their existing dedicated flag counters. All six
+diagnostic frames remain <=64 bytes. Older clients can ignore the last three
+metadata words, but must not label the new buffer as a 255-byte IRQ ring.
 
 ## Motor transaction diagnostics
 
@@ -45,8 +53,10 @@ host task reads independent aligned 32-bit fields; snapshots are not globally
 simultaneous. ISR cycle accumulation uses two 32-bit words, read high/low/high
 with up to three retries and a last-good fallback. Motor diagnostic writes are
 serialized by the existing bus mutex; trace/last-error tuples are best-effort
-and must not be used as coherent safety decisions. USART2 RX-ring protection
-is unchanged; USART1 now has DMA setup/teardown protection rather than a ring.
+and must not be used as coherent safety decisions. USART2 RX reconfiguration protection
+now applies only during DMA/peripheral restart, not during normal byte reads.
+Both UARTs use DMA RX, with USART1 transaction setup/teardown and USART2 circular
+mode. The two buffer lifecycles are different.
 Measurement storage/serialization remains in src/uart_diagnostics.c. Existing
 0x85..0x88 layouts remain unchanged. Actual failure cause requires board tests.
 
@@ -271,11 +281,12 @@ Request payload is empty. The response contains `u32 uptime_ms`, then two
 `u32` fields: tx_bytes, rx_bytes, rx_interrupts, rx_errors, rx_overflows,
 rx_peak, timeouts. Counters accumulate since boot and wrap at 32 bits.
 
-USART2 RX bytes count register reads with RXNE, including errored/discarded
-bytes; USART1 DMA bytes and IRQ timing have the semantics documented above.
-RX errors count UART IRQs with one or more receive-error flags. Overflow counts
-buffer-full events, not lost bytes. Peak is the observed since-boot DMA received
-position for USART1 (capacity 256), or queued RX bytes for USART2 (capacity 255).
+Both ports count observed DMA traffic including data later discarded. USART1
+uses transaction DMA; USART2 uses polled circular DMA progress. RX errors count
+UART receive-error events and DMA transfer errors. Overflow counts buffer-full
+events on USART1 or detected overwrite events on USART2, not lost bytes. Peak
+is the since-boot observed DMA received position for USART1 (capacity 256), or
+task-observed backlog for USART2 (capacity 1024, capped at capacity).
 Timeouts count motor TX waits/RX byte waits that expire.
 USART2 timeouts count failed bounded TX waits (20 ms per frame, including
 final UART TC); successful local TX does not confirm remote receipt.

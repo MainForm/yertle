@@ -3,7 +3,8 @@
 #include <stddef.h>
 #include "uart_stats.h"
 /* Equal-priority UART/DMA ISRs are the RX/event producer; bus-mutex-serialized
- * tasks own TX/timeout counters and DMA stop residue in separate storage;
+ * tasks own TX/timeout counters, DMA polled RX progress/backlog and stop residue
+ * in separate storage;
  * host_protocol_task is the diagnostic consumer. Snapshots are best effort,
  * not one globally simultaneous transaction. No diagnostic IRQ masking. */
 enum motor_diag_reason {
@@ -18,6 +19,8 @@ void uart_diagnostics_get_stats(unsigned port, uart_stats_t *output);
 void uart_diagnostics_tx_byte(unsigned port);
 void uart_diagnostics_tx_bytes(unsigned port, uint32_t count);
 void uart_diagnostics_rx_tail_bytes(unsigned port, uint32_t count);
+void uart_diagnostics_rx_buffered(unsigned port, uint32_t count);
+void uart_diagnostics_rx_overflow(unsigned port);
 void uart_diagnostics_timeout(unsigned port);
 enum motor_transport_event {
     TRANSPORT_TX_STARTED = 2, TRANSPORT_TX_COMPLETE, TRANSPORT_RX_IDLE,
@@ -27,6 +30,9 @@ enum motor_transport_event {
 };
 void motor_transport_dma_mode(uint32_t capacity);
 void motor_transport_record(enum motor_transport_event event);
+/* 0x8A words 13..15: host RX mode (1=circular DMA), capacity, DMA errors. */
+void host_transport_rx_dma_mode(uint32_t capacity);
+void host_transport_rx_dma_error(void);
 void uart_isr_timing_init(volatile uart_isr_stats_t *s);
 void uart_isr_timing_finish(volatile uart_isr_stats_t *s, uint32_t start);
 void uart_diagnostics_rx_error(volatile uart_isr_stats_t *s, uint32_t status, uint8_t byte);

@@ -2,7 +2,8 @@
 #define UART_STATS_H
 #include <stdint.h>
 #include "stm32f1xx.h"
-/* Cumulative since boot; 32-bit counters wrap. Bytes are UART register traffic. */
+/* Cumulative since boot; 32-bit counters wrap. RX bytes count observed DMA
+ * progress (including data later discarded), not successful protocol payloads. */
 typedef struct {
     uint32_t tx_bytes;
     uint32_t rx_bytes;
