@@ -7,7 +7,6 @@
 #include "board_clock.h"
 #include "uart_diagnostics.h"
 
-#define HOST_UART_BAUD 115200U
 #define HOST_RX_CAPACITY 256U
 #define HOST_TX_TIMEOUT_MS 20U
 

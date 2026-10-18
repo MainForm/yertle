@@ -103,7 +103,9 @@ Average microseconds = delta cycles * 1000000 / (CPU Hz * delta calls).
 Maximum is since boot, not the current sampling interval.
 
 The NUCLEO-F103RB exposes this binary protocol on `USART2` through the ST-LINK
-Virtual COM Port at 115200 baud, 8 data bits, no parity, and one stop bit.
+Virtual COM Port at 1000000 baud, 8 data bits, no parity, and one stop bit.
+The transport baud changes together with the PC client; v1 message IDs,
+COBS framing and CRC remain unchanged. See [HOST_LINK.md](HOST_LINK.md).
 
 ## Frame format
 

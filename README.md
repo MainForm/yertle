@@ -115,7 +115,9 @@ module exposes separate UART TX/RX pins, so this firmware uses its own
 F103 DMA port of Mowibox's transport pattern and its original hardware-independent
 packet protocol. The G4-specific `sts3215_hal.c` is NOT linked unchanged.
 RX DMA1 Channel5 is armed before TX DMA1 Channel4. Task-owned mutex/parsing,
-50 Hz feedback, 1 Mbps motor bus and 115200 host link remain unchanged.
+50 Hz feedback and the 1 Mbps motor bus remain unchanged. The host link now
+uses 1 Mbps (8N1); rebuild the matching PC client and flash the new firmware.
+See [host-link timing and migration](firmware/HOST_LINK.md).
 
 ## 60-second DMA comparison
 
