@@ -8,6 +8,15 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "sensor_task.h"
+#include "host_protocol.h"
+
+host_fsm_state_t host_protocol_get_state(void) { return HOST_FSM_DISARMED; }
+bool host_protocol_is_stop_requested(void) { return false; }
+motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
+    uint8_t length, motor_register_data_t *result) {
+    (void)id; (void)address; (void)length; (void)result;
+    assert(0); return MOTOR_REGISTER_BUSY;
+}
 
 static jmp_buf end_iteration;
 static unsigned mutex_depth, reads, feedback_reads, iterations, stop_after;

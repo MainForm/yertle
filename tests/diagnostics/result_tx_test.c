@@ -24,6 +24,10 @@ bool sensor_take_position_offsets(motor_position_offsets_t *value)
 { (void)value; return false; }
 bool sensor_request_position_offsets(uint16_t sequence)
 { (void)sequence; return false; }
+bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t address, uint8_t length)
+{ (void)sequence; (void)id; (void)address; (void)length; return false; }
+bool sensor_take_motor_register(motor_register_result_t *result)
+{ (void)result; return false; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 { (void)motor; (void)imu; return false; }
 bool motor_device_validate_targets(const motor_target_set_t *targets)

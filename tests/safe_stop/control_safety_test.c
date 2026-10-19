@@ -73,6 +73,10 @@ bool sensor_take_position_offsets(motor_position_offsets_t *result)
 { (void)result; return false; }
 bool sensor_request_position_offsets(uint16_t sequence)
 { (void)sequence; return false; }
+bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t address, uint8_t length)
+{ (void)sequence; (void)id; (void)address; (void)length; return false; }
+bool sensor_take_motor_register(motor_register_result_t *result)
+{ (void)result; return false; }
 void uart_diagnostics_send(void *opaque, uart_diag_sender_t send)
 { (void)opaque; (void)send; }
 bool motor_device_validate_targets(const motor_target_set_t *targets)

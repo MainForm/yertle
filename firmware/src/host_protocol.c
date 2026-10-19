@@ -37,6 +37,7 @@ enum message_type {
     MESSAGE_GET_SENSOR_FEEDBACK = 0x09U,
     MESSAGE_GET_FSM_STATE = 0x0AU,
     MESSAGE_GET_POSITION_OFFSETS = 0x0BU,
+    MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -45,7 +46,8 @@ enum message_type {
     MESSAGE_MOTOR_FEEDBACK = 0x8BU,
     MESSAGE_IMU_FEEDBACK = 0x8CU,
     MESSAGE_FSM_STATE = 0x8DU,
-    MESSAGE_POSITION_OFFSETS = 0x8EU
+    MESSAGE_POSITION_OFFSETS = 0x8EU,
+    MESSAGE_MOTOR_REGISTER = 0x8FU
 };
 
 enum error_code {
@@ -58,7 +60,8 @@ enum error_code {
     ERROR_INVALID_TARGET = 8U,
     ERROR_TARGET_BUSY = 9U,
     ERROR_FEEDBACK_UNAVAILABLE = 10U,
-    ERROR_QUERY_BUSY = 11U
+    ERROR_QUERY_BUSY = 11U,
+    ERROR_INVALID_REGISTER = 12U
 };
 
 enum event_code {
@@ -91,6 +94,7 @@ typedef struct {
     uint8_t decoded[YERTLE_PROTOCOL_MAX_RAW];
     bool host_connected;
     bool lease_established;
+    bool register_query_active;
     host_fsm_state_t state;
     TickType_t last_host_heartbeat_tick;
     TickType_t last_f103_heartbeat_tick;
@@ -335,6 +339,28 @@ static void send_position_offsets(protocol_context_t *context, const motor_posit
     send_frame(context, MESSAGE_POSITION_OFFSETS, payload, sizeof(payload));
 }
 
+static void send_motor_register(protocol_context_t *context, const motor_register_result_t *result)
+{
+    uint8_t payload[7U + MOTOR_REGISTER_MAX_LENGTH] = {
+        (uint8_t)result->request_sequence, (uint8_t)(result->request_sequence >> 8U),
+        result->motor_id, result->address, result->length, (uint8_t)result->status,
+        result->reading.servo_error
+    };
+    const uint16_t length = result->status == MOTOR_REGISTER_OK ? result->length : 0U;
+    for (uint16_t i = 0U; i < length; ++i) payload[7U + i] = result->reading.data[i];
+    (void)send_frame(context, MESSAGE_MOTOR_REGISTER, payload, 7U + length);
+}
+
+static void service_motor_register(protocol_context_t *context)
+{
+    if (!context->register_query_active) return;
+    motor_register_result_t result;
+    if (sensor_take_motor_register(&result)) {
+        send_motor_register(context, &result);
+        context->register_query_active = false;
+    }
+}
+
 static void send_motor_feedback(protocol_context_t *context, const motor_feedback_set_t *feedback)
 {
     for (uint8_t first = 0U; first < YERTLE_MOTOR_COUNT; first += 4U) {
@@ -439,7 +465,7 @@ static bool can_arm(const protocol_context_t *context)
 {
     return context->host_connected && context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
-           !host_protocol_is_stop_requested();
+           !host_protocol_is_stop_requested() && !context->register_query_active;
 }
 
 static void try_enter_control_ready(protocol_context_t *context)
@@ -540,7 +566,8 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_FLAGS);
         return;
     }
-    if (type != MESSAGE_SET_JOINT_TARGETS && ((raw[5] != 0U) || (raw[6] != 0U))) {
+    if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER &&
+        ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
     }
@@ -551,6 +578,31 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     expire_host_link(context);
 
     switch (type) {
+    case MESSAGE_GET_MOTOR_REGISTER: {
+        if (raw[5] != 3U || raw[6] != 0U) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
+            break;
+        }
+        const uint8_t id = raw[7], address = raw[8], length = raw[9];
+        if (!motor_register_request_valid(id, address, length)) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_REGISTER);
+            break;
+        }
+        if (context->state != HOST_FSM_DISARMED || host_protocol_is_stop_requested()) {
+            send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
+            break;
+        }
+        const motor_register_result_t busy = {
+            .request_sequence = sequence, .motor_id = id, .address = address,
+            .length = length, .status = MOTOR_REGISTER_BUSY
+        };
+        if (context->register_query_active || !sensor_request_motor_register(sequence, id, address, length)) {
+            send_motor_register(context, &busy);
+        } else {
+            context->register_query_active = true;
+        }
+        break;
+    }
     case MESSAGE_GET_POSITION_OFFSETS: {
         /* Read-only, asynchronous: no host lease/FSM/torque side effects. */
         const bool accepted = sensor_request_position_offsets(sequence);
@@ -681,6 +733,7 @@ void host_protocol_task(void *argument)
 
         motor_position_offsets_t offsets;
         if (sensor_take_position_offsets(&offsets)) send_position_offsets(&context, &offsets);
+        service_motor_register(&context);
 
         if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
             context.last_reported_unsafe_reason = requested_unsafe_reason;

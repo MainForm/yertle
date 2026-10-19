@@ -146,6 +146,7 @@ u16  crc16_ccitt          # CRC-16/CCITT-FALSE over preceding raw bytes
 | `GET_UART_STATS` | `0x08` | Read-only cumulative counters; replies with `UART_STATS`, no ARM or lease refresh |
 | `GET_FSM_STATE` | `0x0A` | Read-only FSM query; replies with `FSM_STATE`, without refreshing the lease |
 | `GET_POSITION_OFFSETS` | `0x0B` | Empty payload; schedules EEPROM offset reads for IDs 1..12, then returns `POSITION_OFFSETS` |
+| `GET_MOTOR_REGISTER` | `0x0C` | Three bytes: ID, start address, length; DISARMED-only raw READ, returns `MOTOR_REGISTER` without an ACK |
 
 `SET_JOINT_TARGETS` (`0x06`) has a fixed 60-byte payload: for IDs 1..12 in
 ascending order, five bytes each: position u16 LE [step], speed u16 LE [raw],
@@ -238,6 +239,75 @@ offset, not proof that calibration was never run. The value does not establish
 physical calibration accuracy. Motors are read sequentially, not atomically.
 Update firmware and client together; older firmware rejects request 0x0B.
 
+## Read-only motor register query
+
+`GET_MOTOR_REGISTER` (`0x0C`) adds a single-ID, read-only transaction. Existing
+message values and layouts, including `0x0B` / `0x8E`, are unchanged. The
+three-byte request payload is:
+
+```text
+u8 motor_id    # 1..12
+u8 address     # 0..255
+u8 length      # 1..32; address + length must be <=256 (no wrap)
+```
+
+The request is allowed only in DISARMED, with no pending fault, target timeout
+or SAFE_STOP. Invalid payload size returns NACK code 2; invalid ID/length/address
+span returns NACK code 12 (`ERROR_INVALID_REGISTER`); a prohibited state or
+pending safety action returns NACK code 5. NACK retains its existing four-byte
+layout: request type u8, request sequence u16 LE, error code u8.
+
+A valid request gets `MOTOR_REGISTER` (`0x8F`), with no separate success ACK:
+
+```text
+u16 request_sequence   # little-endian, correlates with the request
+u8  motor_id           # echoed
+u8  address            # echoed
+u8  length             # requested length, echoed even on failure
+u8  status
+u8  servo_error        # validated servo error bits, otherwise zero
+u8  data[length]       # present ONLY when status=0
+```
+
+| status | Meaning |
+|---:|---|
+| 0 | OK: matching ID, exact data length, valid checksum, no servo error |
+| 1 | BUSY: another query/result occupies the slot, snapshot/bus mutex unavailable, or a safety/state change cancels the accepted job before I/O |
+| 2 | COMMUNICATION_ERROR: driver not initialized, TX/RX failure or timeout |
+| 3 | REPLY_ERROR: invalid complete reply, checksum, ID or data-length mismatch |
+| 4 | SERVO_ERROR: valid reply from the requested ID with nonzero error bits |
+
+Successful payloads are `7 + length` bytes (maximum 39); failures are exactly
+7 bytes, not padded with fake data. These status numbers are specific to this
+message and are NOT the existing POSITION_OFFSETS driver-status enum.
+
+The host task validates/enqueues; the sensor task performs one bounded READ
+using the existing USART1 DMA/bus mutex, outside the feedback-snapshot mutex;
+the host task sends the result over USART2. Regular feedback and IMU collection
+remain enabled. Offset and register queries share one exclusive pending/result
+slot: a concurrent valid register request gets status 1 without overwriting the
+first request; an offset request retains its existing NACK code 11 behavior.
+Re-arming is inhibited from acceptance through result collection. A fault/stop
+before the worker starts skips the READ and yields status 1. A query never
+refreshes heartbeat/target timers, establishes a lease, submits targets, changes
+torque, calibrates, or unlocks/writes registers. Normal FSM processing remains
+active; a separate valid heartbeat can permit re-arming after the query finishes.
+
+The vendor parser validates the entire servo frame but only copies eight data
+bytes to its reply structure. The driver therefore uses a 38-byte RX buffer
+and copies raw data directly from the validated frame for this query. The
+vendor submodule and existing feedback/offset decoding are unchanged. Sign,
+units and register-specific interpretation belong to the PC/RPi client.
+
+There is one firmware READ attempt and one bounded local response-TX attempt
+per accepted request, not an internal retry loop. A lost response is recovered
+by the client's response-timeout retry (up to two total attempts), correlated
+by request sequence; failed statuses/NACKs are not response timeouts. The
+PC/RPi API/CLI for this message is implemented separately, not in this RTOS
+change. Existing clients can continue to use existing messages.
+
+Example: ID 1, address 48, length 2 has request payload `01 30 02`.
+
 ## Implemented responses
 
 | F103 → PC/RPi | Value | Payload |
@@ -252,6 +322,7 @@ Update firmware and client together; older firmware rejects request 0x0B.
 | `IMU_FEEDBACK` | `0x8C` | Cached IMU sample described above |
 | `FSM_STATE` | `0x8D` | Request sequence u16 LE, FSM state u8; no ACK for the query |
 | `POSITION_OFFSETS` | `0x8E` | Correlated 56-byte result for all 12 EEPROM offset reads; see above |
+| `MOTOR_REGISTER` | `0x8F` | Request sequence, ID, address, length, status, servo error, then raw bytes on success only |
 
 ### ACK/NACK local-TX retry
 
