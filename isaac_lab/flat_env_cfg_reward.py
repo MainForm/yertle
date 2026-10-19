@@ -106,7 +106,6 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES), "lower": -0.17453292519943295, "upper": 0.17453292519943295})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
-    rewards.swing_foot_clearance_barrier = RewTerm(func=swing_foot_clearance_barrier, weight=-0.03, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
     rewards.energy = RewTerm(func=joint_energy_l1, weight=-2.0e-5, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
@@ -380,12 +379,6 @@ def stance_width_barrier(env, sensor_cfg: SceneEntityCfg, lower_m: float = 0.12,
     left_y = (feet[:, LEFT_FEET, 1] * left).sum(dim=1) / left.sum(dim=1).clamp_min(1)
     right_y = (feet[:, RIGHT_FEET, 1] * right).sum(dim=1) / right.sum(dim=1).clamp_min(1)
     return _interval_barrier(torch.abs(left_y - right_y), lower_m, upper_m, transition_m) * valid
-
-
-def swing_foot_clearance_barrier(env, sensor_cfg: SceneEntityCfg, min_height_m: float = 0.035, transition_m: float = 0.015):
-    height = phase_generator._foot_sole_heights(env)
-    shortfall = ((min_height_m - height).clamp_min(0.0) / transition_m).square()
-    return torch.sum(shortfall * ~_foot_contact(env, sensor_cfg), dim=1)
 
 
 def foot_workspace_barrier(env, lower_x_m: float = -0.20, upper_x_m: float = 0.20, lower_abs_y_m: float = 0.03, upper_abs_y_m: float = 0.20, transition_m: float = 0.03):

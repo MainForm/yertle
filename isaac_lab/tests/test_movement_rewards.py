@@ -42,6 +42,11 @@ def env_for(commands, velocities=None, touches=None, air=None):
 
 
 class MovementRewardTests(unittest.TestCase):
+    def test_redundant_swing_clearance_barrier_is_removed(self):
+        self.assertFalse(any(isinstance(n,ast.FunctionDef) and n.name=='swing_foot_clearance_barrier' for n in TREE.body))
+        configure=next(n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name=='configure_rewards')
+        self.assertFalse(any(isinstance(n,ast.Attribute) and n.attr=='swing_foot_clearance_barrier' for n in ast.walk(configure)))
+
     def test_body_height_barrier_is_removed_from_registration_and_implementation(self):
         self.assertFalse(any(isinstance(n,ast.FunctionDef) and n.name=='body_height_barrier' for n in TREE.body))
         configure=next(n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name=='configure_rewards')

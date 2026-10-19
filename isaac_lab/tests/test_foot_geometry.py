@@ -49,20 +49,15 @@ class FootGeometryTests(unittest.TestCase):
             self.assertEqual(calls,['test.usd'])
         finally:geometry.load_sole_points=old
 
-    def test_both_clearance_rewards_use_the_surface_height(self):
+    def test_phase_clearance_uses_the_surface_height(self):
         phase_tree=ast.parse((ROOT/'phase_generator.py').read_text(encoding='utf-8'))
-        reward_tree=ast.parse((ROOT/'flat_env_cfg_reward.py').read_text(encoding='utf-8'))
         phase_node=next(n for n in phase_tree.body if isinstance(n,ast.FunctionDef) and n.name=='phase_swing_clearance')
-        barrier_node=next(n for n in reward_tree.body if isinstance(n,ast.FunctionDef) and n.name=='swing_foot_clearance_barrier')
         heights=torch.tensor([[0.,.1,0.,.1]])
         ns={'torch':torch,'SceneEntityCfg':object,'_foot_sole_heights':lambda env:heights,
             '_desired_contact':lambda env,name:torch.tensor([[False,False,True,True]]),
-            '_moving':lambda env,name:torch.tensor([True]),
-            'phase_generator':NS(_foot_sole_heights=lambda env:heights),
-            '_foot_contact':lambda env,sensor:torch.tensor([[False,False,True,True]])}
-        exec(compile(ast.Module(body=[phase_node,barrier_node],type_ignores=[]),'<actual clearance functions>','exec'),ns)
+            '_moving':lambda env,name:torch.tensor([True])}
+        exec(compile(ast.Module(body=[phase_node],type_ignores=[]),'<actual clearance function>','exec'),ns)
         torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([.25]))
-        torch.testing.assert_close(ns['swing_foot_clearance_barrier'](None,None),torch.tensor([(0.035/.015)**2]))
         heights[:] = .015
         torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([0.]))
         heights[:] = .03
