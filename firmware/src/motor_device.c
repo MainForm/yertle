@@ -18,7 +18,8 @@
 
 static SemaphoreHandle_t bus_mutex;
 static uint8_t tx_frame[STS3215_TX_BUF_SIZE];
-static uint8_t rx_frame[STS3215_RX_BUF_SIZE];
+/* Generic reads can exceed the vendor feedback-sized buffer (16 bytes). */
+static uint8_t rx_frame[MOTOR_REGISTER_MAX_LENGTH + 6U];
 static const uint8_t motor_ids[YERTLE_MOTOR_COUNT] = {
     1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U
 };
@@ -238,6 +239,54 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
     motor_uart_discard_rx(); /* Stop DMA on every success/error path. */
     (void)xSemaphoreGive(bus_mutex);
     return result;
+}
+
+motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
+                                                  uint8_t length, motor_register_data_t *result)
+{
+    if (result == NULL) return MOTOR_REGISTER_REPLY_ERROR;
+    memset(result, 0, sizeof(*result));
+    if (!motor_register_request_valid(id, address, length)) return MOTOR_REGISTER_REPLY_ERROR;
+    if (bus_mutex == NULL) return MOTOR_REGISTER_COMMUNICATION_ERROR;
+    if (!take_bus()) return MOTOR_REGISTER_BUSY;
+
+    motor_register_status_t status = MOTOR_REGISTER_REPLY_ERROR;
+    const int16_t frame_length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id, address, length);
+    motor_uart_discard_rx();
+    if (frame_length <= 0) {
+        motor_diagnostics_record(DIAG_BUILD_FAILED);
+    } else if (!motor_uart_write(tx_frame, (size_t)frame_length, MOTOR_UART_TIMEOUT_MS)) {
+        status = MOTOR_REGISTER_COMMUNICATION_ERROR;
+    } else {
+        size_t received_length = 0U;
+        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length, MOTOR_UART_TIMEOUT_MS)) {
+            status = MOTOR_REGISTER_COMMUNICATION_ERROR;
+        } else {
+            STS3215_Reply_t reply = { 0 };
+            const STS3215_Status_t parsed = STS3215_ParseReply(rx_frame, (uint16_t)received_length, &reply);
+            if (parsed != STS3215_OK && parsed != STS3215_ERR_SERVO_FAULT) {
+                motor_diagnostics_record(parsed == STS3215_ERR_BAD_CHECKSUM ? DIAG_BAD_CHECKSUM : DIAG_PARSE_ERROR);
+            } else if (reply.id != id) {
+                motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
+            } else if (parsed == STS3215_ERR_SERVO_FAULT) {
+                result->servo_error = reply.error;
+                motor_diagnostics_record(DIAG_SERVO_FAULT);
+                status = MOTOR_REGISTER_SERVO_ERROR;
+            } else if (reply.data_len != length) {
+                motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
+            } else {
+                /* ParseReply validates the complete checksum but only copies
+                 * eight data bytes. Copy the validated raw frame, not that
+                 * truncated vendor structure, for reads up to 32 bytes. */
+                memcpy(result->data, &rx_frame[5], length);
+                motor_diagnostics_record(DIAG_VALID_REPLY);
+                status = MOTOR_REGISTER_OK;
+            }
+        }
+    }
+    motor_uart_discard_rx();
+    (void)xSemaphoreGive(bus_mutex);
+    return status;
 }
 
 motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)

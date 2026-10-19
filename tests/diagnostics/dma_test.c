@@ -27,6 +27,9 @@ static bool inject_offset;
 static uint16_t offset_raw;
 static uint8_t offset_error, offset_reply_id, offset_data_length = 2U;
 static bool offset_bad_checksum;
+static bool inject_register, register_bad_checksum;
+static uint8_t register_address, register_length, register_reply_length;
+static uint8_t register_reply_id, register_error;
 void USART1_IRQHandler(void);
 void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
@@ -84,6 +87,18 @@ void vTaskDelay(uint32_t ticks) {
             if (offset_bad_checksum) packet[size-1U]^=1U;
             inject_bytes(packet,size);
         }
+        if (inject_register && q[4]==0x02) {
+            assert(q[5]==register_address && q[6]==register_length && q[3]==4U);
+            uint8_t packet[40];
+            const size_t size=reply(packet,register_reply_id ? register_reply_id : q[2],register_reply_length);
+            packet[4]=register_error;
+            for (unsigned i=0U;i<register_reply_length;++i) packet[5U+i]=(uint8_t)(0x80U+i);
+            unsigned sum=0U;
+            for (unsigned i=2U;i<size-1U;++i) sum+=packet[i];
+            packet[size-1U]=(uint8_t)~sum;
+            if (register_bad_checksum) packet[size-1U]^=1U;
+            inject_bytes(packet,size);
+        }
     }
 }
 static uint32_t transport_words[16], diagnostic_words[16];
@@ -99,6 +114,8 @@ static void capture(void *ctx,uint8_t type,const uint8_t *p,uint16_t length) {
     }
 }
 int main(void) {
+    motor_register_data_t registers;
+    assert(motor_device_read_register(1U,48U,2U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
     motor_position_offset_t not_initialized;
     assert(motor_device_read_position_offset(1U,&not_initialized)==MOTOR_DEVICE_NOT_INITIALIZED);
     motor_dma_init();
@@ -240,5 +257,36 @@ int main(void) {
         for (unsigned id=0U;id<YERTLE_MOTOR_COUNT;++id)
             assert(feedback.motor[id].servo_error==merged_errors[test]);
     }
-    puts("DMA driver/offset tests passed (mock registers, not board)");
+    const unsigned before_register=tx_simulations;
+    assert(motor_device_read_register(0U,48U,2U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(motor_device_read_register(13U,48U,2U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(motor_device_read_register(1U,48U,0U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(motor_device_read_register(1U,48U,33U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(motor_device_read_register(1U,225U,32U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(motor_device_read_register(1U,48U,2U,NULL)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(tx_simulations==before_register);
+    inject_register=true; register_address=224U; register_length=register_reply_length=32U;
+    assert(motor_device_read_register(12U,register_address,register_length,&registers)==MOTOR_REGISTER_OK);
+    for (unsigned i=0U;i<32U;++i) assert(registers.data[i]==0x80U+i);
+    assert(!(DMA1_Channel5->CCR & DMA_CCR_EN));
+    register_bad_checksum=true;
+    assert(motor_device_read_register(12U,224U,32U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    register_bad_checksum=false;
+    register_address=255U; register_length=register_reply_length=1U;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_OK && registers.data[0]==0x80U);
+    register_reply_id=2U;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    register_reply_id=0U; register_reply_length=2U;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    register_reply_length=1U; register_bad_checksum=true;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    register_bad_checksum=false; register_error=4U; register_reply_length=0U;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_SERVO_ERROR && registers.servo_error==4U);
+    inject_register=false;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
+    assert(registers.servo_error==0U && registers.data[0]==0U);
+    complete_tx=false;
+    assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
+    assert(!(DMA1_Channel4->CCR & DMA_CCR_EN) && !(DMA1_Channel5->CCR & DMA_CCR_EN));
+    puts("DMA driver/offset/register tests passed (mock registers, not board)");
 }
