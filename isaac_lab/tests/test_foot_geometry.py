@@ -61,8 +61,14 @@ class FootGeometryTests(unittest.TestCase):
             'phase_generator':NS(_foot_sole_heights=lambda env:heights),
             '_foot_contact':lambda env,sensor:torch.tensor([[False,False,True,True]])}
         exec(compile(ast.Module(body=[phase_node,barrier_node],type_ignores=[]),'<actual clearance functions>','exec'),ns)
-        torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([2.25]))
+        torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([.25]))
         torch.testing.assert_close(ns['swing_foot_clearance_barrier'](None,None),torch.tensor([(0.035/.015)**2]))
+        heights[:] = .015
+        torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([0.]))
+        heights[:] = .03
+        torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([0.]))
+        heights[:] = .0075
+        torch.testing.assert_close(ns['phase_swing_clearance'](None),torch.tensor([.125]))
 
 
 if __name__=='__main__':unittest.main()

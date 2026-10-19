@@ -142,7 +142,7 @@ def _foot_sole_heights(env):
     return foot_sole_heights(env)
 
 
-def phase_swing_clearance(env, command_name: str = "base_velocity", min_height_m: float = 0.045, transition_m: float = 0.015) -> torch.Tensor:
+def phase_swing_clearance(env, command_name: str = "base_velocity", min_height_m: float = 0.015, transition_m: float = 0.015) -> torch.Tensor:
     height = _foot_sole_heights(env)
     shortfall = ((min_height_m - height).clamp_min(0.0) / transition_m).square()
     return (shortfall * ~_desired_contact(env, command_name)).mean(dim=1) * _moving(env, command_name)

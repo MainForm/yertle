@@ -50,7 +50,7 @@ try:
     assert cfg.rewards.shoulder_posture_barrier.params['upper']==math.radians(10)
     assert cfg.rewards.fall_termination_penalty.weight==-250.0
     assert cfg.rewards.fall_termination_penalty.params=={'term_name':'body_tilt_and_nonsole_contact'}
-    assert cfg.rewards.phase_swing_clearance.params['min_height_m']==.045
+    assert cfg.rewards.phase_swing_clearance.params['min_height_m']==.015
     assert cfg.rewards.phase_swing_clearance.params['transition_m']==.015
     assert cfg.rewards.dof_pos_limits is None
     assert cfg.rewards.motor_operating_range_penalty.weight== -100.
