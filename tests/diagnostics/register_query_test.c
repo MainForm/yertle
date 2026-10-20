@@ -14,12 +14,17 @@ static uint8_t response_type, response[64];
 static size_t response_length;
 static uint16_t uncertain_mask;
 static motor_register_write_status_t write_status;
+static uint8_t diagnostic[64];static unsigned diagnostic_count;
 uint16_t motor_device_register_lock_uncertain_mask(void) { return uncertain_mask; }
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
     bool (*allowed)(void)) {
     assert(mutex_depth==0U && allowed() && motor_register_validate_write(request)==MOTOR_WRITE_OK);
     ++write_calls;
-    return (motor_register_write_report_t){ .status=write_status };
+    motor_register_write_report_t r=motor_register_initial_report();r.status=write_status;
+    r.lock_expected=1U;r.lock_actual=write_status==17U ? 0U : 1U;
+    r.lock_read_status=0U;r.lock_attempts=2U;r.lock_elapsed_ms=17U;
+    r.first_lock_failure=3U;r.first_lock_actual=0U;
+    return r;
 }
 
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (void *)1; }
@@ -45,6 +50,7 @@ bool host_uart_write_bytes(const uint8_t *data, size_t length)
     assert(validate_frame(raw,size,&response_type,&sequence));
     response_length=size-YERTLE_PROTOCOL_HEADER_SIZE-YERTLE_PROTOCOL_CRC_SIZE;
     memcpy(response,raw+YERTLE_PROTOCOL_HEADER_SIZE,response_length);
+    if(response_type==0x90U){assert(response_length==64U);memcpy(diagnostic,response,64U);++diagnostic_count;}
     ++tx_calls; return tx_success;
 }
 bool imu_device_init(void) { return false; }
@@ -80,6 +86,7 @@ static protocol_context_t reset(void)
     requested_fault_reason=HOST_FAULT_NONE;
     requested_target_timeout=safe_stop_completed=false;
     tick=100U; read_calls=tx_calls=write_calls=0U; response_length=0U;
+    diagnostic_count=0U;
     uncertain_mask=0U; write_status=MOTOR_WRITE_OK;
     read_status=MOTOR_REGISTER_OK; mutex_available=tx_success=true;
     protocol_context_t context={0}; context.state=HOST_FSM_DISARMED;
@@ -231,8 +238,11 @@ int main(void)
     assert(!sensor_request_motor_register_write(9U,&register_write_request));
     service_motor_register_write(&context);
     check_set_result(0x1234U,0U);
+    assert(diagnostic_count==1U && diagnostic[0]==1U && diagnostic[2]==0x34U && diagnostic[3]==0x12U);
+    assert(diagnostic[4]==1U && diagnostic[5]==21U && diagnostic[16]==2U && diagnostic[24]==17U);
     assert(!context.register_job_active && pending_safety_action==HOST_SAFETY_ACTION_NONE);
     set_payload(&context,0x1234U,golden,sizeof(golden)); check_set_result(0x1234U,0U);
+    assert(diagnostic_count==2U); /* Replay is correlated, no second motor job. */
     assert(write_calls==1U && !register_write_pending);
     uint8_t altered[5]; memcpy(altered,golden,5U); ++altered[4];
     set_payload(&context,0x1234U,altered,5U); check_set_result(0x1234U,12U);

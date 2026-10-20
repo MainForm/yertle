@@ -13,6 +13,7 @@
 #include "sensor_task.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
+#include "register_write_diagnostics.h"
 
 #define YERTLE_PROTOCOL_VERSION              1U
 #define YERTLE_PROTOCOL_MAX_PAYLOAD          64U
@@ -103,6 +104,7 @@ typedef struct {
     uint16_t sequence;
     uint8_t length, code;
     uint8_t payload[YERTLE_REGISTER_WRITE_PAYLOAD_MAX];
+    uint8_t diagnostic[REGISTER_WRITE_DIAGNOSTICS_LENGTH];
     TickType_t completed_tick;
 } register_write_cache_t;
 
@@ -115,6 +117,9 @@ typedef struct {
     bool register_job_active;
     uint8_t active_write_slot_plus_one; /* zero means GET/no active SET */
     register_write_cache_t write_cache[YERTLE_WRITE_CACHE_CAPACITY];
+    bool has_write_diagnostic;
+    uint8_t last_write_diagnostic[REGISTER_WRITE_DIAGNOSTICS_LENGTH];
+    uint32_t writes_completed,writes_failed;
     host_fsm_state_t state;
     TickType_t last_host_heartbeat_tick;
     TickType_t last_f103_heartbeat_tick;
@@ -390,6 +395,17 @@ static void service_motor_register_write(protocol_context_t *context)
     cached->code=(uint8_t)result.report.status;
     cached->complete=true;
     cached->completed_tick=xTaskGetTickCount();
+    const motor_register_write_request_t request={
+        .motor_id=cached->payload[0],.address=cached->payload[1],.length=cached->payload[2]
+    };
+    ++context->writes_completed;if(cached->code!=0U)++context->writes_failed;
+    register_write_diag_encode(cached->diagnostic,result.request_sequence,&request,&result.report,
+        context->writes_completed,context->writes_failed);
+    memcpy(context->last_write_diagnostic,cached->diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
+    context->has_write_diagnostic=true;
+    /* Precede the completion result so clients can attach the correlated detail
+     * without extending their ACK wait or requiring a new firmware capability. */
+    (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,cached->diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
     send_result(context,cached->code==0U ? MESSAGE_ACK : MESSAGE_NACK,
                 MESSAGE_SET_MOTOR_REGISTER,result.request_sequence,cached->code);
     context->active_write_slot_plus_one=0U;
@@ -419,6 +435,7 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         if (cached->length!=length || memcmp(cached->payload,payload,length)!=0) {
             send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
         } else if (cached->complete) {
+            (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,cached->diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
             send_result(context,cached->code==0U ? MESSAGE_ACK : MESSAGE_NACK,
                         MESSAGE_SET_MOTOR_REGISTER,sequence,cached->code);
         } /* Identical in-flight duplicate: no ACK and no second job. */
@@ -751,6 +768,8 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     case MESSAGE_GET_UART_STATS:
         /* Read-only diagnostic: does not refresh the control lease or ARM. */
         uart_diagnostics_send(context, send_diagnostic_frame);
+        if(context->has_write_diagnostic)
+            (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,context->last_write_diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
         break;
     case MESSAGE_HELLO:
         /* New connection gets a first-heartbeat grace period. Repeated HELLO
@@ -808,7 +827,10 @@ static void process_host_rx(protocol_context_t *context)
 
 void host_protocol_task(void *argument)
 {
-    protocol_context_t context = { 0 };
+    /* One host task owns the replay/diagnostic cache. Keep it off the 2 KiB
+     * task stack, especially when serializing nested UART diagnostic frames. */
+    static protocol_context_t context;
+    memset(&context,0,sizeof(context));
 
     (void) argument;
     context.last_host_heartbeat_tick = xTaskGetTickCount();
