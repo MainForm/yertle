@@ -12,6 +12,11 @@
 
 host_fsm_state_t host_protocol_get_state(void) { return HOST_FSM_DISARMED; }
 bool host_protocol_is_stop_requested(void) { return false; }
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
+    bool (*allowed)(void)) {
+    (void)request; (void)allowed; assert(0);
+    return (motor_register_write_report_t){0};
+}
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
     uint8_t length, motor_register_data_t *result) {
     (void)id; (void)address; (void)length; (void)result;

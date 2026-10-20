@@ -37,6 +37,11 @@ bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t addres
 { (void)sequence; (void)id; (void)address; (void)length; return false; }
 bool sensor_take_motor_register(motor_register_result_t *result)
 { (void)result; return false; }
+bool sensor_request_motor_register_write(uint16_t sequence, const motor_register_write_request_t *request)
+{ (void)sequence; (void)request; return false; }
+bool sensor_take_motor_register_write(motor_register_write_result_t *result)
+{ (void)result; return false; }
+uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 { (void)motor; (void)imu; return false; }
 bool motor_device_validate_targets(const motor_target_set_t *targets)

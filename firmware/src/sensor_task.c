@@ -20,6 +20,15 @@ static uint8_t offsets_next_index;
 static uint8_t offsets_attempt_count;
 static motor_register_result_t register_result;
 static bool register_pending, register_ready;
+static motor_register_write_request_t register_write_request;
+static motor_register_write_result_t register_write_result;
+static bool register_write_pending, register_write_ready;
+
+static bool diagnostic_job_available(void)
+{
+    return !offsets_pending && !offsets_ready && !register_pending && !register_ready &&
+           !register_write_pending && !register_write_ready;
+}
 
 bool sensor_task_init(void)
 {
@@ -45,7 +54,7 @@ bool sensor_request_position_offsets(uint16_t request_sequence)
 {
     if ((feedback_mutex == NULL) ||
         (xSemaphoreTake(feedback_mutex, pdMS_TO_TICKS(5U)) != pdTRUE)) return false;
-    const bool accepted = !offsets_pending && !offsets_ready && !register_pending && !register_ready;
+    const bool accepted = diagnostic_job_available();
     if (accepted) {
         memset(&position_offsets, 0, sizeof(position_offsets));
         position_offsets.request_sequence = request_sequence;
@@ -105,7 +114,7 @@ bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t addres
 {
     if (!motor_register_request_valid(id, address, length) || feedback_mutex == NULL ||
         xSemaphoreTake(feedback_mutex, pdMS_TO_TICKS(5U)) != pdTRUE) return false;
-    const bool accepted = !register_pending && !register_ready && !offsets_pending && !offsets_ready;
+    const bool accepted = diagnostic_job_available();
     if (accepted) {
         register_result = (motor_register_result_t){
             .request_sequence = sequence, .motor_id = id, .address = address, .length = length
@@ -147,6 +156,53 @@ static void collect_motor_register(void)
     }
 }
 
+static bool register_write_allowed(void)
+{
+    return host_protocol_get_state()==HOST_FSM_DISARMED && !host_protocol_is_stop_requested();
+}
+
+bool sensor_request_motor_register_write(uint16_t sequence, const motor_register_write_request_t *request)
+{
+    if (motor_register_validate_write(request)!=MOTOR_WRITE_OK || feedback_mutex==NULL ||
+        xSemaphoreTake(feedback_mutex,pdMS_TO_TICKS(5U))!=pdTRUE) return false;
+    const bool accepted=diagnostic_job_available();
+    if (accepted) {
+        register_write_request=*request;
+        register_write_result=(motor_register_write_result_t){ .request_sequence=sequence };
+        register_write_pending=true;
+    }
+    (void)xSemaphoreGive(feedback_mutex);
+    return accepted;
+}
+
+bool sensor_take_motor_register_write(motor_register_write_result_t *result)
+{
+    if (result==NULL || feedback_mutex==NULL ||
+        xSemaphoreTake(feedback_mutex,pdMS_TO_TICKS(5U))!=pdTRUE) return false;
+    const bool ready=register_write_ready;
+    if (ready) { *result=register_write_result; register_write_ready=false; }
+    (void)xSemaphoreGive(feedback_mutex);
+    return ready;
+}
+
+static void collect_motor_register_write(void)
+{
+    if (xSemaphoreTake(feedback_mutex,portMAX_DELAY)!=pdTRUE) return;
+    const bool pending=register_write_pending;
+    const motor_register_write_request_t request=register_write_request;
+    motor_register_write_result_t result=register_write_result;
+    (void)xSemaphoreGive(feedback_mutex);
+    if (!pending) return;
+    if (!register_write_allowed()) result.report.status=MOTOR_WRITE_INVALID_STATE;
+    else result.report=motor_device_write_register(&request,register_write_allowed);
+    if (xSemaphoreTake(feedback_mutex,portMAX_DELAY)==pdTRUE) {
+        register_write_result=result;
+        register_write_pending=false;
+        register_write_ready=true;
+        (void)xSemaphoreGive(feedback_mutex);
+    }
+}
+
 void sensor_task(void *argument)
 {
     (void) argument;
@@ -184,6 +240,7 @@ void sensor_task(void *argument)
         }
         collect_next_position_offset();
         collect_motor_register();
+        collect_motor_register_write();
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_PERIOD_MS));
     }
 }

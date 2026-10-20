@@ -31,6 +31,11 @@ typedef struct {
     motor_register_data_t reading;
 } motor_register_result_t;
 
+typedef struct {
+    uint16_t request_sequence;
+    motor_register_write_report_t report;
+} motor_register_write_result_t;
+
 bool sensor_task_init(void);
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu);
 /* One in-flight read-only job; up to five attempts per ID, first valid reply
@@ -41,6 +46,8 @@ bool sensor_take_position_offsets(motor_position_offsets_t *result);
  * snapshot mutex. A pending/completed result is never overwritten. */
 bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t address, uint8_t length);
 bool sensor_take_motor_register(motor_register_result_t *result);
+bool sensor_request_motor_register_write(uint16_t sequence, const motor_register_write_request_t *request);
+bool sensor_take_motor_register_write(motor_register_write_result_t *result);
 void sensor_task(void *argument);
 
 #endif /* SENSOR_TASK_H */

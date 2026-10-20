@@ -147,6 +147,7 @@ u16  crc16_ccitt          # CRC-16/CCITT-FALSE over preceding raw bytes
 | `GET_FSM_STATE` | `0x0A` | Read-only FSM query; replies with `FSM_STATE`, without refreshing the lease |
 | `GET_POSITION_OFFSETS` | `0x0B` | Empty payload; schedules EEPROM offset reads for IDs 1..12, then returns `POSITION_OFFSETS` |
 | `GET_MOTOR_REGISTER` | `0x0C` | Three bytes: ID, start address, length; DISARMED-only raw READ, returns `MOTOR_REGISTER` without an ACK |
+| `SET_MOTOR_REGISTER` | `0x0D` | Allow-listed register write, DISARMED and directly verified torque OFF; final ACK/NACK only after read-back and EEPROM cleanup |
 
 `SET_JOINT_TARGETS` (`0x06`) has a fixed 60-byte payload: for IDs 1..12 in
 ascending order, five bytes each: position u16 LE [step], speed u16 LE [raw],
@@ -307,6 +308,17 @@ PC/RPi API/CLI for this message is implemented separately, not in this RTOS
 change. Existing clients can continue to use existing messages.
 
 Example: ID 1, address 48, length 2 has request payload `01 30 02`.
+
+## Verified motor register write
+
+`SET_MOTOR_REGISTER` (`0x0D`) uses the existing ACK/NACK envelope and result TX
+retry FIFO. There is no new response type. See
+[MOTOR_REGISTER_WRITE.md](MOTOR_REGISTER_WRITE.md) for the exact payload,
+allow-list, failure codes 13..17, bounded lock recovery, diagnostics and the
+four-entry/60-second duplicate-suppression contract. GET/SET/offset work shares
+one exclusive job slot. Register jobs inhibit re-arm until their result has
+been collected; an unverified EEPROM lock restore additionally inhibits re-arm
+until verified recovery. Existing wire values/layouts are unchanged.
 
 ## Implemented responses
 

@@ -7,11 +7,20 @@
 #include "../../firmware/src/sensor_task.c"
 
 static TickType_t tick;
-static unsigned mutex_depth, read_calls, tx_calls;
+static unsigned mutex_depth, read_calls, tx_calls, write_calls;
 static bool mutex_available = true, tx_success = true;
 static motor_register_status_t read_status;
 static uint8_t response_type, response[64];
 static size_t response_length;
+static uint16_t uncertain_mask;
+static motor_register_write_status_t write_status;
+uint16_t motor_device_register_lock_uncertain_mask(void) { return uncertain_mask; }
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
+    bool (*allowed)(void)) {
+    assert(mutex_depth==0U && allowed() && motor_register_validate_write(request)==MOTOR_WRITE_OK);
+    ++write_calls;
+    return (motor_register_write_report_t){ .status=write_status };
+}
 
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (void *)1; }
 int xSemaphoreTake(SemaphoreHandle_t handle, TickType_t timeout)
@@ -65,11 +74,13 @@ static protocol_context_t reset(void)
 {
     assert(mutex_depth==0U);
     register_pending=register_ready=offsets_pending=offsets_ready=false;
+    register_write_pending=register_write_ready=false;
     published_state=HOST_FSM_DISARMED;
     pending_safety_action=HOST_SAFETY_ACTION_NONE;
     requested_fault_reason=HOST_FAULT_NONE;
     requested_target_timeout=safe_stop_completed=false;
-    tick=100U; read_calls=tx_calls=0U; response_length=0U;
+    tick=100U; read_calls=tx_calls=write_calls=0U; response_length=0U;
+    uncertain_mask=0U; write_status=MOTOR_WRITE_OK;
     read_status=MOTOR_REGISTER_OK; mutex_available=tx_success=true;
     protocol_context_t context={0}; context.state=HOST_FSM_DISARMED;
     return context;
@@ -102,6 +113,28 @@ static void check_reply(uint16_t sequence, uint8_t id, uint8_t address,
     if (status==MOTOR_REGISTER_OK)
         for (unsigned i=0U;i<length;++i) assert(response[7U+i]==0x80U+i);
 }
+
+static void set_payload(protocol_context_t *context, uint16_t sequence, const uint8_t *payload, uint8_t length)
+{
+    uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1U,MESSAGE_SET_MOTOR_REGISTER,0U};
+    raw[3]=(uint8_t)sequence; raw[4]=(uint8_t)(sequence>>8U); raw[5]=length;
+    memcpy(raw+7U,payload,length);
+    const size_t size=9U+length;
+    const uint16_t crc=crc16_ccitt(raw,size-2U);
+    raw[size-2U]=(uint8_t)crc; raw[size-1U]=(uint8_t)(crc>>8U);
+    uint8_t encoded[YERTLE_PROTOCOL_MAX_ENCODED], decoded[YERTLE_PROTOCOL_MAX_RAW];
+    size_t decoded_length;
+    const size_t encoded_length=cobs_encode(raw,size,encoded);
+    assert(cobs_decode(encoded,encoded_length,decoded,&decoded_length));
+    assert(decoded_length==size && memcmp(raw,decoded,size)==0);
+    handle_frame(context,decoded,decoded_length);
+}
+static void check_set_result(uint16_t sequence, uint8_t code)
+{
+    assert(response_type==(code==0U ? MESSAGE_ACK : MESSAGE_NACK) && response_length==4U);
+    assert(response[0]==0x0dU && response[1]==(uint8_t)sequence && response[2]==(uint8_t)(sequence>>8U));
+    assert(response[3]==code);
+}
 int main(void)
 {
     assert(sensor_task_init());
@@ -110,14 +143,14 @@ int main(void)
     assert(!sensor_request_motor_register(1U,0U,0U,1U));
     /* Full 32-byte raw response, no ACK, no UART work in host handler. */
     request(&context,0x1234U,12U,224U,32U,3U);
-    assert(tx_calls==0U && read_calls==0U && register_pending && context.register_query_active);
+    assert(tx_calls==0U && read_calls==0U && register_pending && context.register_job_active);
     assert(!context.host_connected && !context.lease_established && context.last_host_heartbeat_tick==0U);
     assert(!sensor_request_position_offsets(2U));
     collect_motor_register();
     assert(read_calls==1U && register_ready && tx_calls==0U);
     assert(!sensor_request_motor_register(2U,1U,0U,1U));
     service_motor_register(&context);
-    assert(tx_calls==1U && !context.register_query_active && !register_ready);
+    assert(tx_calls==1U && !context.register_job_active && !register_ready);
     check_reply(0x1234U,12U,224U,32U,MOTOR_REGISTER_OK);
     assert(published_state==HOST_FSM_DISARMED && pending_safety_action==HOST_SAFETY_ACTION_NONE);
 
@@ -157,7 +190,7 @@ int main(void)
     context=reset(); assert(sensor_request_position_offsets(9U));
     request(&context,3U,1U,48U,2U,3U);
     check_reply(3U,1U,48U,2U,MOTOR_REGISTER_BUSY);
-    assert(!context.register_query_active && offsets_pending);
+    assert(!context.register_job_active && offsets_pending);
     context=reset(); mutex_available=false;
     request(&context,4U,1U,48U,2U,3U);
     check_reply(4U,1U,48U,2U,MOTOR_REGISTER_BUSY);
@@ -185,7 +218,99 @@ int main(void)
     context=reset(); request(&context,8U,1U,48U,2U,3U);
     collect_motor_register(); tx_success=false; service_motor_register(&context);
     service_motor_register(&context);
-    assert(read_calls==1U && tx_calls==1U && !context.register_query_active);
-    puts("register query: raw32, validation, DISARMED gate, async/BUSY, status, lease isolation and no retry passed");
+    assert(read_calls==1U && tx_calls==1U && !context.register_job_active);
+    /* Document's payload golden vector; completion ACK, never acceptance ACK. */
+    const uint8_t golden[]={1U,0x15U,1U,1U,0x20U};
+    context=reset(); set_payload(&context,0x1234U,golden,sizeof(golden));
+    assert(register_write_pending && context.register_job_active && write_calls==0U && tx_calls==0U);
+    assert(!sensor_request_position_offsets(9U) && !sensor_request_motor_register(9U,1U,48U,2U));
+    assert(!context.host_connected && !context.lease_established && context.last_host_heartbeat_tick==0U);
+    set_payload(&context,0x1234U,golden,sizeof(golden)); /* In-flight duplicate. */
+    assert(tx_calls==0U && write_calls==0U);
+    collect_motor_register_write(); assert(write_calls==1U && register_write_ready && tx_calls==0U);
+    assert(!sensor_request_motor_register_write(9U,&register_write_request));
+    service_motor_register_write(&context);
+    check_set_result(0x1234U,0U);
+    assert(!context.register_job_active && pending_safety_action==HOST_SAFETY_ACTION_NONE);
+    set_payload(&context,0x1234U,golden,sizeof(golden)); check_set_result(0x1234U,0U);
+    assert(write_calls==1U && !register_write_pending);
+    uint8_t altered[5]; memcpy(altered,golden,5U); ++altered[4];
+    set_payload(&context,0x1234U,altered,5U); check_set_result(0x1234U,12U);
+    assert(write_calls==1U);
+
+    const uint8_t startup_torque[]={1U,0x18U,1U,1U,16U};
+    context=reset(); set_payload(&context,7U,startup_torque,sizeof(startup_torque));
+    assert(register_write_pending && register_write_request.address==0x18U &&
+           register_write_request.length==1U && register_write_request.data[0]==16U);
+    collect_motor_register_write(); service_motor_register_write(&context);
+    check_set_result(7U,0U); assert(write_calls==1U);
+
+    const uint8_t outcomes[]={0U,5U,11U,12U,13U,14U,15U,16U,17U};
+    for (unsigned i=0U;i<sizeof(outcomes);++i) {
+        context=reset(); write_status=(motor_register_write_status_t)outcomes[i];
+        set_payload(&context,8U,golden,5U); collect_motor_register_write();
+        service_motor_register_write(&context); check_set_result(8U,outcomes[i]);
+        set_payload(&context,8U,golden,5U); check_set_result(8U,outcomes[i]);
+        assert(write_calls==1U);
+    }
+    uint8_t invalid_set[][6]={
+        {0U,21U,1U,1U,32U,0U}, {13U,21U,1U,1U,32U,0U}, {254U,21U,1U,1U,32U,0U},
+        {1U,21U,1U,2U,32U,0U}, {1U,21U,1U,1U,255U,0U}, {1U,255U,2U,1U,0U,0U},
+        {1U,16U,2U,1U,0xe9U,3U}
+    };
+    for (unsigned i=0U;i<sizeof(invalid_set)/sizeof(invalid_set[0]);++i) {
+        context=reset(); set_payload(&context,9U,invalid_set[i],(uint8_t)(4U+invalid_set[i][2]));
+        check_set_result(9U,12U); assert(write_calls==0U && !register_write_pending);
+    }
+    context=reset(); uint8_t forbidden[]={1U,40U,1U,0U,1U};
+    set_payload(&context,9U,forbidden,5U); check_set_result(9U,13U);
+    forbidden[1]=21U; set_payload(&context,9U,forbidden,5U); check_set_result(9U,13U);
+    context=reset(); set_payload(&context,9U,golden,4U); check_set_result(9U,2U);
+    const uint8_t zero_length[]={1U,21U,0U,1U};
+    set_payload(&context,9U,zero_length,4U); check_set_result(9U,12U);
+    for (unsigned i=0U;i<3U;++i) {
+        context=reset(); context.state=published_state=rejected[i];
+        set_payload(&context,9U,golden,5U); check_set_result(9U,5U); assert(write_calls==0U);
+    }
+    context=reset(); pending_safety_action=HOST_SAFETY_ACTION_SAFE_STOP;
+    set_payload(&context,9U,golden,5U); check_set_result(9U,5U);
+    context=reset(); assert(sensor_request_position_offsets(9U));
+    set_payload(&context,10U,golden,5U); check_set_result(10U,11U);
+    context=reset(); request(&context,9U,1U,48U,2U,3U);
+    set_payload(&context,10U,golden,5U); check_set_result(10U,11U);
+    context=reset(); set_payload(&context,9U,golden,5U);
+    request(&context,10U,1U,48U,2U,3U); check_reply(10U,1U,48U,2U,MOTOR_REGISTER_BUSY);
+    context=reset(); set_payload(&context,9U,golden,5U);
+    host_protocol_latch_fault(HOST_FAULT_DRIVER);
+    collect_motor_register_write(); service_motor_register_write(&context);
+    check_set_result(9U,5U); assert(write_calls==0U);
+
+    /* Completion queue backpressure must not lose the job result or rerun it. */
+    context=reset(); set_payload(&context,9U,golden,5U); collect_motor_register_write();
+    context.result_count=YERTLE_RESULT_QUEUE_CAPACITY;
+    service_motor_register_write(&context); assert(register_write_ready && context.register_job_active);
+    context.result_count=0U; tx_success=false; service_motor_register_write(&context);
+    assert(context.result_count==1U && write_calls==1U);
+    tick+=10U; tx_success=true; service_result_tx(&context);
+    check_set_result(9U,0U); assert(write_calls==1U && context.result_count==0U);
+
+    context=reset(); context.host_connected=context.lease_established=true;
+    set_payload(&context,9U,golden,5U); assert(!can_arm(&context));
+    collect_motor_register_write(); assert(!can_arm(&context));
+    uncertain_mask=1U; service_motor_register_write(&context); assert(!can_arm(&context));
+    uncertain_mask=0U; assert(can_arm(&context));
+
+    /* Fixed cache never evicts an unexpired entry to allow a duplicate write.
+     * Past the documented retention window, sequence reuse is a NEW request. */
+    context=reset();
+    for (unsigned i=0U;i<YERTLE_WRITE_CACHE_CAPACITY;++i) {
+        set_payload(&context,(uint16_t)i,golden,5U);
+        collect_motor_register_write(); service_motor_register_write(&context);
+    }
+    set_payload(&context,99U,golden,5U); check_set_result(99U,11U);
+    assert(write_calls==YERTLE_WRITE_CACHE_CAPACITY);
+    tick+=YERTLE_WRITE_CACHE_LIFETIME_MS;
+    set_payload(&context,99U,golden,5U); assert(register_write_pending);
+    puts("register GET/SET: wire validation, async completion, exclusive jobs, replay/cache, safety and re-arm gates passed");
     return 0;
 }

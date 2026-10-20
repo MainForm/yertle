@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -28,6 +29,9 @@
 #define YERTLE_RESULT_MAX_ATTEMPTS             3U
 #define YERTLE_RESULT_RETRY_MS                10U
 #define YERTLE_RESULT_MAX_AGE_MS             250U
+#define YERTLE_WRITE_CACHE_CAPACITY            4U
+#define YERTLE_WRITE_CACHE_LIFETIME_MS      60000U
+#define YERTLE_REGISTER_WRITE_PAYLOAD_MAX (4U + MOTOR_REGISTER_MAX_LENGTH)
 
 enum message_type {
     MESSAGE_HELLO = 0x01U,
@@ -38,6 +42,7 @@ enum message_type {
     MESSAGE_GET_FSM_STATE = 0x0AU,
     MESSAGE_GET_POSITION_OFFSETS = 0x0BU,
     MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
+    MESSAGE_SET_MOTOR_REGISTER = 0x0DU,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -61,7 +66,12 @@ enum error_code {
     ERROR_TARGET_BUSY = 9U,
     ERROR_FEEDBACK_UNAVAILABLE = 10U,
     ERROR_QUERY_BUSY = 11U,
-    ERROR_INVALID_REGISTER = 12U
+    ERROR_INVALID_REGISTER = 12U,
+    ERROR_REGISTER_WRITE_FORBIDDEN = 13U,
+    ERROR_REGISTER_IO_ERROR = 14U,
+    ERROR_REGISTER_VERIFY_MISMATCH = 15U,
+    ERROR_REGISTER_SERVO_ERROR = 16U,
+    ERROR_REGISTER_LOCK_RESTORE_FAILED = 17U
 };
 
 enum event_code {
@@ -89,12 +99,22 @@ typedef struct {
 } pending_result_t;
 
 typedef struct {
+    bool valid, complete;
+    uint16_t sequence;
+    uint8_t length, code;
+    uint8_t payload[YERTLE_REGISTER_WRITE_PAYLOAD_MAX];
+    TickType_t completed_tick;
+} register_write_cache_t;
+
+typedef struct {
     uint8_t encoded[YERTLE_PROTOCOL_MAX_ENCODED];
     size_t encoded_length;
     uint8_t decoded[YERTLE_PROTOCOL_MAX_RAW];
     bool host_connected;
     bool lease_established;
-    bool register_query_active;
+    bool register_job_active;
+    uint8_t active_write_slot_plus_one; /* zero means GET/no active SET */
+    register_write_cache_t write_cache[YERTLE_WRITE_CACHE_CAPACITY];
     host_fsm_state_t state;
     TickType_t last_host_heartbeat_tick;
     TickType_t last_f103_heartbeat_tick;
@@ -353,12 +373,83 @@ static void send_motor_register(protocol_context_t *context, const motor_registe
 
 static void service_motor_register(protocol_context_t *context)
 {
-    if (!context->register_query_active) return;
+    if (!context->register_job_active || context->active_write_slot_plus_one!=0U) return;
     motor_register_result_t result;
     if (sensor_take_motor_register(&result)) {
         send_motor_register(context, &result);
-        context->register_query_active = false;
+        context->register_job_active = false;
     }
+}
+
+static void service_motor_register_write(protocol_context_t *context)
+{
+    if (context->active_write_slot_plus_one==0U || context->result_count==YERTLE_RESULT_QUEUE_CAPACITY) return;
+    motor_register_write_result_t result;
+    if (!sensor_take_motor_register_write(&result)) return;
+    register_write_cache_t *cached=&context->write_cache[context->active_write_slot_plus_one-1U];
+    cached->code=(uint8_t)result.report.status;
+    cached->complete=true;
+    cached->completed_tick=xTaskGetTickCount();
+    send_result(context,cached->code==0U ? MESSAGE_ACK : MESSAGE_NACK,
+                MESSAGE_SET_MOTOR_REGISTER,result.request_sequence,cached->code);
+    context->active_write_slot_plus_one=0U;
+    context->register_job_active=false;
+}
+
+static void handle_motor_register_write(protocol_context_t *context, uint16_t sequence,
+                                        const uint8_t *payload, uint16_t length)
+{
+    if (length<4U || length!=4U+payload[2]) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_LENGTH);
+        return;
+    }
+    if (length>YERTLE_REGISTER_WRITE_PAYLOAD_MAX) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
+        return;
+    }
+    int free_slot=-1;
+    const TickType_t now=xTaskGetTickCount();
+    for (unsigned i=0U;i<YERTLE_WRITE_CACHE_CAPACITY;++i) {
+        register_write_cache_t *cached=&context->write_cache[i];
+        if (cached->valid && cached->complete &&
+            (TickType_t)(now-cached->completed_tick)>=pdMS_TO_TICKS(YERTLE_WRITE_CACHE_LIFETIME_MS))
+            cached->valid=false;
+        if (!cached->valid) { if (free_slot<0) free_slot=(int)i; continue; }
+        if (cached->sequence!=sequence) continue;
+        if (cached->length!=length || memcmp(cached->payload,payload,length)!=0) {
+            send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
+        } else if (cached->complete) {
+            send_result(context,cached->code==0U ? MESSAGE_ACK : MESSAGE_NACK,
+                        MESSAGE_SET_MOTOR_REGISTER,sequence,cached->code);
+        } /* Identical in-flight duplicate: no ACK and no second job. */
+        return;
+    }
+    motor_register_write_request_t request={
+        .motor_id=payload[0], .address=payload[1], .length=payload[2], .options=payload[3]
+    };
+    if (request.length>MOTOR_REGISTER_MAX_LENGTH) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
+        return;
+    }
+    memcpy(request.data,payload+4U,request.length);
+    const motor_register_write_status_t status=motor_register_validate_write(&request);
+    if (status!=MOTOR_WRITE_OK) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,(uint8_t)status);
+        return;
+    }
+    if (context->state!=HOST_FSM_DISARMED || host_protocol_is_stop_requested()) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_STATE);
+        return;
+    }
+    if (context->register_job_active || free_slot<0 || !sensor_request_motor_register_write(sequence,&request)) {
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_QUERY_BUSY);
+        return;
+    }
+    register_write_cache_t *cached=&context->write_cache[free_slot];
+    *cached=(register_write_cache_t){ .valid=true, .sequence=sequence, .length=(uint8_t)length };
+    memcpy(cached->payload,payload,length);
+    context->active_write_slot_plus_one=(uint8_t)(free_slot+1);
+    context->register_job_active=true;
 }
 
 static void send_motor_feedback(protocol_context_t *context, const motor_feedback_set_t *feedback)
@@ -465,7 +556,8 @@ static bool can_arm(const protocol_context_t *context)
 {
     return context->host_connected && context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
-           !host_protocol_is_stop_requested() && !context->register_query_active;
+           !host_protocol_is_stop_requested() && !context->register_job_active &&
+           motor_device_register_lock_uncertain_mask()==0U;
 }
 
 static void try_enter_control_ready(protocol_context_t *context)
@@ -566,7 +658,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_FLAGS);
         return;
     }
-    if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER &&
+    if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
@@ -578,6 +670,10 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     expire_host_link(context);
 
     switch (type) {
+    case MESSAGE_SET_MOTOR_REGISTER:
+        handle_motor_register_write(context,sequence,raw+YERTLE_PROTOCOL_HEADER_SIZE,
+                                    (uint16_t)raw[5] | ((uint16_t)raw[6]<<8U));
+        break;
     case MESSAGE_GET_MOTOR_REGISTER: {
         if (raw[5] != 3U || raw[6] != 0U) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
@@ -596,10 +692,10 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             .request_sequence = sequence, .motor_id = id, .address = address,
             .length = length, .status = MOTOR_REGISTER_BUSY
         };
-        if (context->register_query_active || !sensor_request_motor_register(sequence, id, address, length)) {
+        if (context->register_job_active || !sensor_request_motor_register(sequence, id, address, length)) {
             send_motor_register(context, &busy);
         } else {
-            context->register_query_active = true;
+            context->register_job_active = true;
         }
         break;
     }
@@ -734,6 +830,7 @@ void host_protocol_task(void *argument)
         motor_position_offsets_t offsets;
         if (sensor_take_position_offsets(&offsets)) send_position_offsets(&context, &offsets);
         service_motor_register(&context);
+        service_motor_register_write(&context);
 
         if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
             context.last_reported_unsafe_reason = requested_unsafe_reason;
