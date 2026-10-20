@@ -2,6 +2,7 @@
 #define MOTOR_DEVICE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define YERTLE_MOTOR_COUNT 12U
@@ -27,6 +28,61 @@ static inline bool motor_register_request_valid(uint8_t id, uint8_t address, uin
     return id >= 1U && id <= YERTLE_MOTOR_COUNT && length >= 1U &&
            length <= MOTOR_REGISTER_MAX_LENGTH && (uint16_t)address + length <= 256U;
 }
+
+/* SET 0x0D uses existing ACK/NACK result codes, not GET 0x8F status. */
+typedef enum {
+    MOTOR_WRITE_OK = 0, MOTOR_WRITE_INVALID_STATE = 5, MOTOR_WRITE_BUSY = 11,
+    MOTOR_WRITE_INVALID_REGISTER = 12, MOTOR_WRITE_FORBIDDEN = 13,
+    MOTOR_WRITE_IO_ERROR = 14, MOTOR_WRITE_VERIFY_MISMATCH = 15,
+    MOTOR_WRITE_SERVO_ERROR = 16, MOTOR_WRITE_LOCK_RESTORE_FAILED = 17
+} motor_register_write_status_t;
+#define MOTOR_REGISTER_ALLOW_EEPROM 1U
+typedef struct {
+    uint8_t motor_id, address, length, options;
+    uint8_t data[MOTOR_REGISTER_MAX_LENGTH];
+} motor_register_write_request_t;
+
+/* FEETECH STS memory table and vendored docs/sts3215_memory_table.md:
+ * P/D/I 0..254; max/current torque limit 0..1000, u16 little-endian.
+ * Exact individual widths only. Never infer limits from DEFAULT constants. */
+static inline motor_register_write_status_t motor_register_validate_write(
+    const motor_register_write_request_t *request)
+{
+    if (request == NULL || !motor_register_request_valid(request->motor_id, request->address, request->length) ||
+        (request->options & ~MOTOR_REGISTER_ALLOW_EEPROM) != 0U) return MOTOR_WRITE_INVALID_REGISTER;
+    uint8_t width;
+    uint16_t maximum;
+    switch (request->address) {
+    case 0x10U: case 0x30U: width=2U; maximum=1000U; break;
+    case 0x15U: case 0x16U: case 0x17U: width=1U; maximum=254U; break;
+    default: return MOTOR_WRITE_FORBIDDEN;
+    }
+    if (request->length != width) return MOTOR_WRITE_INVALID_REGISTER;
+    const uint16_t value=(uint16_t)request->data[0] |
+        (width==2U ? (uint16_t)((uint16_t)request->data[1]<<8U) : 0U);
+    if (value > maximum) return MOTOR_WRITE_INVALID_REGISTER;
+    if (request->address != 0x30U && (request->options & MOTOR_REGISTER_ALLOW_EEPROM)==0U)
+        return MOTOR_WRITE_FORBIDDEN;
+    return MOTOR_WRITE_OK;
+}
+
+typedef enum {
+    MOTOR_WRITE_STAGE_NONE, MOTOR_WRITE_STAGE_TORQUE, MOTOR_WRITE_STAGE_RESPONSE_LEVEL,
+    MOTOR_WRITE_STAGE_RECOVER_LOCK, MOTOR_WRITE_STAGE_READ_INITIAL, MOTOR_WRITE_STAGE_READ_LOCK,
+    MOTOR_WRITE_STAGE_UNLOCK, MOTOR_WRITE_STAGE_TARGET, MOTOR_WRITE_STAGE_VERIFY,
+    MOTOR_WRITE_STAGE_RESTORE
+} motor_register_write_stage_t;
+typedef struct {
+    motor_register_write_status_t status, primary_status;
+    motor_register_write_stage_t failure_stage;
+    uint8_t servo_error, cleanup_servo_error;
+    bool target_write_attempted, lock_restore_attempted, lock_restore_verified;
+} motor_register_write_report_t;
+typedef struct {
+    uint32_t completed, failed;
+    uint8_t motor_id, address;
+    motor_register_write_report_t report;
+} motor_register_write_diagnostics_t;
 
 typedef struct {
     uint16_t position;
@@ -86,5 +142,11 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
  * torque changes, retry loop or register-dependent conversion. */
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
                                                   uint8_t length, motor_register_data_t *result);
+/* allowed() is rechecked under the bus mutex before every non-cleanup write.
+ * Cleanup is bounded and cannot be skipped by a newly arriving safety request. */
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
+                                                        bool (*allowed)(void));
+uint16_t motor_device_register_lock_uncertain_mask(void);
+bool motor_device_get_register_write_diagnostics(motor_register_write_diagnostics_t *result);
 
 #endif /* MOTOR_DEVICE_H */

@@ -96,3 +96,15 @@ else()
     target_compile_options(firmware_register_query_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME firmware_register_query_test COMMAND firmware_register_query_test)
+
+add_executable(firmware_register_write_driver_test register_write_driver_test.c
+    ../../firmware/src/motor_device.c ../../third_party/stm32-sts3215-lib/src/sts3215_protocol.c)
+target_include_directories(firmware_register_write_driver_test PRIVATE . ../../firmware/include
+    ../../third_party/stm32-sts3215-lib/inc)
+target_compile_definitions(firmware_register_write_driver_test PRIVATE SENSOR_TEST=1)
+if(MSVC)
+    target_compile_options(firmware_register_write_driver_test PRIVATE /W4 /WX /UNDEBUG /utf-8)
+else()
+    target_compile_options(firmware_register_write_driver_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME firmware_register_write_driver_test COMMAND firmware_register_write_driver_test)
