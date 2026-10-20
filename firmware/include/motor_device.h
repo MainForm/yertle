@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define YERTLE_MOTOR_COUNT 12U
 #define YERTLE_ALL_MOTORS_MASK ((uint16_t)((1U << YERTLE_MOTOR_COUNT) - 1U))
@@ -79,7 +80,26 @@ typedef struct {
     motor_register_write_stage_t failure_stage;
     uint8_t servo_error, cleanup_servo_error;
     bool target_write_attempted, lock_restore_attempted, lock_restore_verified;
+    bool lock_deadline_exhausted;
+    uint8_t lock_expected, lock_actual, lock_read_status, lock_write_status;
+    uint8_t lock_attempts, lock_read_servo_error, lock_write_servo_error;
+    uint8_t first_lock_failure, first_lock_read_status, first_lock_write_status,
+            first_lock_actual, first_lock_servo_error;
+    uint32_t elapsed_ms, lock_elapsed_ms, lock_write_attempts;
 } motor_register_write_report_t;
+
+#define MOTOR_LOCK_ATTEMPT_LIMIT 2U
+#define MOTOR_LOCK_UART_TIMEOUT_MS 10U
+#define MOTOR_LOCK_SETTLE_MS 2U
+#define MOTOR_LOCK_BUDGET_MS 100U
+/* Unavailable register/status bytes must never masquerade as measured zero. */
+static inline motor_register_write_report_t motor_register_initial_report(void)
+{
+    motor_register_write_report_t r;memset(&r,0,sizeof(r));
+    r.lock_expected=r.lock_actual=r.lock_read_status=r.lock_write_status=255U;
+    r.first_lock_read_status=r.first_lock_write_status=r.first_lock_actual=255U;
+    return r;
+}
 typedef struct {
     uint32_t completed, failed;
     uint8_t motor_id, address;

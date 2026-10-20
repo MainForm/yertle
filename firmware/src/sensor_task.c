@@ -169,6 +169,7 @@ bool sensor_request_motor_register_write(uint16_t sequence, const motor_register
     if (accepted) {
         register_write_request=*request;
         register_write_result=(motor_register_write_result_t){ .request_sequence=sequence };
+        register_write_result.report=motor_register_initial_report();
         register_write_pending=true;
     }
     (void)xSemaphoreGive(feedback_mutex);
@@ -193,7 +194,7 @@ static void collect_motor_register_write(void)
     motor_register_write_result_t result=register_write_result;
     (void)xSemaphoreGive(feedback_mutex);
     if (!pending) return;
-    if (!register_write_allowed()) result.report.status=MOTOR_WRITE_INVALID_STATE;
+    if (!register_write_allowed()) result.report.status=result.report.primary_status=MOTOR_WRITE_INVALID_STATE;
     else result.report=motor_device_write_register(&request,register_write_allowed);
     if (xSemaphoreTake(feedback_mutex,portMAX_DELAY)==pdTRUE) {
         register_write_result=result;

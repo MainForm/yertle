@@ -16,14 +16,16 @@ static int fault_at=-1, cancel_at=-1;
 enum fault_kind { NONE, RX_TIMEOUT, TX_TIMEOUT, CHECKSUM, WRONG_ID, WRONG_LENGTH, SERVO, MISMATCH };
 static enum fault_kind fault;
 static bool lock_available=true, safe=true, ignore_restore;
+static uint32_t test_tick=100U, operation_cost;
+static unsigned drop_restore_count;
 static uint8_t target_address;
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { return (void *)1; }
 int xSemaphoreTake(SemaphoreHandle_t handle, TickType_t timeout)
 { (void)timeout; assert(handle && mutex_depth==0U); if (!lock_available) return 0; ++mutex_depth; return 1; }
 int xSemaphoreGive(SemaphoreHandle_t handle)
 { assert(handle && mutex_depth==1U); --mutex_depth; return 1; }
-uint32_t xTaskGetTickCount(void) { return 100U; }
-void vTaskDelay(uint32_t ticks) { assert(mutex_depth==1U && ticks==10U); }
+uint32_t xTaskGetTickCount(void) { return test_tick; }
+void vTaskDelay(uint32_t ticks) { assert(mutex_depth==1U && (ticks==10U || ticks==2U));test_tick+=ticks; }
 void motor_uart_init(void) {}
 void motor_uart_discard_rx(void) {}
 static bool allowed(void) { return safe; }
@@ -32,7 +34,8 @@ void motor_transport_record(enum motor_transport_event event) { (void)event; }
 void motor_diagnostics_masks(uint16_t motion, uint16_t current) { (void)motion; (void)current; }
 bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
 {
-    assert(mutex_depth==1U && timeout_ms==5U && length>=8U && data[2]>=1U && data[2]<=12U);
+    assert(mutex_depth==1U && timeout_ms>=1U && timeout_ms<=10U && length>=8U && data[2]>=1U && data[2]<=12U);
+    test_tick+=operation_cost;
     unsigned sum=0U; for (size_t i=2U;i<length;++i) sum+=data[i]; assert((sum & 255U)==255U);
     const unsigned operation=operations++;
     const bool fail=(int)operation==fault_at;
@@ -44,7 +47,9 @@ bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
         n=(uint8_t)(length-7U);
         if (address==target_address) ++target_writes;
         else { assert(address==55U && n==1U); if (data[6]==0U) ++unlock_writes; else ++restore_writes; }
-        if (!(ignore_restore && address==55U && data[6]==1U) && !(fail && fault==MISMATCH))
+        const bool dropped=address==55U && data[6]==1U && drop_restore_count>0U;
+        if(dropped)--drop_restore_count;
+        if (!dropped && !(ignore_restore && address==55U && data[6]==1U) && !(fail && fault==MISMATCH))
             memcpy(memory+address,data+6U,n);
         n=0U;
     }
@@ -67,7 +72,7 @@ bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
 }
 bool motor_uart_read_frame(uint8_t *frame, size_t capacity, size_t *length, uint32_t timeout_ms)
 {
-    assert(mutex_depth==1U && timeout_ms==5U);
+    assert(mutex_depth==1U && timeout_ms>=1U && timeout_ms<=10U);
     if (packet_length==0U) return false;
     assert(capacity>=packet_length); memcpy(frame,packet,packet_length); *length=packet_length; return true;
 }
@@ -77,6 +82,7 @@ static motor_register_write_request_t setup(uint8_t address, uint16_t value, boo
     memset(memory,0,sizeof(memory)); memory[8]=1U; memory[55]=locked ? 1U : 0U;
     operations=target_writes=unlock_writes=restore_writes=0U;
     safe=lock_available=true; ignore_restore=false; fault_at=cancel_at=-1; fault=NONE;
+    test_tick=100U;operation_cost=0U;drop_restore_count=0U;
     target_address=address;
     motor_register_write_request_t request={.motor_id=1U,.address=address,
         .length=(address==16U || address==48U) ? 2U : 1U,.options=1U};
@@ -168,6 +174,19 @@ int main(void)
     request=setup(21U,32U,true); cancel_at=4; /* Stop after unlock, before target. */
     result=motor_device_write_register(&request,allowed);
     assert(result.status==5U && target_writes==0U && memory[55]==1U && restore_writes==1U);
+    request=setup(24U,48U,true);memory[24]=16U;memory[25]=91U;drop_restore_count=1U;
+    result=motor_device_write_register(&request,allowed);
+    assert(result.status==0U && memory[24]==48U && memory[25]==91U && memory[55]==1U);
+    assert(target_writes==1U && restore_writes==2U && result.lock_attempts==2U);
+    assert(result.first_lock_failure==3U && result.first_lock_actual==0U && result.lock_actual==1U);
+    request=setup(24U,48U,true);fault=RX_TIMEOUT;fault_at=9;
+    result=motor_device_write_register(&request,allowed);
+    assert(result.status==0U && result.lock_restore_verified && restore_writes==1U);
+    assert(result.first_lock_failure==2U && result.lock_write_status==MOTOR_REGISTER_COMMUNICATION_ERROR);
+    request=setup(21U,32U,true);ignore_restore=true;operation_cost=20U;
+    result=motor_device_write_register(&request,allowed);
+    assert(result.status==17U && result.lock_deadline_exhausted && target_writes==1U);
+    clear_lock_latch();
     request=setup(21U,32U,true); ignore_restore=true;
     result=motor_device_write_register(&request,allowed);
     assert(result.status==17U && result.primary_status==0U && memory[55]==0U);

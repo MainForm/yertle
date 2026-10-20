@@ -247,8 +247,8 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
     return result;
 }
 
-static motor_register_status_t read_register_locked(uint8_t id, uint8_t address,
-                                                    uint8_t length, motor_register_data_t *result)
+static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
+    uint8_t length, motor_register_data_t *result, uint32_t timeout_ms)
 {
     memset(result, 0, sizeof(*result));
 
@@ -257,11 +257,11 @@ static motor_register_status_t read_register_locked(uint8_t id, uint8_t address,
     motor_uart_discard_rx();
     if (frame_length <= 0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(tx_frame, (size_t)frame_length, MOTOR_UART_TIMEOUT_MS)) {
+    } else if (!motor_uart_write(tx_frame, (size_t)frame_length, timeout_ms)) {
         status = MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else {
         size_t received_length = 0U;
-        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length, MOTOR_UART_TIMEOUT_MS)) {
+        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
             status = MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
             STS3215_Reply_t reply = { 0 };
@@ -290,6 +290,10 @@ static motor_register_status_t read_register_locked(uint8_t id, uint8_t address,
     return status;
 }
 
+static motor_register_status_t read_register_locked(uint8_t id, uint8_t address,
+    uint8_t length, motor_register_data_t *result)
+{ return read_register_timed(id,address,length,result,MOTOR_UART_TIMEOUT_MS); }
+
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
                                                   uint8_t length, motor_register_data_t *result)
 {
@@ -307,8 +311,9 @@ motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
     return status;
 }
 
-static motor_register_status_t write_register_locked(uint8_t id, uint8_t address,
-    const uint8_t *data, uint8_t length, uint8_t response_level, uint8_t *servo_error)
+static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
+    const uint8_t *data, uint8_t length, uint8_t response_level, uint8_t *servo_error,
+    uint32_t timeout_ms)
 {
     *servo_error=0U;
     const int16_t size=STS3215_BuildWriteRaw(tx_frame,sizeof(tx_frame),id,address,data,length);
@@ -316,13 +321,13 @@ static motor_register_status_t write_register_locked(uint8_t id, uint8_t address
     motor_uart_discard_rx();
     if (size<=0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(tx_frame,(size_t)size,MOTOR_UART_TIMEOUT_MS)) {
+    } else if (!motor_uart_write(tx_frame,(size_t)size,timeout_ms)) {
         status=MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else if (response_level==STS3215_RESP_READ_PING_ONLY) {
         status=MOTOR_REGISTER_OK; /* Confirmation still requires read-back. */
     } else {
         size_t received=0U;
-        if (!motor_uart_read_frame(rx_frame,sizeof(rx_frame),&received,MOTOR_UART_TIMEOUT_MS)) {
+        if (!motor_uart_read_frame(rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
             status=MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
             STS3215_Reply_t reply={0};
@@ -345,6 +350,10 @@ static motor_register_status_t write_register_locked(uint8_t id, uint8_t address
     return status;
 }
 
+static motor_register_status_t write_register_locked(uint8_t id, uint8_t address,
+    const uint8_t *data, uint8_t length, uint8_t response_level, uint8_t *servo_error)
+{ return write_register_timed(id,address,data,length,response_level,servo_error,MOTOR_UART_TIMEOUT_MS); }
+
 static motor_register_write_status_t write_io_status(motor_register_status_t status)
 {
     return status==MOTOR_REGISTER_OK ? MOTOR_WRITE_OK :
@@ -354,38 +363,86 @@ static motor_register_write_status_t write_io_status(motor_register_status_t sta
 /* The restore value is recorded BEFORE an unlock TX is attempted: even a TX
  * timeout can mean that a register was changed. Only verified recovery clears
  * the per-ID latch. Never automatically repeat the user's target WRITE. */
-static bool restore_register_lock_locked(uint8_t id, uint8_t response_level,
-                                        motor_register_write_report_t *report)
+static uint32_t elapsed_ms(TickType_t start)
+{ return (uint32_t)((TickType_t)(xTaskGetTickCount()-start)*portTICK_PERIOD_MS); }
+
+static uint32_t lock_io_budget(TickType_t start,motor_register_write_report_t *r)
 {
-    motor_register_data_t current;
+    const uint32_t elapsed=elapsed_ms(start);
+    if (elapsed+2U>MOTOR_LOCK_BUDGET_MS) { r->lock_deadline_exhausted=true; return 0U; }
+    const uint32_t half=(MOTOR_LOCK_BUDGET_MS-elapsed)/2U;
+    return half<MOTOR_LOCK_UART_TIMEOUT_MS ? half : MOTOR_LOCK_UART_TIMEOUT_MS;
+}
+static void lock_failure(motor_register_write_report_t *r,uint8_t reason)
+{
+    if (r->first_lock_failure!=0U) return;
+    r->first_lock_failure=reason; /* 1 read, 2 write, 3 mismatch, 4 servo, 5 budget */
+    r->first_lock_read_status=r->lock_read_status;
+    r->first_lock_write_status=r->lock_write_status;
+    r->first_lock_actual=r->lock_actual;
+    r->first_lock_servo_error=r->lock_read_servo_error|r->lock_write_servo_error;
+}
+static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
+                                        motor_register_write_report_t *r)
+{
+    const TickType_t started=xTaskGetTickCount();
     const uint8_t expected=register_lock_restore_value[id-1U];
-    motor_register_status_t status=read_register_locked(id,STS3215_REG_LOCK_MARK,1U,&current);
-    if (status==MOTOR_REGISTER_SERVO_ERROR) report->cleanup_servo_error |= current.servo_error;
-    if (status!=MOTOR_REGISTER_OK || current.data[0]!=expected) {
-        report->lock_restore_attempted=true;
-        uint8_t write_servo_error=0U;
-        (void)write_register_locked(id,STS3215_REG_LOCK_MARK,&expected,1U,response_level,
-                                    &write_servo_error);
-        report->cleanup_servo_error |= write_servo_error;
-        /* Lost lock-WRITE acknowledgement need not imply lost application;
-         * its independent, validated read-back is authoritative. */
-        status=read_register_locked(id,STS3215_REG_LOCK_MARK,1U,&current);
+    r->lock_expected=expected;r->lock_restore_verified=false;
+    for (unsigned attempt=0U;attempt<MOTOR_LOCK_ATTEMPT_LIMIT;++attempt) {
+        motor_register_data_t current;
+        uint32_t budget=lock_io_budget(started,r);
+        if (budget==0U) { lock_failure(r,5U); break; }
+        ++r->lock_attempts;
+        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
+        r->lock_read_servo_error=current.servo_error;
+        if (r->lock_read_status==MOTOR_REGISTER_SERVO_ERROR) {
+            r->cleanup_servo_error|=current.servo_error;lock_failure(r,4U);break;
+        }
+        if (r->lock_read_status==MOTOR_REGISTER_OK && r->lock_actual==expected) {
+            r->lock_restore_verified=r->cleanup_servo_error==0U;break;
+        }
+        if (r->lock_read_status!=MOTOR_REGISTER_OK) lock_failure(r,1U);
+        budget=lock_io_budget(started,r);
+        if (budget==0U) { lock_failure(r,5U);break; }
+        r->lock_restore_attempted=true;++r->lock_write_attempts;
+        r->lock_write_servo_error=0U;
+        r->lock_write_status=(uint8_t)write_register_timed(id,STS3215_REG_LOCK_MARK,&expected,1U,
+            response_level,&r->lock_write_servo_error,budget);
+        r->cleanup_servo_error|=r->lock_write_servo_error;
+        if (r->lock_write_status!=MOTOR_REGISTER_OK) lock_failure(r,r->lock_write_servo_error ? 4U : 2U);
+        if (elapsed_ms(started)+MOTOR_LOCK_SETTLE_MS>=MOTOR_LOCK_BUDGET_MS) {
+            r->lock_deadline_exhausted=true;lock_failure(r,5U);break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(MOTOR_LOCK_SETTLE_MS));
+        budget=lock_io_budget(started,r);
+        if (budget==0U) { lock_failure(r,5U);break; }
+        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
+        r->lock_read_servo_error=current.servo_error;
+        if (r->lock_read_status==MOTOR_REGISTER_SERVO_ERROR) r->cleanup_servo_error|=current.servo_error;
+        /* A lost WRITE ACK is not a failure if this validated GET proves the
+         * original lock restored. Never use this rule for the target WRITE. */
+        if (r->lock_read_status==MOTOR_REGISTER_OK && r->lock_actual==expected && !r->cleanup_servo_error) {
+            r->lock_restore_verified=true;break;
+        }
+        lock_failure(r,r->cleanup_servo_error ? 4U : r->lock_read_status==MOTOR_REGISTER_OK ? 3U : 1U);
+        if (r->cleanup_servo_error) break;
     }
-    if (status==MOTOR_REGISTER_SERVO_ERROR) report->cleanup_servo_error |= current.servo_error;
-    report->lock_restore_verified=status==MOTOR_REGISTER_OK && current.data[0]==expected &&
-                                  report->cleanup_servo_error==0U;
-    if (report->lock_restore_verified) register_lock_uncertain_mask &= (uint16_t)~(1U<<(id-1U));
-    return report->lock_restore_verified;
+    r->lock_elapsed_ms+=elapsed_ms(started);
+    if (r->lock_restore_verified) register_lock_uncertain_mask&=(uint16_t)~(1U<<(id-1U));
+    return r->lock_restore_verified;
 }
 
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
                                                         bool (*allowed)(void))
 {
-    motor_register_write_report_t report={0};
+    const TickType_t started=xTaskGetTickCount();
+    motor_register_write_report_t report=motor_register_initial_report();
     report.status=motor_register_validate_write(request);
-    if (report.status!=MOTOR_WRITE_OK) return report;
-    if (bus_mutex==NULL) { report.status=MOTOR_WRITE_IO_ERROR; return report; }
-    if (!take_bus()) { report.status=MOTOR_WRITE_BUSY; return report; }
+    if (report.status!=MOTOR_WRITE_OK) { report.primary_status=report.status;return report; }
+    if (bus_mutex==NULL) { report.status=report.primary_status=MOTOR_WRITE_IO_ERROR;return report; }
+    if (!take_bus()) { report.status=report.primary_status=MOTOR_WRITE_BUSY;report.elapsed_ms=elapsed_ms(started);return report; }
     motor_register_write_stage_t stage=MOTOR_WRITE_STAGE_TORQUE;
     motor_register_data_t data;
     uint8_t response_level=0U;
@@ -424,6 +481,7 @@ motor_register_write_report_t motor_device_write_register(const motor_register_w
         if (report.status!=MOTOR_WRITE_OK) goto done;
         if (data.data[0]>1U) { report.status=MOTOR_WRITE_IO_ERROR; goto done; }
         register_lock_restore_value[id-1U]=data.data[0];
+        report.lock_expected=data.data[0];
     }
     if (!allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
     if (unchanged) goto done; /* Fresh read verified equality, no write/unlock. */
@@ -461,6 +519,7 @@ done:
         if (report.status==MOTOR_WRITE_OK) report.failure_stage=MOTOR_WRITE_STAGE_RESTORE;
         report.status=MOTOR_WRITE_LOCK_RESTORE_FAILED;
     }
+    report.elapsed_ms=elapsed_ms(started);
     ++register_write_diagnostics.completed;
     if (report.status!=MOTOR_WRITE_OK) ++register_write_diagnostics.failed;
     register_write_diagnostics.motor_id=id;
