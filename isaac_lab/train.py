@@ -23,6 +23,7 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train Yertle locomotion in Isaac Lab (rsl_rl).")
 parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Override fixed trot clock; pass the same value during play.')
+parser.add_argument('--trot-duty-factor', type=float, default=None, help='Stance fraction [0.5,1); 0.6 adds four-foot support between swings. Use the same value for play; legacy default is 0.5.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 missing-stance and all-feet-airborne costs with 20ms diagonal-swap grace.')
 parser.add_argument("--num_envs", type=int, default=4096)
@@ -53,6 +54,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.trot_frequency_hz is not None and not 0.1 <= args_cli.trot_frequency_hz <= 10.0:
     parser.error('--trot-frequency-hz must be finite and within 0.1..10 Hz')
+if args_cli.trot_duty_factor is not None and not 0.5 <= args_cli.trot_duty_factor < 1.0:
+    parser.error('--trot-duty-factor must be finite and within [0.5,1.0)')
 if args_cli.base_contact_termination and args_cli.body_tilt_termination_deg is not None:
     parser.error("Use either --base-contact-termination or --body-tilt-termination-deg, not both.")
 if (args_cli.lin_vel_x_min is None) != (args_cli.lin_vel_x_max is None):
@@ -105,6 +108,9 @@ def main():
     env_cfg = EnvCfg()
     if args_cli.trot_frequency_hz is not None:
         env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
+    if args_cli.trot_duty_factor is not None:
+        env_cfg.trot_duty_factor = args_cli.trot_duty_factor
+    print(f"TROT_GUIDE frequency_hz={getattr(env_cfg, 'trot_frequency_hz', 2.2)} duty_factor={getattr(env_cfg, 'trot_duty_factor', 0.5)}", flush=True)
     if args_cli.trot_support_penalties:
         configure_trot_support_rewards(env_cfg)
         print('TROT_SUPPORT_PENALTIES enabled=True stance_weight=-1.0 airborne_weight=-2.0 transition_grace_s=0.02', flush=True)

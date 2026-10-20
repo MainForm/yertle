@@ -27,7 +27,8 @@ from rsl_rl.runners import OnPolicyRunner
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Play a trained Yertle policy in Isaac Lab.")
-parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Fixed gait clock used for training; v6.21 requires 1.0.')
+parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Fixed gait clock used for training; match the checkpoint profile.')
+parser.add_argument('--trot-duty-factor', type=float, default=None, help='Stance fraction [0.5,1); must match training. Legacy default is 0.5.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
@@ -54,6 +55,8 @@ AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.trot_frequency_hz is not None and not 0.1 <= args_cli.trot_frequency_hz <= 10.0:
     parser.error('--trot-frequency-hz must be finite and within 0.1..10 Hz')
+if args_cli.trot_duty_factor is not None and not 0.5 <= args_cli.trot_duty_factor < 1.0:
+    parser.error('--trot-duty-factor must be finite and within [0.5,1.0)')
 try:
     start_pose_mode, start_joint_angles = select_start_pose(args_cli.start_pose, args_cli.pose_json)
     if args_cli.extend_start_pose_limits and start_pose_mode != "json":
@@ -166,6 +169,8 @@ def main():
     env_cfg = EnvCfg()
     if args_cli.trot_frequency_hz is not None:
         env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
+    if args_cli.trot_duty_factor is not None:
+        env_cfg.trot_duty_factor = args_cli.trot_duty_factor
     if args_cli.trot_support_penalties:
         configure_trot_support_rewards(env_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs

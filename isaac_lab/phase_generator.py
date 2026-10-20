@@ -1,4 +1,4 @@
-"""Fixed 2.2 Hz diagonal trot phases for Yertle."""
+"""Fixed diagonal trot with opt-in four-foot support between diagonal swings."""
 
 import math
 
@@ -29,7 +29,10 @@ def _gait_state(env, command_name: str):
     device = mode.device
     frequency_hz = getattr(getattr(env, 'cfg', None), 'trot_frequency_hz', _TROT_FREQUENCY_HZ)
     frequencies = torch.full((env.num_envs,), frequency_hz, device=device)
-    duties = torch.full((env.num_envs,), _TROT_DUTY_FACTOR, device=device)
+    duty_factor = getattr(getattr(env, 'cfg', None), 'trot_duty_factor', _TROT_DUTY_FACTOR)
+    if not math.isfinite(duty_factor) or not 0.5 <= duty_factor < 1.0:
+        raise ValueError('Trot duty factor must be finite and within [0.5, 1.0)')
+    duties = torch.full((env.num_envs,), duty_factor, device=device)
     offsets = torch.tensor(_TROT_PHASE_OFFSETS, device=device, dtype=torch.float32).repeat(env.num_envs, 1)
     phase = torch.remainder(env.episode_length_buf.to(torch.float32) * env.step_dt * frequencies, 1.0)
     return phase, mode, frequencies, duties, offsets
@@ -91,15 +94,19 @@ def phase_unscheduled_contact_penalty(env, sensor_cfg: SceneEntityCfg, command_n
 
 
 def _trot_transition(env, command_name: str, grace_s: float) -> torch.Tensor:
-    """Symmetric grace around each diagonal-pair swap; does not change the clock."""
+    """Symmetric grace at touchdown and liftoff; preserve legacy 50% timing."""
     frequency_hz = getattr(getattr(env, 'cfg', None), 'trot_frequency_hz', _TROT_FREQUENCY_HZ)
     if not math.isfinite(grace_s) or not 0 <= grace_s < 0.25 / frequency_hz:
         raise ValueError('Transition grace must be finite and below a quarter trot cycle')
-    phase, _, frequency, _, _ = _gait_state(env, command_name)
+    phase, _, frequency, duty, _ = _gait_state(env, command_name)
     if grace_s == 0:
         return torch.zeros_like(phase, dtype=torch.bool)
     half_phase = torch.remainder(phase, 0.5)
-    seconds_to_swap = torch.minimum(half_phase, 0.5 - half_phase) / frequency
+    to_touchdown = torch.minimum(half_phase, 0.5 - half_phase)
+    to_liftoff = torch.abs(torch.remainder(half_phase - (duty - 0.5) + 0.25, 0.5) - 0.25)
+    # Exact old expression at 50% keeps existing checkpoint behavior unchanged.
+    distance = torch.where(duty == 0.5, to_touchdown, torch.minimum(to_touchdown, to_liftoff))
+    seconds_to_swap = distance / frequency
     return seconds_to_swap <= grace_s
 
 
