@@ -55,6 +55,7 @@ No servo bits or read-back bytes are appended to ACK/NACK. Existing GET
 | Position D | 0x16 | 1 | 0..254 | EEPROM, options bit0 required |
 | Position I | 0x17 | 1 | 0..254 | EEPROM, options bit0 required |
 | Minimum startup torque | 0x18 | 1 | 0..254 | EEPROM, options bit0 required |
+| Position integral limit | 0x19 | 1 | 0..254 | EEPROM, options bit0 required |
 | Current torque limit setting | 0x30 | 2 | 0..1000 | SRAM |
 
 For the original five entries, widths/addresses match
@@ -68,10 +69,21 @@ For newly allowed **0x18**, use the current manufacturer table's **one byte,
 0..254** definition. The vendored v3.6 header/table instead describes an older
 two-byte 0..1000 field. Do NOT use that vendor width helper for this SET: the
 current table assigns **0x19 to an independent integral-limit register**. Two-byte
-0x18 requests are rejected with NACK12 to avoid overwriting 0x19; direct writes
-to 0x19 remain forbidden. Payload example for ID1/startup16 is `01 18 01 01 10`.
+0x18 requests are rejected with NACK12 to avoid overwriting 0x19.
+Payload example for ID1/startup16 is `01 18 01 01 10`.
 The PC API must use the same one-byte policy. No model-version auto-detection is
 added; confirm register layout before use on a device with older firmware.
+
+As of 2026-10-21, **0x19 is explicitly allowed as a separate one-byte EEPROM
+field, 0..254**, following the current manufacturer table. Value 0 disables
+the integral limit; the documented maximum integral value is register value
+times 4 (position modes 0 and 4). This API passes the raw byte unchanged and
+does not switch motor mode or recommend a tuning value. Payload example for
+ID1/integral-limit16 is `01 19 01 01 10`. Two-byte requests are rejected, and
+0x18/0x1A are not modified. DISARMED, verified torque OFF, EEPROM permission,
+read-back, original-lock recovery and duplicate-suppression rules are unchanged.
+PC API/CLI allow-lists must also include 0x19; this firmware change does not
+modify the separately maintained PC project.
 
 All other addresses are forbidden, including ID, baud, response configuration,
 mode/phase/direction, zero calibration, angle/protection limits, torque enable,

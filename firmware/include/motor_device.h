@@ -44,7 +44,7 @@ typedef struct {
 } motor_register_write_request_t;
 
 /* FEETECH STS memory table and vendored docs/sts3215_memory_table.md:
- * P/D/I and minimum startup torque 0..254 (1 byte); max/current torque
+ * P/D/I, minimum startup torque and integral limit 0..254 (1 byte); max/current torque
  * limit 0..1000, u16 little-endian. For 0x18 follow the current FEETECH
  * table, NOT the vendor's older 2-byte definition: 0x19 is a separate field.
  * Exact individual widths only. Never infer limits from DEFAULT constants. */
@@ -57,7 +57,7 @@ static inline motor_register_write_status_t motor_register_validate_write(
     uint16_t maximum;
     switch (request->address) {
     case 0x10U: case 0x30U: width=2U; maximum=1000U; break;
-    case 0x15U: case 0x16U: case 0x17U: case 0x18U: width=1U; maximum=254U; break;
+    case 0x15U: case 0x16U: case 0x17U: case 0x18U: case 0x19U: width=1U; maximum=254U; break;
     default: return MOTOR_WRITE_FORBIDDEN;
     }
     if (request->length != width) return MOTOR_WRITE_INVALID_REGISTER;

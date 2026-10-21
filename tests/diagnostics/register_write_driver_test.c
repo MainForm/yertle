@@ -111,7 +111,7 @@ int main(void)
     assert(!motor_device_get_register_write_diagnostics(NULL));
 
     /* Exact-width allow-list and boundaries, unrelated writable registers denied. */
-    const uint8_t addresses[]={16U,21U,22U,23U,24U,48U};
+    const uint8_t addresses[]={16U,21U,22U,23U,24U,25U,48U};
     for (unsigned i=0U;i<sizeof(addresses);++i) {
         const uint16_t maximum=(addresses[i]==16U || addresses[i]==48U) ? 1000U : 254U;
         request=setup(addresses[i],maximum,true);
@@ -127,7 +127,7 @@ int main(void)
     request.options=1U;
     for (unsigned address=0U;address<256U;++address) {
         request.address=(uint8_t)address;
-        if (address!=16U && address!=21U && address!=22U && address!=23U && address!=24U && address!=48U)
+        if (address!=16U && address!=21U && address!=22U && address!=23U && address!=24U && address!=25U && address!=48U)
             assert(motor_register_validate_write(&request)==MOTOR_WRITE_FORBIDDEN);
     }
     request=setup(48U,500U,false); request.options=0U;
@@ -139,6 +139,21 @@ int main(void)
     assert(result.status==0U && target_writes==1U && memory[24]==254U && memory[25]==91U);
     assert(memory[55]==1U && result.lock_restore_verified);
     request=setup(24U,16U,true); request.options=0U;
+    assert(motor_device_write_register(&request,allowed).status==13U && operations==0U);
+    request.options=1U; request.length=2U;
+    assert(motor_device_write_register(&request,allowed).status==12U && operations==0U);
+    request.length=1U; request.data[0]=255U;
+    assert(motor_device_write_register(&request,allowed).status==12U && operations==0U);
+    /* 0x19 is independent of startup torque and CW deadband, including value 0. */
+    const uint8_t integral_limits[]={0U,254U};
+    for (unsigned i=0U;i<sizeof(integral_limits);++i) {
+        request=setup(25U,integral_limits[i],true);
+        memory[24]=63U; memory[25]=1U; memory[26]=77U;
+        result=motor_device_write_register(&request,allowed);
+        assert(result.status==0U && target_writes==1U && memory[25]==integral_limits[i]);
+        assert(memory[24]==63U && memory[26]==77U && memory[55]==1U && result.lock_restore_verified);
+    }
+    request=setup(25U,16U,true); request.options=0U;
     assert(motor_device_write_register(&request,allowed).status==13U && operations==0U);
     request.options=1U; request.length=2U;
     assert(motor_device_write_register(&request,allowed).status==12U && operations==0U);

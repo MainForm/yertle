@@ -255,6 +255,22 @@ int main(void)
     collect_motor_register_write(); service_motor_register_write(&context);
     check_set_result(7U,0U); assert(write_calls==1U);
 
+    const uint8_t integral_limit[]={1U,0x19U,1U,1U,16U};
+    context=reset(); set_payload(&context,7U,integral_limit,sizeof(integral_limit));
+    assert(register_write_pending && register_write_request.address==0x19U &&
+           register_write_request.length==1U && register_write_request.data[0]==16U);
+    collect_motor_register_write(); service_motor_register_write(&context);
+    check_set_result(7U,0U); assert(write_calls==1U);
+    uint8_t invalid_integral[][6]={
+        {1U,0x19U,1U,0U,16U,0U}, {1U,0x19U,2U,1U,16U,0U}, {1U,0x19U,1U,1U,255U,0U}
+    };
+    const uint8_t integral_errors[]={13U,12U,12U};
+    for (unsigned i=0U;i<3U;++i) {
+        context=reset();
+        set_payload(&context,7U,invalid_integral[i],(uint8_t)(4U+invalid_integral[i][2]));
+        check_set_result(7U,integral_errors[i]); assert(write_calls==0U && !register_write_pending);
+    }
+
     const uint8_t outcomes[]={0U,5U,11U,12U,13U,14U,15U,16U,17U};
     for (unsigned i=0U;i<sizeof(outcomes);++i) {
         context=reset(); write_status=(motor_register_write_status_t)outcomes[i];
