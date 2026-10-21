@@ -1,0 +1,19 @@
+{
+  "version": "v6.22",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "2.3", "--effort-limit-sim", "0.64",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.7", "--trot-duty-factor", "0.6",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "baseline": "v6.21.6; only PhysX effort_limit_sim 1.9 -> 0.64 Nm and velocity_limit_sim 4.6 -> 2.3 rad/s differ",
+  "gait": "fixed diagonal trot 1.7 Hz, duty 0.6; 58.82 ms four-foot support windows",
+  "joint_velocity_excess_threshold_rad_s": 2.3,
+  "phase_swing_clearance_m": 0.015,
+  "compatibility": "55 observations / 12 position actions; API mapping and axes unchanged. Limits are anatomical PhysX joint caps, not a new coupled motor-side model. Historical shared defaults are preserved; use explicit matching actuator limits for evaluation."
+}

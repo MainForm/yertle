@@ -1,0 +1,21 @@
+{
+  "version": "v6.22.2",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "2.3", "--effort-limit-sim", "1.024",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.7", "--trot-duty-factor", "0.6",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "baseline": "v6.22; only PhysX effort_limit_sim differs: 0.64 * 1.6 = 1.024 Nm",
+  "torque_scale": 1.6,
+  "pwm_assumption": "80% PWM is an experiment assumption, not a measured PWM-to-torque calibration. No PWM control or torque-speed/PID model is implemented by this profile.",
+  "gait": "fixed diagonal trot 1.7 Hz, duty 0.6",
+  "joint_velocity_excess_threshold_rad_s": 2.3,
+  "phase_swing_clearance_m": 0.015,
+  "compatibility": "55 observations / 12 position actions; API mapping, axes and historical shared defaults unchanged. Anatomical PhysX joint caps, not coupled motor-side caps."
+}
