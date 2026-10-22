@@ -29,6 +29,8 @@ from isaaclab.app import AppLauncher
 parser = argparse.ArgumentParser(description="Play a trained Yertle policy in Isaac Lab.")
 parser.add_argument('--trot-frequency-hz', type=float, default=None, help='Fixed gait clock used for training; match the checkpoint profile.')
 parser.add_argument('--trot-duty-factor', type=float, default=None, help='Stance fraction [0.5,1); must match training. Legacy default is 0.5.')
+parser.add_argument('--effort-limit-sim', type=float, default=None, help='PhysX joint torque limit in Nm; match the checkpoint training profile.')
+parser.add_argument('--velocity-limit-sim', type=float, default=None, help='PhysX joint velocity limit in rad/s; match the checkpoint training profile.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
@@ -57,6 +59,10 @@ if args_cli.trot_frequency_hz is not None and not 0.1 <= args_cli.trot_frequency
     parser.error('--trot-frequency-hz must be finite and within 0.1..10 Hz')
 if args_cli.trot_duty_factor is not None and not 0.5 <= args_cli.trot_duty_factor < 1.0:
     parser.error('--trot-duty-factor must be finite and within [0.5,1.0)')
+for name in ('effort_limit_sim', 'velocity_limit_sim'):
+    value = getattr(args_cli, name)
+    if value is not None and not 0.0 < value < float('inf'):
+        parser.error('--' + name.replace('_', '-') + ' must be finite and positive')
 try:
     start_pose_mode, start_joint_angles = select_start_pose(args_cli.start_pose, args_cli.pose_json)
     if args_cli.extend_start_pose_limits and start_pose_mode != "json":
@@ -177,6 +183,12 @@ def main():
     # AppLauncher selects the app device, but does not override this separately
     # constructed environment config. Honor --device for physics and inference.
     env_cfg.sim.device = args_cli.device
+    legs = env_cfg.scene.robot.actuators['legs']
+    if args_cli.effort_limit_sim is not None:
+        legs.effort_limit_sim = args_cli.effort_limit_sim
+    if args_cli.velocity_limit_sim is not None:
+        legs.velocity_limit_sim = args_cli.velocity_limit_sim
+    print(f'PLAY_ACTUATOR_LIMITS effort_limit_sim={legs.effort_limit_sim} velocity_limit_sim={legs.velocity_limit_sim}', flush=True)
     if args_cli.signed_joint_reference:
         configure_signed_joint_reference(env_cfg)
     print(f"PLAY_SIGNED_JOINT_REFERENCE enabled={args_cli.signed_joint_reference}", flush=True)

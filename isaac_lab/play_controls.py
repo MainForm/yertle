@@ -1,6 +1,6 @@
 """Play-only controls, independent of Isaac Sim startup and training config."""
 
-VX_RANGE = (-0.5, 0.3)
+VX_RANGE = (-0.3, 0.5)
 VY_RANGE = (-0.2, 0.2)
 YAW_RANGE = (-1.0, 1.0)
 PUSH_KEYS = {"i": (1.0, 0.0, "+X"), "k": (-1.0, 0.0, "-X"),

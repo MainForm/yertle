@@ -35,15 +35,25 @@ class PlayControlsTests(unittest.TestCase):
             command=[0.,0.,0.]
             self.assertEqual(controls.handle_key(key,command,.05,.1),(True,False,None,None,False))
             self.assertAlmostEqual(command[index],value)
-        command=[.3,.2,1.]
+        command=[.5,.2,1.]
         for key in ("w","q","a"): controls.handle_key(key,command,.05,.1)
-        self.assertEqual(command,[.3,.2,1.])
+        self.assertEqual(command,[.5,.2,1.])
         for key, push in controls.PUSH_KEYS.items():
             self.assertEqual(controls.handle_key(key,command,.05,.1),(False,False,push,None,False))
         for key, delta in (("[",-.1),("]",.1)):
             self.assertEqual(controls.handle_key(key,command,.05,.1),(False,False,None,delta,False))
         for key in (None,"?"):
             self.assertEqual(controls.handle_key(key,command,.05,.1),(False,False,None,None,False))
+
+    def test_vx_limits_match_v622_and_do_not_flip_sign(self):
+        self.assertEqual(controls.VX_RANGE,(-.3,.5))
+        self.assertEqual(controls.VY_RANGE,(-.2,.2))
+        self.assertEqual(controls.YAW_RANGE,(-1.,1.))
+        for key,expected in [('w',.5),('s',-.3)]:
+            command=[0.,0.,0.]
+            for _ in range(30):controls.handle_key(key,command,.05,.1)
+            self.assertEqual(command,[expected,0.,0.])
+        self.assertEqual(controls.clamp(.1,*controls.VX_RANGE),.1)
 
     def test_reset_clears_force_commands_and_returns_fresh_observations(self):
         term=SimpleNamespace(vel_command_b=torch.ones(2,3), is_standing_env=torch.ones(2,dtype=torch.bool),
