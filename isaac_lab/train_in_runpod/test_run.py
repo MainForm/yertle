@@ -14,6 +14,52 @@ spec.loader.exec_module(runner)
 
 
 class ControllerTests(unittest.TestCase):
+    def test_windows_child_processes_hide_console_and_preserve_flags(self):
+        with patch.object(runner.os, 'name', 'nt'):
+            options = runner.hidden_process_options({'timeout': 3, 'creationflags': 512})
+            self.assertEqual(options['creationflags'], 512 | 0x08000000)
+            self.assertEqual(options['timeout'], 3)
+        with patch.object(runner.os, 'name', 'posix'):
+            self.assertEqual(runner.hidden_process_options({'timeout': 3}), {'timeout': 3})
+
+    def test_ssh_and_scp_helpers_receive_hidden_flags(self):
+        with patch.object(runner.os, 'name', 'nt'), \
+             patch.object(runner.subprocess, 'check_output', return_value='ok\n') as check, \
+             patch.object(runner.subprocess, 'run') as run:
+            self.assertEqual(runner.output(['ssh', 'test'], timeout=3), 'ok')
+            runner.execute(['scp', 'test'], timeout=4)
+            self.assertTrue(check.call_args.kwargs['creationflags'] & 0x08000000)
+            self.assertTrue(run.call_args.kwargs['creationflags'] & 0x08000000)
+
+    @unittest.skipUnless(runner.os.name == 'nt', 'Windows console test')
+    def test_real_windows_child_has_no_console(self):
+        import sys
+        result = runner.output([sys.executable, '-c',
+                                'import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())'])
+        self.assertEqual(result, '0')
+
+    def test_monitor_keeps_original_deadline_and_does_not_relaunch(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'state.json'
+            deadline = runner.time.time() + 600
+            state = {'deadline': deadline, 'pod_id': 'same-pod', 'volume_id': 'same-volume'}
+            remote = Mock()
+            remote.run.side_effect = ['{"phase":"training"}', '{"phase":"finished"}']
+            def download(remote, config, state, path):
+                state.update(backup_verified=True, checkpoint_names=['model_2999.pt'])
+            with patch.object(runner.time, 'sleep'), patch.object(runner, 'api') as api, \
+                 patch.object(runner, 'download_results', side_effect=download), \
+                 patch.object(runner, 'cleanup') as cleanup, patch('builtins.print'):
+                runner.monitor_job({}, state, path, remote)
+                api.assert_not_called()
+                cleanup.assert_called_once()
+            self.assertEqual(state['deadline'], deadline)
+            self.assertEqual(state['pod_id'], 'same-pod')
+            self.assertEqual(state['phase'], 'complete')
+            self.assertEqual([call.args[0] for call in remote.run.call_args_list],
+                             ['cat /workspace/yertle-job/status.json'] * 2)
+
     def setUp(self):
         self.config = json.loads(Path(__file__).with_name('config.json').read_text())
         self.centers = [{'id': 'one', 'networkVolumeTypes': ['STANDARD']},

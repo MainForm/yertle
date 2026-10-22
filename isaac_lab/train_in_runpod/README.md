@@ -98,6 +98,8 @@ python .\run.py --api-key-file 'C:\Users\ik\Desktop\runpod_issac_sim\runpod_api_
 
 반환된 PID는 로컬 제어기, log는 진행 로그입니다. API 키는 명령행 값이나 Pod에 넣지 않고 해당 파일을 로컬에서 읽습니다. Codex가 응답을 마칠 때까지 기다릴 필요는 없지만 PC를 끄면 자동 정리가 중단됩니다. 기본 로컬 결과 경로는 `D:/project/yertle/runpod_temp/<job-id>/checkpoints` 및 `training_data`입니다.
 
+Windows의 비대화형 SSH/SCP 자식 프로세스도 `CREATE_NO_WINDOW`로 실행하므로 주기적 상태 조회 때 OpenSSH 창이 뜨지 않습니다. 로컬 제어기 교체가 필요하면 **기존 제어기가 완전히 종료된 것을 확인한 뒤에만** `--monitor <job-id> --background`로 같은 작업에 붙일 수 있습니다. 이 모드는 새 Pod나 학습을 생성하지 않고, 원래 예산 종료 시각과 백업·삭제 흐름을 유지합니다. 원래 제어기에 Ctrl+C를 보내면 오류 정리로 Pod가 삭제될 수 있으므로 단순한 감시 교체 용도로 사용하지 마세요.
+
 완료 흐름:
 
 - 복사 및 SHA-256 검증 성공 → Pod 삭제 확인 → 볼륨 삭제 확인.

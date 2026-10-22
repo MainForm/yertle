@@ -48,12 +48,20 @@ def api(method, path, body=None):
         raise ApiError(exc.code, exc.read().decode(errors='replace').replace(key, '[REDACTED]')) from None
 
 
+def hidden_process_options(kwargs):
+    """Detached controllers must also hide their noninteractive console children."""
+    options = dict(kwargs)
+    if os.name == 'nt':
+        options['creationflags'] = options.get('creationflags', 0) | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+    return options
+
+
 def execute(args, **kwargs):
-    return subprocess.run([str(a) for a in args], check=True, **kwargs)
+    return subprocess.run([str(a) for a in args], check=True, **hidden_process_options(kwargs))
 
 
 def output(args, **kwargs):
-    return subprocess.check_output([str(a) for a in args], text=True, **kwargs).strip()
+    return subprocess.check_output([str(a) for a in args], text=True, **hidden_process_options(kwargs)).strip()
 
 
 def save(path, data):
@@ -412,6 +420,55 @@ def recover_job(job_id, config):
             raise
 
 
+def monitor_job(config, state, statefile, remote):
+    """Observe the existing detached training; never create or relaunch a Pod."""
+    state['controller_pid'] = os.getpid()
+    save(statefile, state)
+    last_phase = None
+    while time.time() < state['deadline']:
+        try:
+            status = json.loads(remote.run('cat /workspace/yertle-job/status.json'))
+            if status != last_phase:
+                print('REMOTE_STATUS', json.dumps(status), flush=True)
+                last_phase = status
+            state['controller_last_seen'] = time.time()
+            save(statefile, state)
+            if status['phase'] in ('finished', 'failed'):
+                break
+        except subprocess.SubprocessError:
+            pass
+        time.sleep(15)
+    else:
+        remote.run("pkill -INT -f '^/opt/yertle-venv/bin/python .*/remote_job.py train$' || true")
+        raise RuntimeError('Time/budget planning deadline reached; stopping compute and retaining the volume for recovery.')
+    state['remote_status'] = status
+    save(statefile, state)
+    download_results(remote, config, state, statefile)
+    cleanup(state, statefile, delete_volume=True)
+    state['phase'] = 'complete' if status['phase'] == 'finished' and state['checkpoint_names'] else 'failed_cleaned'
+    save(statefile, state)
+    print('JOB_RESULT', json.dumps(state, indent=2), flush=True)
+    if state['phase'] != 'complete':
+        raise RuntimeError('Remote job failed; verified logs were downloaded and owned resources deleted.')
+
+
+def attach_monitor(job_id, config):
+    """Explicit local-controller replacement; original deadline is never extended."""
+    path, state = job_state(job_id)
+    with job_lock(path.parent):
+        if state.get('phase') != 'working' or not state.get('pod_id'):
+            raise RuntimeError('Only an existing working job can be monitored; no resources created.')
+        spec = json.loads((path.parent / 'job.json').read_text(encoding='utf-8'))
+        spec['backup_dir'] = config['backup_dir']
+        remote = get_remote(state['pod_id'], spec, path.parent)
+        try:
+            monitor_job(spec, state, path, remote)
+        except BaseException as error:
+            if state.get('pod_id'):
+                retain_volume(state, path, error)
+            raise
+
+
 def run_job(config, args):
     statedir = HERE / '.state'
     statedir.mkdir(exist_ok=True)
@@ -496,31 +553,8 @@ def run_job(config, args):
         remote.run("bash -lc 'cd /workspace/yertle-job; setsid python3 remote_job.py > train.log 2>&1 < /dev/null & echo YERTLE_LAUNCHED'")
         state['phase'] = 'working'
         save(statefile, state)
-        last_phase = None
-        while time.time() < state['deadline']:
-            try:
-                status = json.loads(remote.run('cat /workspace/yertle-job/status.json'))
-                if status != last_phase:
-                    print('REMOTE_STATUS', json.dumps(status), flush=True)
-                    last_phase = status
-                if status['phase'] in ('finished', 'failed'):
-                    break
-            except subprocess.SubprocessError:
-                pass
-            time.sleep(15)
-        else:
-            # SIGINT lets StatefulOnPolicyRunner save the last completed iteration.
-            remote.run("pkill -INT -f '^/opt/yertle-venv/bin/python .*/remote_job.py train$' || true")
-            raise RuntimeError('Time/budget planning deadline reached; stopping compute and retaining the volume for recovery.')
-        state['remote_status'] = status
-        save(statefile, state)
-        download_results(remote, config, state, statefile)
-        cleanup(state, statefile, delete_volume=True)
-        state['phase'] = 'complete' if status['phase'] == 'finished' and state['checkpoint_names'] else 'failed_cleaned'
-        save(statefile, state)
-        print('JOB_RESULT', json.dumps(state, indent=2), flush=True)
-        if state['phase'] != 'complete':
-            raise RuntimeError('Remote job failed; verified logs were downloaded and owned resources deleted.')
+        with job_lock(jobdir):
+            monitor_job(config, state, statefile, remote)
     except BaseException as error:
         if statefile and state.get('pod_id'):
             # Network volume survives Pod deletion; ephemeral disk does not.
@@ -551,6 +585,7 @@ def main():
     parser.add_argument('--delete-retained', metavar='JOB_ID', help='Permanently delete a retained result volume.')
     parser.add_argument('--confirm-data-loss', action='store_true', help='Explicitly authorize deletion of an unbacked retained volume.')
     parser.add_argument('--background', action='store_true', help='Start an independent local controller; PC/network must stay on.')
+    parser.add_argument('--monitor', metavar='JOB_ID', help='Attach to a recorded working job after its previous local controller has exited; never start training again.')
     args = parser.parse_args()
     if args.background:
         logs = HERE / '.state' / 'logs'
@@ -585,6 +620,9 @@ def main():
         config['num_envs'] = args.num_envs
     if config['iterations'] < 1 or config['max_seconds'] <= 0 or config['max_planned_usd'] <= 0:
         raise ValueError('Iterations, time and budget must be positive.')
+    if args.monitor:
+        attach_monitor(args.monitor, config)
+        return
     if args.recover:
         recover_job(args.recover, config)
         return
