@@ -100,6 +100,12 @@ class CompareTests(unittest.TestCase):
             p2=Path(t)/'robot_2.jsonl';p2.write_text(json.dumps(record(sample=2))+'\n')
             import os;os.utime(p2,(time.time()+1,time.time()+1));f.poll()
             self.assertEqual(f.decoder.frame.sample,2);self.assertIsNone(f.decoder.info)
+    def test_usb_etw_sidecar_is_never_selected_as_robot_feedback(self):
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)/'robot_1.jsonl';p.write_text(json.dumps(record(sample=7))+'\n')
+            sidecar=Path(t)/'robot_1.usb_etw.jsonl';sidecar.write_text('{"kind":"usb_event"}\n')
+            import os;os.utime(sidecar,(time.time()+1,time.time()+1))
+            f=Feed(logs_dir=t);f.poll();self.assertEqual(f.path,p);self.assertEqual(f.decoder.frame.sample,7)
     def test_policy_call_uses_only_sim_state(self):
         tree=ast.parse((Path(__file__).resolve().parents[2]/'compare_real_sim.py').read_text(encoding='utf-8'))
         call=next(n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='independent_observation')

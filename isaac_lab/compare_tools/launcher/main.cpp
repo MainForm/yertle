@@ -30,11 +30,11 @@ int selfTest(){
 int wmain(int argc,wchar_t** argv){try{
     if(argc==2&&std::wstring(argv[1])==L"--self-test")return selfTest();
     if(argc==2&&std::wstring(argv[1])==L"--help"){
-        std::wcout<<L"Yertle read-only real / independent SIM viewer\n"
-            <<L"--python PATH optionally selects an existing Isaac Python.\n"
-            <<L"Viewer options: --demo | --log FILE | --replay FILE; --model FILE; --seconds N; --capture\n"
-            <<L"Default follows the current CLI robot_*.jsonl; it never opens COM or commands hardware.\n"
-            <<L"Script: "<<kViewerScript<<L'\n';return 0;
+        std::cout<<"Yertle read-only real / independent SIM viewer\n"
+            <<"--python PATH optionally selects an existing Isaac Python.\n"
+            <<"Viewer options: --demo | --log FILE | --replay FILE; --model FILE; --seconds N; --capture\n"
+            <<"Default follows the current CLI robot_*.jsonl; it never opens COM or commands hardware.\n"
+            <<"Source/build details: isaac_lab/compare_tools/README.md\n";return 0;
     }
     std::wstring python=kIsaacPython;std::vector<std::wstring> extra;bool experience=false;
     for(int i=1;i<argc;++i){

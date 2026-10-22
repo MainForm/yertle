@@ -141,7 +141,8 @@ class Feed:
     def poll(self,replay_time=None):
         path=self.explicit
         if path is None and self.logs_dir:
-            paths=list(self.logs_dir.glob('robot_*.jsonl'))
+            # USB ETW sidecars share the prefix but are NOT policy telemetry.
+            paths=[p for p in self.logs_dir.glob('robot_*.jsonl') if '.' not in p.stem]
             path=max(paths,key=lambda p:p.stat().st_mtime_ns) if paths else None
         if path is not None and path!=self.path:
             self.path=path;self.tail=JsonlTail(path);self.decoder=Decoder();self.started=time.monotonic();self.pending=[]
