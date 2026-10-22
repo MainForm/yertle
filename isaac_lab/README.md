@@ -4,6 +4,10 @@
 정적 확인과 중력/접촉 물리 재생을 구분하며, Windows D3D12 실행 명령과 지원 도구는
 [pose control guide](pose_control_tools/README.md)에 정리되어 있다.
 
+실물 측정 자세와 독립 ONNX/PhysX 로봇의 동시 비교는 `compare_real_sim.py`를 사용한다.
+기존 CLI JSONL을 읽기만 하며 COM/모터 송신은 하지 않는다.
+[실행·분리 원칙·검증 안내](compare_tools/README.md).
+
 A second, GPU-accelerated locomotion pipeline for Yertle built on **NVIDIA Isaac
 Lab** (Isaac Sim 5.1 + PhysX). It trains a velocity-tracking walking policy with
 thousands of parallel environments on an RTX GPU, complementing the CPU

@@ -1,0 +1,2 @@
+# Install into the existing Isaac Python; do not install a second simulator.
+onnxruntime==1.23.2
