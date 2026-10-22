@@ -1,0 +1,12 @@
+[submodule "third_party/FreeRTOS-Kernel"]
+	path = third_party/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "third_party/cmsis-device-f1"]
+	path = third_party/cmsis-device-f1
+	url = https://github.com/STMicroelectronics/cmsis-device-f1.git
+[submodule "third_party/CMSIS_5"]
+	path = third_party/CMSIS_5
+	url = https://github.com/ARM-software/CMSIS_5.git
+[submodule "third_party/stm32-sts3215-lib"]
+	path = third_party/stm32-sts3215-lib
+	url = https://github.com/Mowibox/stm32-sts3215-lib.git

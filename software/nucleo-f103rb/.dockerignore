@@ -1,0 +1,8 @@
+.git
+.vscode
+build
+cmake-build-*
+*.o
+*.elf
+*.bin
+*.map

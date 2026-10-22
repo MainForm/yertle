@@ -1,0 +1,24 @@
+services:
+  freertos-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yertle-freertos-dev:bookworm-arm-none-eabi
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    stdin_open: true
+    tty: true
+    init: true
+    command: sleep infinity
+
+  f103-build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: yertle-freertos-dev:bookworm-arm-none-eabi
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+    init: true
+    command: ["bash", "scripts/build-f103.sh"]
