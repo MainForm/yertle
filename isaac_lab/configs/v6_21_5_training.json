@@ -1,0 +1,17 @@
+{
+  "version": "v6.21.5",
+  "fresh": true,
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "7000", "--seed", "0",
+    "--velocity-limit-sim", "4.6", "--effort-limit-sim", "1.9",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.5",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "gait": "fixed diagonal trot 1.5 Hz, duty 0.5, 20 ms swap grace",
+  "baseline": "v6.21.4; only the fixed trot clock differs (1.2 -> 1.5 Hz)",
+  "compatibility": "55 observations / 12 position actions; joint axes, action reference and API mapping unchanged. Use --trot-frequency-hz 1.5 for play."
+}
