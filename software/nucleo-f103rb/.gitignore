@@ -2,6 +2,9 @@
 /build/
 /cmake-build-*/
 
+# Downloaded at exact commits by the setup service; not vendored/submodules.
+/third_party/
+
 # IDE and editor state
 /.vscode/
 /.idea/

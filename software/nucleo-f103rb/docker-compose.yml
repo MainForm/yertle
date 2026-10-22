@@ -1,24 +1,32 @@
+name: yertle-nucleo-f103rb
+
+x-firmware-environment: &firmware-environment
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: yertle-nucleo-f103rb-dev:bookworm-arm-none-eabi
+  working_dir: /workspace
+  volumes:
+    - ./:/workspace
+  init: true
+
 services:
+  setup:
+    <<: *firmware-environment
+    command: ["bash", "scripts/setup-libraries.sh"]
+
   freertos-dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: yertle-freertos-dev:bookworm-arm-none-eabi
-    working_dir: /workspace
-    volumes:
-      - ./:/workspace
+    <<: *firmware-environment
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     stdin_open: true
     tty: true
-    init: true
     command: sleep infinity
 
   f103-build:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: yertle-freertos-dev:bookworm-arm-none-eabi
-    working_dir: /workspace
-    volumes:
-      - ./:/workspace
-    init: true
+    <<: *firmware-environment
+    depends_on:
+      setup:
+        condition: service_completed_successfully
     command: ["bash", "scripts/build-f103.sh"]

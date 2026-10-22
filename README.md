@@ -195,6 +195,18 @@ You do not need the physical robot to try it. Launch the GUI, press **Start Simu
 
 **Building the firmware:** open `software/ESP32/firmware/firmware.ino` in the Arduino IDE with the ESP32 board package installed, along with the `FaBoPWM_PCA9685` and `MPU9250` libraries. WiFi credentials and IP addresses are set near the top of `yertle_lib.cpp`.
 
+**NUCLEO-F103RB / STS3215 firmware:** the FreeRTOS implementation and its full
+development history are included in [`software/nucleo-f103rb`](software/nucleo-f103rb/README.md).
+Docker Compose downloads the four libraries at pinned commits (no submodule
+initialization or vendored source required), then builds and verifies the image:
+
+```bash
+docker compose -f software/nucleo-f103rb/docker-compose.yml run --build --rm f103-build
+```
+
+Firmware and logs are generated under `software/nucleo-f103rb/build/` and are
+not tracked. This command builds only; it never flashes a board or moves motors.
+
 - - -
 <br>
 
