@@ -6,8 +6,13 @@ mkdir -p build/logs
 exec > >(tee build/logs/f103-build-latest.log) 2>&1
 printf 'Build started: %s\n' "$(date --iso-8601=seconds)"
 
-stage='configure'
+stage='setup dependencies'
 trap 'code=$?; printf "\nBUILD FAILED: stage=%s exit_code=%s\n" "$stage" "$code" >&2; exit "$code"' ERR
+
+# Recheck on EVERY build, including reused Compose dependency containers and
+# direct invocation of this script. Cached exact clean checkouts need no network.
+bash scripts/setup-libraries.sh
+stage='configure'
 
 build_dir='build/stm32f103rb'
 elf="$build_dir/firmware/yertle_f103rb"
