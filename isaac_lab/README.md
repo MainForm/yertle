@@ -1,5 +1,9 @@
 # Yertle on Isaac Lab (GPU RL)
 
+자세 편집·삼발 지지 궤적 재생의 통합 실행은 `pose_control.py`를 사용한다.
+정적 확인과 중력/접촉 물리 재생을 구분하며, Windows D3D12 실행 명령과 지원 도구는
+[pose control guide](pose_control_tools/README.md)에 정리되어 있다.
+
 A second, GPU-accelerated locomotion pipeline for Yertle built on **NVIDIA Isaac
 Lab** (Isaac Sim 5.1 + PhysX). It trains a velocity-tracking walking policy with
 thousands of parallel environments on an RTX GPU, complementing the CPU
