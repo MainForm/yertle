@@ -171,4 +171,12 @@ motor_register_write_report_t motor_device_write_register(const motor_register_w
 uint16_t motor_device_register_lock_uncertain_mask(void);
 bool motor_device_get_register_write_diagnostics(motor_register_write_diagnostics_t *result);
 
+/* Dedicated mode transaction. Generic register SET never permits 0x21/0x2c.
+ * All motors must remain torqueOFF; callback is rechecked before each write. */
+motor_register_write_report_t motor_device_write_mode(uint8_t id, uint8_t mode, bool (*allowed)(void));
+bool motor_device_verify_modes(uint8_t backend, uint16_t mask, uint16_t *verified);
+bool motor_device_verify_torque_off(uint16_t *unknown);
+motor_device_status_t motor_device_write_pwm(uint16_t mask, const int16_t pwm[12]);
+motor_device_status_t motor_device_torque_mask(uint16_t mask, bool enabled);
+
 #endif /* MOTOR_DEVICE_H */

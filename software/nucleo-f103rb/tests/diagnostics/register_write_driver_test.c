@@ -100,6 +100,18 @@ static void clear_lock_latch(void)
 int main(void)
 {
     assert(motor_device_init());
+    /* Dedicated mode access reuses transaction + restore, never widens generic SET. */
+    motor_register_write_request_t mode_request=setup(0x21U,2U,true);
+    assert(motor_device_write_register(&mode_request,allowed).status==MOTOR_WRITE_FORBIDDEN);
+    motor_register_write_report_t mode_result=motor_device_write_mode(1U,2U,allowed);
+    assert(mode_result.status==MOTOR_WRITE_OK&&memory[0x21]==2U&&memory[55]==1U);
+    mode_request=setup(0x21U,0U,true);memory[0x21]=2U;
+    mode_result=motor_device_write_mode(1U,0U,allowed);
+    assert(mode_result.status==MOTOR_WRITE_OK&&memory[0x21]==0U&&memory[55]==1U);
+    mode_request=setup(0x21U,2U,true);memory[40]=1U;
+    assert(motor_device_write_mode(1U,2U,allowed).status==MOTOR_WRITE_INVALID_STATE&&target_writes==0);
+    mode_request=setup(0x21U,2U,true);
+    assert(motor_device_write_mode(1U,1U,allowed).status==MOTOR_WRITE_FORBIDDEN&&operations==0);
     motor_register_write_request_t request=setup(21U,32U,true);
     motor_register_write_report_t result=motor_device_write_register(&request,allowed);
     assert(result.status==0U && result.primary_status==0U && result.target_write_attempted);

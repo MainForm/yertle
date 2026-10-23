@@ -1,4 +1,5 @@
 #include "motor_device.h"
+#include "pwm_contract.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -434,12 +435,16 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
     return r->lock_restore_verified;
 }
 
-motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
-                                                        bool (*allowed)(void))
+static motor_register_write_report_t write_register_transaction(const motor_register_write_request_t *request,
+                                                        bool (*allowed)(void), bool dedicated_mode)
 {
     const TickType_t started=xTaskGetTickCount();
     motor_register_write_report_t report=motor_register_initial_report();
-    report.status=motor_register_validate_write(request);
+    report.status=dedicated_mode ?
+        (request && request->motor_id>=1U && request->motor_id<=12U &&
+         request->address==0x21U && request->length==1U && request->options==1U &&
+         (request->data[0]==0U || request->data[0]==2U) ? MOTOR_WRITE_OK : MOTOR_WRITE_FORBIDDEN) :
+        motor_register_validate_write(request);
     if (report.status!=MOTOR_WRITE_OK) { report.primary_status=report.status;return report; }
     if (bus_mutex==NULL) { report.status=report.primary_status=MOTOR_WRITE_IO_ERROR;return report; }
     if (!take_bus()) { report.status=report.primary_status=MOTOR_WRITE_BUSY;report.elapsed_ms=elapsed_ms(started);return report; }
@@ -528,6 +533,63 @@ done:
     motor_uart_discard_rx();
     (void)xSemaphoreGive(bus_mutex);
     return report;
+}
+
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
+                                                        bool (*allowed)(void))
+{ return write_register_transaction(request,allowed,false); }
+
+motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
+{
+    motor_register_write_request_t r={0};r.motor_id=id;r.address=0x21U;r.length=1U;r.options=1U;r.data[0]=mode;
+    return write_register_transaction(&r,allowed,true);
+}
+
+bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
+{
+    if(!verified || backend>YPWM_RAW || (backend==YPWM_RAW&&!ypwm_single(mask)))return false;
+    *verified=0;
+    for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
+        const uint8_t expected=(backend==YPWM_RAW&&(mask&(1U<<(id-1U))))?2U:0U;
+        if(motor_device_read_register(id,0x21,1,&d)==MOTOR_REGISTER_OK&&d.data[0]==expected)
+            *verified|=(uint16_t)(1U<<(id-1U));
+    }
+    return *verified==YPWM_ALL_MASK && motor_device_register_lock_uncertain_mask()==0;
+}
+
+bool motor_device_verify_torque_off(uint16_t *unknown)
+{
+    if(!unknown)return false;*unknown=0;
+    for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
+        if(motor_device_read_register(id,0x28,1,&d)!=MOTOR_REGISTER_OK||d.data[0]!=0)
+            *unknown|=(uint16_t)(1U<<(id-1U));
+    }
+    return *unknown==0;
+}
+
+motor_device_status_t motor_device_torque_mask(uint16_t mask,bool enabled)
+{
+    if(!mask||(mask&~YPWM_ALL_MASK))return MOTOR_DEVICE_INVALID_ARGUMENT;
+    if(!take_bus())return MOTOR_DEVICE_BUSY;
+    STS3215_SyncEntry_t entries[12]={0};uint8_t n=0;
+    for(uint8_t i=0;i<12;++i)if(mask&(1U<<i)){entries[n].id=i+1U;entries[n++].data[0]=enabled?1U:0U;}
+    const motor_device_status_t status=send_broadcast(STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x28,1,entries,n));
+    (void)xSemaphoreGive(bus_mutex);return status;
+}
+
+motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t pwm[12])
+{
+    if(!pwm||!mask||(mask&~YPWM_ALL_MASK))return MOTOR_DEVICE_INVALID_ARGUMENT;
+    for(unsigned i=0;i<12;++i)if(pwm[i]<-YPWM_DUTY_LIMIT||pwm[i]>YPWM_DUTY_LIMIT||
+        (!(mask&(1U<<i))&&pwm[i]!=0))return MOTOR_DEVICE_INVALID_ARGUMENT;
+    if(!take_bus())return MOTOR_DEVICE_BUSY;
+    STS3215_SyncEntry_t entries[12]={0};uint8_t n=0;
+    for(uint8_t i=0;i<12;++i)if(mask&(1U<<i)){
+        entries[n].id=i+1U;const uint16_t word=ypwm_servo_word(pwm[i]);
+        entries[n].data[0]=(uint8_t)word;entries[n++].data[1]=(uint8_t)(word>>8);
+    }
+    const motor_device_status_t status=send_broadcast(STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x2c,2,entries,n));
+    (void)xSemaphoreGive(bus_mutex);return status;
 }
 
 uint16_t motor_device_register_lock_uncertain_mask(void)
