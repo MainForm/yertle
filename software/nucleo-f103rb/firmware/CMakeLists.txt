@@ -16,6 +16,7 @@ add_executable(yertle_f103rb
     src/motor_device.c
     src/imu_device.c
     src/actuator_task.c
+    src/pwm_control.c
     src/sensor_task.c
     ${STS3215_DIR}/src/sts3215_protocol.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/system_stm32f1xx.c

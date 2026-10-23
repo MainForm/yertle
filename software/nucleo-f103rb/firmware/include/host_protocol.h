@@ -47,6 +47,8 @@ void host_protocol_latch_unsafe(host_unsafe_reason_t reason);
 void host_protocol_clear_unsafe(void);
 void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
+/* PWM release/fault stop has no positional return. Report distinct FSM cause. */
+void host_protocol_request_pwm_stop(void);
 host_fsm_state_t host_protocol_get_state(void);
 bool host_protocol_is_armed(void);
 /* Includes pending fault/timeout requests before the FSM publishes a state.

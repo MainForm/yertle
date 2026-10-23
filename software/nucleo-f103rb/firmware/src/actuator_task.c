@@ -8,6 +8,7 @@
 
 #include "host_protocol.h"
 #include "sensor_task.h"
+#include "pwm_control.h"
 
 #define ACTUATOR_PERIOD_MS 10U
 #define ACTUATOR_FAILURE_LIMIT 3U
@@ -147,6 +148,7 @@ static bool center_reached(safe_stop_context_t *stop, TickType_t now)
 bool actuator_task_init(void)
 {
     if (target_queue == NULL) {
+        pwm_control_init();
         target_queue = xQueueCreate(1U, sizeof(queued_target_t));
     }
     return target_queue != NULL;
@@ -155,7 +157,7 @@ bool actuator_task_init(void)
 bool actuator_submit_targets(const motor_target_set_t *targets)
 {
     if ((target_queue == NULL) || !host_protocol_is_armed() || host_protocol_is_stop_requested() ||
-        !motor_device_validate_targets(targets)) {
+        !pwm_control_native_ready() || !motor_device_validate_targets(targets)) {
         return false;
     }
     const queued_target_t queued = {
@@ -178,6 +180,11 @@ void actuator_task(void *argument)
     TickType_t last_wake = xTaskGetTickCount();
 
     for (;;) {
+        /* PWM/unknown hardware mode never enters the legacy2048 return path. */
+        if(pwm_control_service()){
+            target_valid=false;torque_enabled=false;(void)xQueueReset(target_queue);
+            vTaskDelayUntil(&last_wake,pdMS_TO_TICKS(ACTUATOR_PERIOD_MS));continue;
+        }
         const bool in_fault = host_protocol_get_state() == HOST_FSM_FAULT;
         if (in_fault || host_protocol_is_stop_requested()) {
             target_valid = false;

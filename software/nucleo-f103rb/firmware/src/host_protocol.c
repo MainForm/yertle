@@ -14,6 +14,7 @@
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
 #include "register_write_diagnostics.h"
+#include "pwm_control.h"
 
 #define YERTLE_PROTOCOL_VERSION              1U
 #define YERTLE_PROTOCOL_MAX_PAYLOAD          64U
@@ -44,6 +45,8 @@ enum message_type {
     MESSAGE_GET_POSITION_OFFSETS = 0x0BU,
     MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
     MESSAGE_SET_MOTOR_REGISTER = 0x0DU,
+    MESSAGE_SET_CONTROL_MODE = YPWM_MODE_MESSAGE,
+    MESSAGE_SET_MOTOR_PWM = YPWM_TARGET_MESSAGE,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -87,7 +90,8 @@ enum state_cause {
     STATE_CAUSE_LEASE_READY = 6U,
     STATE_CAUSE_TARGET_TIMEOUT = 7U,
     STATE_CAUSE_FAULT = 8U,
-    STATE_CAUSE_SAFE_STOP_COMPLETE = 9U
+    STATE_CAUSE_SAFE_STOP_COMPLETE = 9U,
+    STATE_CAUSE_PWM_STOP = 10U
 };
 
 typedef struct {
@@ -115,6 +119,8 @@ typedef struct {
     bool host_connected;
     bool lease_established;
     bool register_job_active;
+    bool pwm_mode_pending;
+    bool offsets_job_active;
     uint8_t active_write_slot_plus_one; /* zero means GET/no active SET */
     register_write_cache_t write_cache[YERTLE_WRITE_CACHE_CAPACITY];
     bool has_write_diagnostic;
@@ -138,6 +144,7 @@ static volatile host_unsafe_reason_t requested_unsafe_reason = HOST_UNSAFE_NONE;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
 static volatile bool requested_target_timeout = false;
+static volatile bool requested_pwm_stop = false;
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t length)
 {
@@ -316,7 +323,7 @@ static void send_hello_ack(protocol_context_t *context)
     const uint8_t payload[] = {
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
-        0x01U, 0U, 0U, 0U                  /* phase-1 FSM capability */
+        0x01U | YPWM_CAPABILITY, 0U, 0U, 0U /* legacy FSM + complete PWM bench */
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }
@@ -458,7 +465,7 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_STATE);
         return;
     }
-    if (context->register_job_active || free_slot<0 || !sensor_request_motor_register_write(sequence,&request)) {
+    if (context->register_job_active || context->pwm_mode_pending || free_slot<0 || !sensor_request_motor_register_write(sequence,&request)) {
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_QUERY_BUSY);
         return;
     }
@@ -564,7 +571,7 @@ static void set_host_connected(protocol_context_t *context, bool connected)
         return;
     }
     context->host_connected = connected;
-    if (!connected) context->lease_established = false;
+    if (!connected) {context->lease_established = false;pwm_control_connection_reset();}
     const uint8_t payload[] = { EVENT_HOST_LINK_CHANGED, connected ? 1U : 0U };
     send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
 }
@@ -574,6 +581,7 @@ static bool can_arm(const protocol_context_t *context)
     return context->host_connected && context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
            !host_protocol_is_stop_requested() && !context->register_job_active &&
+           !context->pwm_mode_pending && pwm_control_can_arm() &&
            motor_device_register_lock_uncertain_mask()==0U;
 }
 
@@ -600,6 +608,10 @@ static void expire_host_link(protocol_context_t *context)
 
 static void service_safety_state(protocol_context_t *context)
 {
+    if(requested_pwm_stop){
+        requested_pwm_stop=false;
+        enter_safe_stop(context,HOST_FSM_DISARMED,STATE_CAUSE_PWM_STOP);
+    }
     if (safe_stop_completed) {
         safe_stop_completed = false;
         pending_safety_action = HOST_SAFETY_ACTION_NONE;
@@ -676,6 +688,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         return;
     }
     if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
+        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_SET_MOTOR_PWM &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
@@ -687,6 +700,19 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     expire_host_link(context);
 
     switch (type) {
+    case MESSAGE_SET_CONTROL_MODE: {
+        uint8_t error=YPWM_INVALID_STATE;
+        if(context->host_connected && context->state==HOST_FSM_DISARMED &&
+           !context->register_job_active && !context->offsets_job_active && !context->pwm_mode_pending && !host_protocol_is_stop_requested())
+            error=pwm_control_request_mode(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8),sequence);
+        if(error)send_result(context,MESSAGE_NACK,type,sequence,error);
+        else {context->pwm_mode_pending=true;context->lease_established=false;}
+        break;
+    }
+    case MESSAGE_SET_MOTOR_PWM: {
+        const uint8_t error=pwm_control_submit(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8));
+        send_result(context,error?MESSAGE_NACK:MESSAGE_ACK,type,sequence,error);break;
+    }
     case MESSAGE_SET_MOTOR_REGISTER:
         handle_motor_register_write(context,sequence,raw+YERTLE_PROTOCOL_HEADER_SIZE,
                                     (uint16_t)raw[5] | ((uint16_t)raw[6]<<8U));
@@ -709,7 +735,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             .request_sequence = sequence, .motor_id = id, .address = address,
             .length = length, .status = MOTOR_REGISTER_BUSY
         };
-        if (context->register_job_active || !sensor_request_motor_register(sequence, id, address, length)) {
+        if (context->register_job_active || context->pwm_mode_pending || !sensor_request_motor_register(sequence, id, address, length)) {
             send_motor_register(context, &busy);
         } else {
             context->register_job_active = true;
@@ -718,7 +744,8 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
     case MESSAGE_GET_POSITION_OFFSETS: {
         /* Read-only, asynchronous: no host lease/FSM/torque side effects. */
-        const bool accepted = sensor_request_position_offsets(sequence);
+        const bool accepted = !context->pwm_mode_pending && sensor_request_position_offsets(sequence);
+        if(accepted)context->offsets_job_active=true;
         send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
                     type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);
         break;
@@ -743,7 +770,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
             break;
         }
-        if (!context->host_connected || context->state != HOST_FSM_ARMED ||
+        if (!pwm_control_native_ready() || !context->host_connected || context->state != HOST_FSM_ARMED ||
             host_protocol_is_stop_requested()) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
             break;
@@ -765,13 +792,17 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         }
         break;
     }
-    case MESSAGE_GET_UART_STATS:
+    case MESSAGE_GET_UART_STATS: {
         /* Read-only diagnostic: does not refresh the control lease or ARM. */
         uart_diagnostics_send(context, send_diagnostic_frame);
         if(context->has_write_diagnostic)
             (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,context->last_write_diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
+        uint8_t status[YPWM_STATUS_LENGTH];
+        if(pwm_control_status(status,true))send_frame(context,MESSAGE_EVENT,status,sizeof status);
         break;
+    }
     case MESSAGE_HELLO:
+        pwm_control_connection_reset();
         /* New connection gets a first-heartbeat grace period. Repeated HELLO
          * on an established link must not refresh the heartbeat watchdog. */
         if (!context->host_connected) context->last_host_heartbeat_tick = xTaskGetTickCount();
@@ -825,6 +856,17 @@ static void process_host_rx(protocol_context_t *context)
     }
 }
 
+static void service_pwm(protocol_context_t *context)
+{
+    uint16_t mode_sequence;uint8_t mode_result;
+    if(pwm_control_take_mode_result(&mode_sequence,&mode_result)){
+        context->pwm_mode_pending=false;context->lease_established=false;
+        send_result(context,mode_result?MESSAGE_NACK:MESSAGE_ACK,MESSAGE_SET_CONTROL_MODE,mode_sequence,mode_result);
+    }
+    uint8_t status[YPWM_STATUS_LENGTH];
+    if(pwm_control_status(status,false))send_frame(context,MESSAGE_EVENT,status,sizeof status);
+}
+
 void host_protocol_task(void *argument)
 {
     /* One host task owns the replay/diagnostic cache. Keep it off the 2 KiB
@@ -850,9 +892,11 @@ void host_protocol_task(void *argument)
         expire_host_link(&context);
 
         motor_position_offsets_t offsets;
-        if (sensor_take_position_offsets(&offsets)) send_position_offsets(&context, &offsets);
+        if (sensor_take_position_offsets(&offsets)) {context.offsets_job_active=false;send_position_offsets(&context, &offsets);}
         service_motor_register(&context);
         service_motor_register_write(&context);
+
+        service_pwm(&context);
 
         if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
             context.last_reported_unsafe_reason = requested_unsafe_reason;
@@ -904,6 +948,7 @@ void host_protocol_request_target_timeout(void)
 {
     requested_target_timeout = true;
 }
+void host_protocol_request_pwm_stop(void){requested_pwm_stop=true;}
 
 host_fsm_state_t host_protocol_get_state(void)
 {
@@ -918,5 +963,5 @@ bool host_protocol_is_armed(void)
 bool host_protocol_is_stop_requested(void)
 {
     return pending_safety_action != HOST_SAFETY_ACTION_NONE ||
-           requested_fault_reason != HOST_FAULT_NONE || requested_target_timeout;
+           requested_fault_reason != HOST_FAULT_NONE || requested_target_timeout || requested_pwm_stop;
 }

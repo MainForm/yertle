@@ -120,3 +120,8 @@ else()
     target_compile_options(firmware_pwm_driver_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME firmware_pwm_driver_test COMMAND firmware_pwm_driver_test)
+
+foreach(legacy firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test
+ firmware_heartbeat_test firmware_result_tx_test firmware_register_query_test)
+ target_sources(${legacy} PRIVATE ../safe_stop/pwm_legacy_stubs.c)
+endforeach()

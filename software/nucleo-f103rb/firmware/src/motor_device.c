@@ -559,7 +559,8 @@ bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
 
 bool motor_device_verify_torque_off(uint16_t *unknown)
 {
-    if(!unknown)return false;*unknown=0;
+    if(!unknown)return false;
+    *unknown=0;
     for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
         if(motor_device_read_register(id,0x28,1,&d)!=MOTOR_REGISTER_OK||d.data[0]!=0)
             *unknown|=(uint16_t)(1U<<(id-1U));
