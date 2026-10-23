@@ -10,6 +10,7 @@
 static uint8_t memory[12][256],reply[48],last[160];
 static size_t reply_length,last_length;
 static unsigned depth,clock_ms,tx_count;
+static uint8_t fail_write_id,override_read_id;static bool allowed(void){return true;}
 SemaphoreHandle_t xSemaphoreCreateMutex(void){return (void*)1;}
 int xSemaphoreTake(SemaphoreHandle_t m,TickType_t t){(void)t;assert(m&&!depth);++depth;return 1;}
 int xSemaphoreGive(SemaphoreHandle_t m){assert(m&&depth==1);--depth;return 1;}
@@ -23,6 +24,7 @@ void motor_diagnostics_masks(uint16_t a,uint16_t b){(void)a;(void)b;}
 bool motor_uart_write(const uint8_t *p,size_t n,uint32_t timeout){
  (void)timeout;assert(depth==1&&n<sizeof last);memcpy(last,p,n);last_length=n;++tx_count;
  unsigned sum=0;for(size_t k=2;k<n;++k)sum+=p[k];assert((sum&255U)==255U);
+ if(p[4]==3&&p[2]==fail_write_id&&p[5]==0x21)return false;
  if(p[4]==0x83){assert(p[2]==254);unsigned width=p[6];
   for(size_t k=7;k<n-1;k+=width+1){assert(p[k]>=1&&p[k]<=12);memcpy(memory[p[k]-1]+p[5],p+k+1,width);}return true;}
  if(p[2]==254){assert(p[4]==3&&p[5]==0x28&&p[6]==0);for(unsigned i=0;i<12;++i)memory[i][0x28]=0;return true;}
@@ -30,6 +32,7 @@ bool motor_uart_write(const uint8_t *p,size_t n,uint32_t timeout){
  if(p[4]==2)width=p[6];else {assert(p[4]==3);memcpy(memory[p[2]-1]+p[5],p+6,n-7);}
  reply[0]=reply[1]=255;reply[2]=p[2];reply[3]=(uint8_t)(width+2);reply[4]=0;
  memcpy(reply+5,memory[p[2]-1]+p[5],width);reply_length=width+6;
+ if(p[4]==2&&p[2]==override_read_id&&p[5]==0x21)reply[5]=1;
  sum=0;for(size_t k=2;k<reply_length-1;++k)sum+=reply[k];reply[reply_length-1]=(uint8_t)~sum;return true;
 }
 bool motor_uart_read_frame(uint8_t *p,size_t cap,size_t *n,uint32_t timeout){
@@ -54,5 +57,20 @@ int main(void){
  assert(motor_device_torque_mask(1U<<3,true)==MOTOR_DEVICE_OK&&memory[3][0x28]==1&&memory[0][0x28]==0);
  assert(motor_device_torque_mask(YPWM_ALL_MASK,false)==MOTOR_DEVICE_OK);
  assert(motor_device_verify_torque_off(&unknown));
+ memory[1][0x21]=0;
+ motor_register_write_report_t r=motor_device_write_mode(2,2,allowed);
+ assert(r.status==MOTOR_WRITE_OK&&r.initial_value==0&&r.verified_value==2&&r.last_read_value==2);
+ assert(r.last_read_status==MOTOR_REGISTER_OK&&r.last_read_address==0x21&&r.last_write_status==MOTOR_REGISTER_OK);
+ assert(r.lock_restore_verified&&memory[1][55]==1);
+ memory[2][0x21]=0;fail_write_id=3;r=motor_device_write_mode(3,2,allowed);fail_write_id=0;
+ assert(r.status==MOTOR_WRITE_IO_ERROR&&r.primary_status==MOTOR_WRITE_IO_ERROR&&r.failure_stage==MOTOR_WRITE_STAGE_TARGET);
+ assert(r.target_write_attempted&&r.last_write_status==MOTOR_REGISTER_COMMUNICATION_ERROR&&r.last_write_address==0x21);
+ assert(r.initial_value==0&&r.verified_value==255&&r.lock_restore_verified&&memory[2][55]==1);
+ memory[3][0x21]=0;override_read_id=4;r=motor_device_write_mode(4,2,allowed);override_read_id=0;
+ assert(r.status==MOTOR_WRITE_VERIFY_MISMATCH&&r.failure_stage==MOTOR_WRITE_STAGE_VERIFY&&r.verified_value==1&&r.last_read_value==1);
+ assert(r.lock_restore_verified&&memory[3][55]==1);
+ motor_verify_report_t v;memory[4][0x21]=0;
+ assert(!motor_device_verify_modes_detailed(YPWM_PID,YPWM_ALL_MASK,&verified,&v)&&v.motor_id==3&&v.address==0x21&&v.actual==0&&v.io_status==0);
+ memory[4][0x28]=1;assert(!motor_device_verify_torque_off_detailed(&unknown,&v)&&v.motor_id==5&&v.address==0x28&&v.actual==1);memory[4][0x28]=0;
  puts("PASS actual PWM packet builders: BIT10, exact address/width, selected torque, range rejection, native/mixed readback");return 0;
 }

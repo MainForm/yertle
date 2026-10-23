@@ -393,6 +393,14 @@ static void service_motor_register(protocol_context_t *context)
     }
 }
 
+static void send_pwm_mode_diagnostics(protocol_context_t *context,bool force)
+{
+    uint8_t detail[YPWM_DIAG_LENGTH],write[64];bool has_write=false;
+    if(pwm_control_mode_diagnostics(detail,write,&has_write,force)){
+        (void)send_frame(context,MESSAGE_EVENT,detail,sizeof detail);
+        if(has_write)(void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,write,sizeof write);
+    }
+}
 static void service_motor_register_write(protocol_context_t *context)
 {
     if (context->active_write_slot_plus_one==0U || context->result_count==YERTLE_RESULT_QUEUE_CAPACITY) return;
@@ -797,6 +805,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         uart_diagnostics_send(context, send_diagnostic_frame);
         if(context->has_write_diagnostic)
             (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,context->last_write_diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
+        send_pwm_mode_diagnostics(context,true);
         uint8_t status[YPWM_STATUS_LENGTH];
         if(pwm_control_status(status,true))send_frame(context,MESSAGE_EVENT,status,sizeof status);
         break;
@@ -858,6 +867,9 @@ static void process_host_rx(protocol_context_t *context)
 
 static void service_pwm(protocol_context_t *context)
 {
+    /* Also deliver a late canceled transaction diagnostic if its NACK was
+       already sent while the actuator was unwinding the mode transaction. */
+    send_pwm_mode_diagnostics(context,false);
     uint16_t mode_sequence;uint8_t mode_result;
     if(pwm_control_take_mode_result(&mode_sequence,&mode_result)){
         context->pwm_mode_pending=false;context->lease_established=false;

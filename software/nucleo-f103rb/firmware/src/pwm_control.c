@@ -5,6 +5,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
+#include "register_write_diagnostics.h"
 typedef struct {
     uint8_t backend,phase,reason,result;
     uint16_t mask,verified,unknown,torque,request,feedback_age;
@@ -14,13 +15,16 @@ typedef struct {
     bool result_pending,arm_allowed,dirty,ever_command;
 } control_context;
 static control_context p;
+/* Kept out of snapshot() to avoid enlarging every actuator stack frame. */
+static uint8_t mode_detail[YPWM_DIAG_LENGTH],mode_write_detail[64];
+static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write;
 /* These numerical states belong exclusively to the actuator task. */
 static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
 static uint32_t milliseconds(void){return (uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS);}
 static control_context snapshot(void){control_context s;taskENTER_CRITICAL();s=p;taskEXIT_CRITICAL();return s;}
 void pwm_control_init(void){taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;
-    p.phase=YPWM_UNVERIFIED;p.dirty=true;taskEXIT_CRITICAL();}
+    p.phase=YPWM_UNVERIFIED;p.dirty=true;mode_detail_valid=mode_detail_pending=mode_detail_has_write=false;taskEXIT_CRITICAL();}
 bool pwm_control_native_ready(void){const control_context s=snapshot();return s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY;}
 bool pwm_control_accepts_positions(void){const control_context s=snapshot();return
     (s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY)||
@@ -51,6 +55,7 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=YPWM_PREPARING;
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;
     memset(&p.goal,0,sizeof p.goal);memset(p.sent,0,sizeof p.sent);p.dirty=true;
+    mode_detail_valid=mode_detail_pending=mode_detail_has_write=false;
     taskEXIT_CRITICAL();return YPWM_OK;
 }
 uint8_t pwm_control_release(const uint8_t *bytes,size_t n){
@@ -86,24 +91,74 @@ bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
 }
 static bool mode_allowed(void){const control_context s=snapshot();return s.phase==YPWM_PREPARING&&
     host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested();}
+bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write[64],bool *has_write,bool force){
+    taskENTER_CRITICAL();const bool ready=mode_detail_valid&&(force||mode_detail_pending);
+    if(ready){memcpy(detail,mode_detail,sizeof mode_detail);*has_write=mode_detail_has_write;
+        if(*has_write){memcpy(write,mode_write_detail,sizeof mode_write_detail);}
+        mode_detail_pending=false;}
+    taskEXIT_CRITICAL();return ready;
+}
+static void diagnostic_failure(uint8_t d[YPWM_DIAG_LENGTH],uint8_t stage,const motor_verify_report_t *r,
+    uint8_t domain,uint8_t status){
+    if(d[3])return; /* Preserve the first failure even if final OFF verification fails. */
+    d[3]=stage;d[24]=r->address;d[25]=r->expected;d[26]=r->actual;
+    d[7]=r->motor_id;d[27]=domain;d[28]=status;d[29]=r->servo_error;
+}
 static void prepare_mode(const control_context *s){
     uint16_t unknown=YPWM_ALL_MASK,verified=0;uint8_t error=YPWM_OK;
-    if(motor_device_set_torque(false)!=MOTOR_DEVICE_OK||!motor_device_verify_torque_off(&unknown))error=YPWM_MODE_FAILED;
+    const uint32_t started=milliseconds();uint8_t detail[YPWM_DIAG_LENGTH]={0},write_detail[64]={0};
+    detail[0]=YPWM_DIAG_EVENT;detail[1]=YPWM_DIAG_VERSION;detail[2]=s->backend;
+    ypwm_put16(detail+4,s->request);ypwm_put32(detail+8,s->epoch);ypwm_put16(detail+12,s->mask);
+    memset(detail+24,255,6);detail[27]=YPWM_DIAG_IO_NONE;detail[29]=0;
+    memset(detail+31,255,9);memset(detail+42,255,4);
+    detail[60]=255;
+    motor_verify_report_t vr=motor_verify_initial_report();vr.address=0x28;vr.expected=0;
+    const motor_device_status_t off_tx=motor_device_set_torque(false);
+    if(off_tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;
+        diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)off_tx);}
+    else if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){error=YPWM_MODE_FAILED;
+        diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);}
+    ypwm_put16(detail+18,unknown);
     for(uint8_t id=1;id<=12&&!error;++id){
         const uint8_t mode=(s->backend==YPWM_PID&&(s->mask&(1U<<(id-1U))))?2U:0U;
         const motor_register_write_report_t r=motor_device_write_mode(id,mode,mode_allowed);
-        if(r.status!=MOTOR_WRITE_OK)error=YPWM_MODE_FAILED;
+        if(r.status!=MOTOR_WRITE_OK){error=YPWM_MODE_FAILED;
+            vr=motor_verify_initial_report();vr.motor_id=id;vr.address=0x21;vr.expected=mode;vr.actual=r.verified_value;vr.servo_error=r.servo_error;
+            diagnostic_failure(detail,YPWM_DIAG_MODE_TRANSACTION,&vr,YPWM_DIAG_IO_NONE,255);
+            detail[30]=1;detail[31]=(uint8_t)r.status;detail[32]=(uint8_t)r.primary_status;detail[33]=(uint8_t)r.failure_stage;
+            detail[34]=r.initial_value;detail[35]=r.verified_value;detail[36]=r.last_read_status;detail[37]=r.last_write_status;
+            detail[38]=r.last_read_address;detail[39]=r.last_write_address;
+            detail[60]=r.last_read_value;
+            detail[42]=r.lock_expected;detail[43]=r.lock_actual;detail[44]=r.lock_read_status;detail[45]=r.lock_write_status;
+            detail[46]=(r.target_write_attempted?1U:0U)|(r.lock_restore_attempted?2U:0U)|
+                (r.lock_restore_verified?4U:0U)|(r.lock_deadline_exhausted?8U:0U);
+            detail[47]=r.lock_attempts;ypwm_put32(detail+48,r.lock_elapsed_ms);ypwm_put32(detail+52,r.elapsed_ms);
+            const motor_register_write_request_t q={.motor_id=id,.address=0x21,.length=1};
+            register_write_diag_encode(write_detail,s->request,&q,&r,0,0);
+        }else ypwm_put16(detail+14,(uint16_t)(ypwm_u16(detail+14)|(1U<<(id-1U))));
     }
-    if(!error&&!motor_device_verify_modes(s->backend,s->mask,&verified))error=YPWM_MODE_FAILED;
+    if(!error&&!motor_device_verify_modes_detailed(s->backend,s->mask,&verified,&vr)){error=YPWM_MODE_FAILED;
+        diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);}
     if(!error&&s->backend==YPWM_PID){const int16_t zero[12]={0};
-        if(motor_device_write_pwm(s->mask,zero)!=MOTOR_DEVICE_OK)error=YPWM_MODE_FAILED;}
-    if(!motor_device_verify_torque_off(&unknown))error=YPWM_MODE_FAILED;
+        const motor_device_status_t tx=motor_device_write_pwm(s->mask,zero);
+        if(tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();vr.address=0x2c;vr.expected=0;
+            diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}}
+    if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){
+        if(!error){diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);ypwm_put16(detail+18,unknown);}
+        error=YPWM_MODE_FAILED;
+    }
+    if(!error){detail[3]=YPWM_DIAG_COMPLETE;ypwm_put16(detail+18,unknown);}
+    ypwm_put16(detail+16,verified);ypwm_put16(detail+40,motor_device_register_lock_uncertain_mask());
+    ypwm_put32(detail+20,milliseconds()-started);ypwm_put32(detail+56,milliseconds());detail[6]=error;
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
     taskENTER_CRITICAL();
     if(p.phase==YPWM_PREPARING&&p.epoch==s->epoch){
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.result_pending=true;p.dirty=true;
         p.phase=error?YPWM_FAULT:(p.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY);
     }
+    else {detail[6]=YPWM_INVALID_STATE;if(!error)detail[3]=YPWM_DIAG_CANCELED;}
+    memcpy(mode_detail,detail,sizeof detail);memcpy(mode_write_detail,write_detail,sizeof write_detail);
+    mode_detail_has_write=detail[30]!=0;mode_detail_valid=mode_detail_pending=true;
     taskEXIT_CRITICAL();
 }
 static void service_stop(const control_context *s){

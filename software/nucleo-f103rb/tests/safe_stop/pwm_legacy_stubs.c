@@ -13,3 +13,4 @@ uint8_t pwm_control_release(const uint8_t *b,size_t n){(void)b;(void)n;return YP
 bool pwm_control_submit_positions(const motor_target_set_t *g){(void)g;return false;}
 bool pwm_control_take_mode_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){(void)b;(void)force;return false;}
+bool pwm_control_mode_diagnostics(uint8_t d[YPWM_DIAG_LENGTH],uint8_t w[64],bool *has,bool force){(void)d;(void)w;(void)has;(void)force;return false;}

@@ -86,6 +86,9 @@ typedef struct {
     uint8_t first_lock_failure, first_lock_read_status, first_lock_write_status,
             first_lock_actual, first_lock_servo_error;
     uint32_t elapsed_ms, lock_elapsed_ms, lock_write_attempts;
+    /* Primary transaction observations; lock cleanup has its own fields above. */
+    uint8_t last_read_status,last_write_status,last_read_address,last_write_address;
+    uint8_t initial_value,verified_value,last_read_value;
 } motor_register_write_report_t;
 
 #define MOTOR_LOCK_ATTEMPT_LIMIT 2U
@@ -98,6 +101,8 @@ static inline motor_register_write_report_t motor_register_initial_report(void)
     motor_register_write_report_t r;memset(&r,0,sizeof(r));
     r.lock_expected=r.lock_actual=r.lock_read_status=r.lock_write_status=255U;
     r.first_lock_read_status=r.first_lock_write_status=r.first_lock_actual=255U;
+    r.last_read_status=r.last_write_status=r.last_read_address=r.last_write_address=255U;
+    r.initial_value=r.verified_value=r.last_read_value=255U;
     return r;
 }
 typedef struct {
@@ -176,6 +181,14 @@ bool motor_device_get_register_write_diagnostics(motor_register_write_diagnostic
 motor_register_write_report_t motor_device_write_mode(uint8_t id, uint8_t mode, bool (*allowed)(void));
 bool motor_device_verify_modes(uint8_t backend, uint16_t mask, uint16_t *verified);
 bool motor_device_verify_torque_off(uint16_t *unknown);
+typedef struct {
+    uint8_t motor_id,address,expected,actual,io_status,servo_error;
+} motor_verify_report_t;
+static inline motor_verify_report_t motor_verify_initial_report(void) {
+    motor_verify_report_t r={0,255,255,255,255,0};return r;
+}
+bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *report);
+bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *report);
 motor_device_status_t motor_device_write_pwm(uint16_t mask, const int16_t pwm[12]);
 motor_device_status_t motor_device_torque_mask(uint16_t mask, bool enabled);
 

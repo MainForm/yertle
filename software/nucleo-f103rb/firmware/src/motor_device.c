@@ -360,6 +360,19 @@ static motor_register_write_status_t write_io_status(motor_register_status_t sta
     return status==MOTOR_REGISTER_OK ? MOTOR_WRITE_OK :
         (status==MOTOR_REGISTER_SERVO_ERROR ? MOTOR_WRITE_SERVO_ERROR : MOTOR_WRITE_IO_ERROR);
 }
+static motor_register_status_t read_for_report(uint8_t id,uint8_t address,uint8_t length,
+    motor_register_data_t *data,motor_register_write_report_t *report)
+{
+    const motor_register_status_t status=read_register_locked(id,address,length,data);
+    report->last_read_status=(uint8_t)status;report->last_read_address=address;
+    report->last_read_value=status==MOTOR_REGISTER_OK?data->data[0]:255U;return status;
+}
+static motor_register_status_t write_for_report(uint8_t id,uint8_t address,const uint8_t *data,
+    uint8_t length,uint8_t response_level,motor_register_write_report_t *report)
+{
+    const motor_register_status_t status=write_register_locked(id,address,data,length,response_level,&report->servo_error);
+    report->last_write_status=(uint8_t)status;report->last_write_address=address;return status;
+}
 
 /* The restore value is recorded BEFORE an unlock TX is attempted: even a TX
  * timeout can mean that a register was changed. Only verified recovery clears
@@ -456,12 +469,12 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
     const uint16_t bit=(uint16_t)(1U<<(id-1U));
     const bool eeprom=request->address!=STS3215_REG_TORQUE_LIMIT;
     if (allowed==NULL || !allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
-    if (read_register_locked(id,STS3215_REG_TORQUE_SWITCH,1U,&data)!=MOTOR_REGISTER_OK || data.data[0]!=0U) {
+    if (read_for_report(id,STS3215_REG_TORQUE_SWITCH,1U,&data,&report)!=MOTOR_REGISTER_OK || data.data[0]!=0U) {
         report.servo_error=data.servo_error;
         report.status=MOTOR_WRITE_INVALID_STATE; goto done;
     }
     stage=MOTOR_WRITE_STAGE_RESPONSE_LEVEL;
-    report.status=write_io_status(read_register_locked(id,STS3215_REG_RESP_LEVEL,1U,&data));
+    report.status=write_io_status(read_for_report(id,STS3215_REG_RESP_LEVEL,1U,&data,&report));
     report.servo_error=data.servo_error;
     if (report.status!=MOTOR_WRITE_OK) goto done;
     if (data.data[0]>1U) { report.status=MOTOR_WRITE_IO_ERROR; goto done; }
@@ -475,13 +488,14 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
         }
     }
     stage=MOTOR_WRITE_STAGE_READ_INITIAL;
-    report.status=write_io_status(read_register_locked(id,request->address,request->length,&data));
+    report.status=write_io_status(read_for_report(id,request->address,request->length,&data,&report));
     report.servo_error=data.servo_error;
     if (report.status!=MOTOR_WRITE_OK) goto done;
+    report.initial_value=data.data[0];
     const bool unchanged=memcmp(data.data,request->data,request->length)==0;
     if (eeprom) {
         stage=MOTOR_WRITE_STAGE_READ_LOCK;
-        report.status=write_io_status(read_register_locked(id,STS3215_REG_LOCK_MARK,1U,&data));
+        report.status=write_io_status(read_for_report(id,STS3215_REG_LOCK_MARK,1U,&data,&report));
         report.servo_error=data.servo_error;
         if (report.status!=MOTOR_WRITE_OK) goto done;
         if (data.data[0]>1U) { report.status=MOTOR_WRITE_IO_ERROR; goto done; }
@@ -489,17 +503,16 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
         report.lock_expected=data.data[0];
     }
     if (!allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
-    if (unchanged) goto done; /* Fresh read verified equality, no write/unlock. */
+    if (unchanged) {report.verified_value=report.initial_value;goto done;} /* no write/unlock */
     if (eeprom) {
         cleanup=true;
         register_lock_uncertain_mask |= bit;
         if (register_lock_restore_value[id-1U]!=0U) {
             const uint8_t unlocked=0U;
             stage=MOTOR_WRITE_STAGE_UNLOCK;
-            report.status=write_io_status(write_register_locked(id,STS3215_REG_LOCK_MARK,&unlocked,1U,
-                                                               response_level,&report.servo_error));
+            report.status=write_io_status(write_for_report(id,STS3215_REG_LOCK_MARK,&unlocked,1U,response_level,&report));
             if (report.status!=MOTOR_WRITE_OK) goto done;
-            report.status=write_io_status(read_register_locked(id,STS3215_REG_LOCK_MARK,1U,&data));
+            report.status=write_io_status(read_for_report(id,STS3215_REG_LOCK_MARK,1U,&data,&report));
             report.servo_error=data.servo_error;
             if (report.status!=MOTOR_WRITE_OK) goto done;
             if (data.data[0]!=0U) { report.status=MOTOR_WRITE_VERIFY_MISMATCH; goto done; }
@@ -508,13 +521,13 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
     stage=MOTOR_WRITE_STAGE_TARGET;
     if (!allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
     report.target_write_attempted=true;
-    report.status=write_io_status(write_register_locked(id,request->address,request->data,request->length,
-                                                       response_level,&report.servo_error));
+    report.status=write_io_status(write_for_report(id,request->address,request->data,request->length,response_level,&report));
     if (report.status!=MOTOR_WRITE_OK) goto done;
     if (eeprom) vTaskDelay(pdMS_TO_TICKS(10U)); /* Bounded settle before verification. */
     stage=MOTOR_WRITE_STAGE_VERIFY;
-    report.status=write_io_status(read_register_locked(id,request->address,request->length,&data));
+    report.status=write_io_status(read_for_report(id,request->address,request->length,&data,&report));
     report.servo_error=data.servo_error;
+    if(report.status==MOTOR_WRITE_OK)report.verified_value=data.data[0];
     if (report.status==MOTOR_WRITE_OK && memcmp(data.data,request->data,request->length)!=0)
         report.status=MOTOR_WRITE_VERIFY_MISMATCH;
 done:
@@ -546,24 +559,37 @@ motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bo
 }
 
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
+{ return motor_device_verify_modes_detailed(backend,mask,verified,NULL); }
+bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *report)
 {
+    if(report)*report=motor_verify_initial_report();
     if(!verified || backend>YPWM_PID || !ypwm_mask(mask))return false;
     *verified=0;
     for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
         const uint8_t expected=(backend==YPWM_PID&&(mask&(1U<<(id-1U))))?2U:0U;
-        if(motor_device_read_register(id,0x21,1,&d)==MOTOR_REGISTER_OK&&d.data[0]==expected)
+        const motor_register_status_t status=motor_device_read_register(id,0x21,1,&d);
+        if(status==MOTOR_REGISTER_OK&&d.data[0]==expected)
             *verified|=(uint16_t)(1U<<(id-1U));
+        else if(report&&!report->motor_id){report->motor_id=id;report->address=0x21;report->expected=expected;
+            report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->io_status=(uint8_t)status;report->servo_error=d.servo_error;}
     }
     return *verified==YPWM_ALL_MASK && motor_device_register_lock_uncertain_mask()==0;
 }
 
 bool motor_device_verify_torque_off(uint16_t *unknown)
+{ return motor_device_verify_torque_off_detailed(unknown,NULL); }
+bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *report)
 {
+    if(report)*report=motor_verify_initial_report();
     if(!unknown)return false;
     *unknown=0;
     for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
-        if(motor_device_read_register(id,0x28,1,&d)!=MOTOR_REGISTER_OK||d.data[0]!=0)
+        const motor_register_status_t status=motor_device_read_register(id,0x28,1,&d);
+        if(status!=MOTOR_REGISTER_OK||d.data[0]!=0){
             *unknown|=(uint16_t)(1U<<(id-1U));
+            if(report&&!report->motor_id){report->motor_id=id;report->address=0x28;report->expected=0;
+                report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->io_status=(uint8_t)status;report->servo_error=d.servo_error;}
+        }
     }
     return *unknown==0;
 }

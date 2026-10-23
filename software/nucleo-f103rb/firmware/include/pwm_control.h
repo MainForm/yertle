@@ -2,6 +2,7 @@
 #define YERTLE_PWM_CONTROL_H
 #include "pwm_contract.h"
 #include "motor_device.h"
+#include "pwm_mode_diagnostics.h"
 /* Host functions only copy bounded state under a critical section; no motor I/O.
  * service() is exclusively called by actuator_task and owns all PWM writes. */
 void pwm_control_init(void);
@@ -16,4 +17,5 @@ uint8_t pwm_control_release(const uint8_t *p,size_t n);
 bool pwm_control_submit_positions(const motor_target_set_t *goal);
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result);
 bool pwm_control_status(uint8_t bytes[YPWM_STATUS_LENGTH],bool force);
+bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write[64],bool *has_write,bool force);
 #endif
