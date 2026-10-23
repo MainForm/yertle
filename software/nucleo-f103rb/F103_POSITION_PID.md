@@ -66,9 +66,20 @@ must be verified on the actual motor configuration before loaded operation.
 ## Protection and stop
 
 Goal timeout500ms, feedback age50ms, controller-service gap>30ms, invalid motor
-samples/servo faults, profile-following error>512steps, current>=308raw per motor
-or absolute sum>=924raw, temperature>=60C or voltage outside5.0..7.4V stop output.
-The current checks are delayed software guards, not instantaneous current clamps.
+samples/servo faults, profile-following error>512steps, temperature>=60C or voltage
+outside5.0..7.4V stop output. F103 does not enforce a per-motor or summed-current
+threshold in the PWM/PID backend; current telemetry is still reported unchanged.
+
+Current-threshold ownership is PC-only: robot_policy_cli checks each received
+sensor snapshot for any absolute motor current>=2A or sum of absolute motor
+currents>6A (existing6.5mA/raw conversion: first trips308raw and924raw). It stops
+normal targets, requests control release and exits; in this PID backend release
+uses the PWM0/torqueOFF path below. Existing PC guards are not removed or bypassed.
+This relies on a functioning PC and sensor/command transport; short unseen spikes
+or delayed queries can evade/delay a trip. F103 link/target/sensor timeout guards
+remain, but are not a substitute for current limiting. No instantaneous hardware
+current clamp is provided. Servo-reported faults still stop output independently;
+the motor's own protection registers/firmware are not changed.
 
 Stop: invalidate control and I state, PWM0 only to verified mode2 axes, torqueOFF
 all motors, independent OFF readback. Never write PWM to native register aliases
@@ -89,7 +100,9 @@ measurements are still required on hardware. No claim of stable walking or tuned
 
 `tests/pwm`: numerical P/I/D, saturation/reset/D-kick/profile/polarity and synthetic
 plant tests; actual host+actuator+PID integration routes unchanged0x06 to PWM;
-multi-axis/fresh-sample/timeout/cancellation/current/temperature/OFF protections;
+multi-axis/fresh-sample/timeout/cancellation/temperature/OFF protections, host-only
+current ownership (signed/boundary/summed high telemetry does not stop F103, while
+an explicit host release still zeros PWM and verifies torqueOFF);
 schema2 rejects old direct-PWM payloads. `tests/diagnostics` retains legacy
 position stop, DMA, heartbeat and register lock tests. Synthetic tests do not
 validate the real mechanism. Support the full robot and start unloaded.

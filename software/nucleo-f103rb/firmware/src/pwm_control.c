@@ -86,7 +86,6 @@ bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
 }
 static bool mode_allowed(void){const control_context s=snapshot();return s.phase==YPWM_PREPARING&&
     host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested();}
-static int32_t magnitude(int16_t v){return v<0?-(int32_t)v:(int32_t)v;}
 static void prepare_mode(const control_context *s){
     uint16_t unknown=YPWM_ALL_MASK,verified=0;uint8_t error=YPWM_OK;
     if(motor_device_set_torque(false)!=MOTOR_DEVICE_OK||!motor_device_verify_torque_off(&unknown))error=YPWM_MODE_FAILED;
@@ -120,14 +119,12 @@ static void service_stop(const control_context *s){
 }
 static bool feedback_safe(const motor_feedback_set_t *f,uint32_t now){
     if(f->valid_mask!=YPWM_ALL_MASK||!f->sequence||now-f->uptime_ms>YPWM_FEEDBACK_MAX_MS){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-    int32_t sum=0;
+    /* Current thresholds belong to the PC CLI. Preserve current telemetry and
+       servo-reported fault checks, but do not latch a local current trip. */
     for(unsigned i=0;i<12;++i){const motor_feedback_t *m=&f->motor[i];
         if(!m->valid||m->servo_error||m->position<0||m->position>4095){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-        const int32_t current=magnitude(m->current);sum+=current;
-        if(current>=308){host_protocol_latch_unsafe(HOST_UNSAFE_CURRENT_LIMIT);pwm_control_stop(YPWM_REASON_CURRENT);return false;}
         if(m->temperature>=60||m->voltage<50||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
     }
-    if(sum>=924){host_protocol_latch_unsafe(HOST_UNSAFE_CURRENT_LIMIT);pwm_control_stop(YPWM_REASON_CURRENT);return false;}
     return true;
 }
 static void service_pid(const control_context *s,uint32_t now){
