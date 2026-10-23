@@ -744,7 +744,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
     case MESSAGE_GET_POSITION_OFFSETS: {
         /* Read-only, asynchronous: no host lease/FSM/torque side effects. */
-        const bool accepted = !context->pwm_mode_pending && sensor_request_position_offsets(sequence);
+        const bool accepted = !context->pwm_mode_pending && pwm_control_native_ready() && sensor_request_position_offsets(sequence);
         if(accepted)context->offsets_job_active=true;
         send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
                     type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);

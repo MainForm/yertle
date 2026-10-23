@@ -25,7 +25,7 @@ void pwm_control_stop(uint8_t reason){
    if(p.epoch)p.retired_epoch=p.epoch;
    p.epoch=0;p.dirty=true;
    /* Complete a canceled asynchronous request as failure, never leave the host busy. */
-   if(preparing&&!p.result_pending){p.result=YPWM_INVALID_STATE;p.result_pending=true;}}
+   if(preparing||p.result_pending){p.result=YPWM_INVALID_STATE;p.result_pending=true;}}
  taskEXIT_CRITICAL();host_protocol_request_pwm_stop();
 }
 void pwm_control_connection_reset(void){const pwm_context s=snapshot();

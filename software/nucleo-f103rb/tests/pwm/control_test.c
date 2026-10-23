@@ -82,5 +82,7 @@ int main(void){
  reset();ready();for(unsigned i=0;i<100&&phase()==YPWM_ACTIVE;++i){tick+=10;feedback.uptime_ms=tick;assert(target(123,i+2,100)==0);assert(pwm_control_service());}
  stopped(YPWM_REASON_SESSION);
  reset();mode_ok=false;pwm_control_init();assert(pwm_control_service());assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ reset();assert(prepare(123)==0);assert(pwm_control_service());pwm_control_stop(YPWM_REASON_RELEASE);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_INVALID_STATE);stopped(YPWM_REASON_RELEASE);
  puts("PWM service: guards, cancellation, no I/O under critical sections, verified stop passed");return 0;
 }
