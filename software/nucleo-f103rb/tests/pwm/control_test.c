@@ -86,5 +86,7 @@ int main(void){
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_INVALID_STATE);stopped(YPWM_REASON_RELEASE);
  reset();assert(pwm_control_submit(release,sizeof release)==0);assert(pwm_control_service());
  assert(phase()==YPWM_FAULT&&write_count==0&&on_count==0); /* native 0x2c must not receive goal0 */
+ reset();ready();write_ok=false;pwm_control_stop(YPWM_REASON_RELEASE);assert(pwm_control_service());
+ assert(pwm_control_status(b,true)&&ypwm_u16(b+32)==20&&ypwm_u16(b+18)==0); /* OFF proof != successful zero TX */
  puts("PWM service: guards, cancellation, no I/O under critical sections, verified stop passed");return 0;
 }

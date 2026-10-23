@@ -114,14 +114,15 @@ bool pwm_control_service(void){
  s=snapshot();
  if(s.phase==YPWM_STOPPING){
    const int16_t zero[12]={0};
+   bool zero_sent=false;
    /* OFF is attempted even if zero TX fails. Never enable or send position2048. */
    /* 0x2c aliases target position in native mode. Never write PWM zero to
     * native/unverified axes, even during an emergency release. */
    if(s.backend==YPWM_RAW&&ypwm_single(s.mask)&&(s.verified&s.mask)==s.mask)
-     (void)motor_device_write_pwm(s.mask,zero);
+     zero_sent=motor_device_write_pwm(s.mask,zero)==MOTOR_DEVICE_OK;
    const motor_device_status_t tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
    uint16_t unknown=YPWM_ALL_MASK;const bool off=tx==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
-   taskENTER_CRITICAL();p.unknown=unknown;if(off){p.torque=0;memset(p.sent,0,sizeof p.sent);}p.dirty=true;taskEXIT_CRITICAL();
+   taskENTER_CRITICAL();p.unknown=unknown;if(off){p.torque=0;if(zero_sent)memset(p.sent,0,sizeof p.sent);}p.dirty=true;taskEXIT_CRITICAL();
    if(off&&!host_protocol_is_armed()){
      taskENTER_CRITICAL();p.phase=YPWM_FAULT;p.ever_command=false;taskEXIT_CRITICAL();
      host_protocol_complete_safe_stop();
