@@ -547,10 +547,10 @@ motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bo
 
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
 {
-    if(!verified || backend>YPWM_RAW || (backend==YPWM_RAW&&!ypwm_single(mask)))return false;
+    if(!verified || backend>YPWM_PID || !ypwm_mask(mask))return false;
     *verified=0;
     for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
-        const uint8_t expected=(backend==YPWM_RAW&&(mask&(1U<<(id-1U))))?2U:0U;
+        const uint8_t expected=(backend==YPWM_PID&&(mask&(1U<<(id-1U))))?2U:0U;
         if(motor_device_read_register(id,0x21,1,&d)==MOTOR_REGISTER_OK&&d.data[0]==expected)
             *verified|=(uint16_t)(1U<<(id-1U));
     }

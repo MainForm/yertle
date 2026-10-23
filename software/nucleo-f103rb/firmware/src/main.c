@@ -42,8 +42,8 @@ int main(void)
 
     created = xTaskCreate(actuator_task,
                           "actuator",
-                          /* Unoptimized PWM service alone uses 928 bytes;
-                           * include actuator/mode/lock/RTOS nesting + margin. */
+                          /* ARM .su: actuator376 + service312 + PID776;
+                           * reserve nested motor driver/RTOS calls + margin. */
                           configMINIMAL_STACK_SIZE * 5U,
                           NULL,
                           tskIDLE_PRIORITY + 4U,

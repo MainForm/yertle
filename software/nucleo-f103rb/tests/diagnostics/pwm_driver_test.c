@@ -39,7 +39,9 @@ int main(void){
  uint16_t verified,unknown;
  assert(motor_device_verify_modes(YPWM_POSITION,YPWM_ALL_MASK,&verified)&&verified==YPWM_ALL_MASK);
  memory[3][0x21]=2;assert(!motor_device_verify_modes(YPWM_POSITION,YPWM_ALL_MASK,&verified));
- assert(motor_device_verify_modes(YPWM_RAW,1U<<3,&verified));
+ assert(motor_device_verify_modes(YPWM_PID,1U<<3,&verified));
+ for(unsigned i=0;i<12;++i)memory[i][0x21]=2;
+ assert(motor_device_verify_modes(YPWM_PID,YPWM_ALL_MASK,&verified)&&verified==YPWM_ALL_MASK);
  assert(motor_device_verify_torque_off(&unknown)&&unknown==0);
  memory[4][0x28]=1;assert(!motor_device_verify_torque_off(&unknown)&&unknown==(1U<<4));memory[4][0x28]=0;
  int16_t pwm[12]={0};pwm[3]=-100;

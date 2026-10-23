@@ -46,7 +46,7 @@ enum message_type {
     MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
     MESSAGE_SET_MOTOR_REGISTER = 0x0DU,
     MESSAGE_SET_CONTROL_MODE = YPWM_MODE_MESSAGE,
-    MESSAGE_SET_MOTOR_PWM = YPWM_TARGET_MESSAGE,
+    MESSAGE_RELEASE_CONTROL = YPWM_RELEASE_MESSAGE,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -688,7 +688,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         return;
     }
     if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
-        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_SET_MOTOR_PWM &&
+        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_RELEASE_CONTROL &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
@@ -709,8 +709,8 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         else {context->pwm_mode_pending=true;context->lease_established=false;}
         break;
     }
-    case MESSAGE_SET_MOTOR_PWM: {
-        const uint8_t error=pwm_control_submit(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8));
+    case MESSAGE_RELEASE_CONTROL: {
+        const uint8_t error=pwm_control_release(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8));
         send_result(context,error?MESSAGE_NACK:MESSAGE_ACK,type,sequence,error);break;
     }
     case MESSAGE_SET_MOTOR_REGISTER:
@@ -770,7 +770,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
             break;
         }
-        if (!pwm_control_native_ready() || !context->host_connected || context->state != HOST_FSM_ARMED ||
+        if (!pwm_control_accepts_positions() || !context->host_connected || context->state != HOST_FSM_ARMED ||
             host_protocol_is_stop_requested()) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
             break;

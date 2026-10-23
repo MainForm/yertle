@@ -157,9 +157,10 @@ bool actuator_task_init(void)
 bool actuator_submit_targets(const motor_target_set_t *targets)
 {
     if ((target_queue == NULL) || !host_protocol_is_armed() || host_protocol_is_stop_requested() ||
-        !pwm_control_native_ready() || !motor_device_validate_targets(targets)) {
+        !pwm_control_accepts_positions() || !motor_device_validate_targets(targets)) {
         return false;
     }
+    if(!pwm_control_native_ready())return pwm_control_submit_positions(targets);
     const queued_target_t queued = {
         .targets = *targets,
         .accepted_tick = xTaskGetTickCount()

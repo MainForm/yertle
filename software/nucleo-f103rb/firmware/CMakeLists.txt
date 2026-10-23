@@ -17,6 +17,7 @@ add_executable(yertle_f103rb
     src/imu_device.c
     src/actuator_task.c
     src/pwm_control.c
+    src/position_pid.c
     src/sensor_task.c
     ${STS3215_DIR}/src/sts3215_protocol.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/system_stm32f1xx.c
@@ -29,7 +30,7 @@ target_include_directories(yertle_f103rb PRIVATE
     ${STS3215_DIR}/inc
     ${STM32F1_DEVICE_DIR}/Include
     ${CMSIS_CORE_DIR})
-target_link_libraries(yertle_f103rb PRIVATE freertos_kernel)
+target_link_libraries(yertle_f103rb PRIVATE freertos_kernel m)
 target_link_options(yertle_f103rb PRIVATE
     -nostartfiles
     --specs=nano.specs
