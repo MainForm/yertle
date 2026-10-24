@@ -5,6 +5,8 @@
 #include "pwm_control.h"
 #include "sensor_task.h"
 #include "host_protocol.h"
+#include "mode_store.h"
+#include "mode_memory.h"
 static uint32_t tick;static unsigned critical,on_count,off_count,write_count,completed,unsafe_count;
 static bool stop_requested,armed,off_ok,mode_ok,feedback_ok,write_ok,cancel_mode,cancel_on;
 static uint16_t on_mask;static int16_t sent[12];static motor_feedback_set_t feedback;
@@ -45,6 +47,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){a
 static uint8_t phase(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[3];}
 static uint8_t reason(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[7];}
 static void reset(void){
+ mode_memory_reset();
  tick=100;critical=on_count=off_count=write_count=completed=unsafe_count=0;on_mask=0;stop_requested=armed=false;
  off_ok=mode_ok=feedback_ok=write_ok=true;cancel_mode=cancel_on=false;memset(sent,0,sizeof sent);
  mode_fail_id=0;verify_off_calls=fail_off_call=0;verify_modes_ok=true;
@@ -122,6 +125,45 @@ static void transaction_tests(void){
  assert(pwm_control_service()&&phase()==YPWM_ROLLING_BACK);assert(pwm_control_service()&&phase()==YPWM_CANCELED);
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_INVALID_STATE);
 }
+static void persistent_boot_tests(void){
+ uint16_t seq;uint8_t result;mode_setting_t pref;
+ reset();ready(8);const int16_t first=sent[3];const unsigned writes_before=mode_memory_programs;
+ for(unsigned i=0;i<5;++i){advance();motor_target_set_t g=goals(8);assert(pwm_control_submit_positions(&g)&&pwm_control_service());}
+ assert(mode_memory_programs==writes_before);armed=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_READY);
+ armed=true;pwm_control_on_armed();motor_target_set_t restarted=goals(8);
+ assert(pwm_control_submit_positions(&restarted)&&pwm_control_service());assert(sent[3]==first); /* no restored I/profile/history */
+ reset();stage(321,8);assert(!mode_store_load(&pref));assert(request(YPWM_COMMIT,321,8)==0);
+ assert(pwm_control_service()&&phase()==YPWM_READY);assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
+ assert(mode_store_load(&pref)&&pref.backend==YPWM_PID&&pref.mask==8);
+ /* A reboot restores selection only: zero PWM/OFF verified, no goals/torqueON. */
+ const unsigned before_on=on_count;pwm_control_init();assert(!pwm_control_can_arm());assert(pwm_control_service());
+ assert(phase()==YPWM_READY&&pwm_control_can_arm()&&!armed&&on_count==before_on);
+ pwm_control_connection_reset();assert(phase()==YPWM_READY); /* initial HELLO */
+ motor_target_set_t goal=goals(8);assert(!pwm_control_submit_positions(&goal));
+ pwm_control_on_armed();pwm_control_connection_reset();stopped(YPWM_REASON_LINK);
+ /* Actual motor-mode mismatch must not enable a restored PID backend. */
+ mode_ok=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ reset();mode_memory_read_ok=false;pwm_control_init();assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ assert(pwm_control_service()&&!pwm_control_can_arm());assert(request(YPWM_PREPARE,321,8)==YPWM_BUSY);
+ reset();mode_memory_read_ok=false;assert(request(YPWM_PREPARE,321,8)==0&&pwm_control_service());
+ assert(phase()==YPWM_ROLLING_BACK&&pwm_control_service()&&phase()==YPWM_CANCELED);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED&&!mode_memory_programs&&!pwm_control_can_arm());
+ /* CANCEL before ARM restores the prior persistent selection too. */
+ reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
+ assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));
+ assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
+ assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
+ /* COMMIT storage failure blocks ARM, with verified previous-preference rollback. */
+ reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);mode_memory_budget=0;
+ assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(phase()==YPWM_ROLLING_BACK&&!pwm_control_can_arm());
+ assert(pwm_control_service()&&phase()==YPWM_CANCELED);assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);
+ assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
+ /* A rollback whose Flash restore fails latches rearm-blocked FAULT. */
+ reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
+ assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));mode_memory_budget=0;
+ assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);assert(request(YPWM_PREPARE,322,8)==YPWM_BUSY);
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
@@ -153,5 +195,6 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  assert(prepare(123,YPWM_ALL_MASK)==0);assert(pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));armed=true;
  g=goals(YPWM_ALL_MASK);g.motor[0].speed=0;assert(!pwm_control_submit_positions(&g));
  transaction_tests();
+ persistent_boot_tests();
  puts("F103 PID service: two-phase register transaction, rollback interlock, host-only current and remaining guards passed");return 0;
 }

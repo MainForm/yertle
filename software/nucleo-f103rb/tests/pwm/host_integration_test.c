@@ -2,6 +2,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "mode_memory.h"
+#include "mode_store.h"
 #include "../../firmware/src/host_protocol.c"
 static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
 static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
@@ -75,6 +77,7 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_ARMED);
 }
 int main(void){
+ mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
  assert(actuator_task_init());assert(pwm_control_service());assert(pwm_control_native_ready());
  uint8_t legacy[8]={2,1};receive(&c,MESSAGE_SET_CONTROL_MODE,legacy,8);assert(last_result==MESSAGE_NACK&&!c.pwm_mode_pending);
@@ -101,5 +104,18 @@ int main(void){
  /* Same-epoch CANCEL confirms already completed automatic rollback. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);service_pwm(&c);
  assert(last_result==MESSAGE_ACK);for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
+ /* Reboot with a stored PID preference: HELLO cannot ARM; fresh heartbeat can
+    start a verified new session without a fresh mode/EEPROM transaction. */
+ const mode_setting_t saved={YPWM_PID,YPWM_ALL_MASK};assert(mode_store_save(&saved));
+ for(unsigned i=0;i<12;++i)servo_modes[i]=2;
+ const unsigned before_program=mode_memory_programs,before_on=on_count;
+ memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
+ pwm_control_init();receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED);
+ assert(pwm_control_service());receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);
+ assert(c.state==HOST_FSM_DISARMED&&on_count==before_on&&mode_memory_programs==before_program);
+ receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED&&on_count==before_on);
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
+ assert(on_count==before_on+1&&native_writes==0&&mode_memory_programs==before_program);
  puts("Host/task transaction: PC register writes, delayed arm, rollback, unchanged goals and watchdog release passed");return 0;
 }

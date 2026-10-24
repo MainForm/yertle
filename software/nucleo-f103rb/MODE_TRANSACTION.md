@@ -59,8 +59,10 @@ PWM0 and verified torqueOFF in PID mode, never native raw2048 centering.
 This is not an instantaneous hardware emergency stop/current clamp. PC current
 guards and the remaining F103 thermal/voltage/sensor/following-error guards remain.
 
-Snapshots are RAM-only. Power loss/reboot cannot guarantee transaction rollback:
-boot verifies physical modes and does not silently arm unknown/PWM modes as native.
+Rollback snapshots are RAM-only. Power loss/reboot cannot guarantee transaction rollback.
+The selected backend/mask are now persisted separately in internal Flash and
+loaded at boot; see PERSISTENT_CONTROL_MODE.md. Boot still verifies physical
+modes and torqueOFF and never restores ARMED or silently reprograms a mismatch.
 Software rollback cannot undo mechanical movement, an interrupted EEPROM write or
 an unreachable servo. Support the robot and verify unloaded after matching firmware
 and PC builds are installed. No real COM operation or flashing is part of offline tests.

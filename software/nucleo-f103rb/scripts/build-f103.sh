@@ -37,6 +37,7 @@ done
 
 # Validates that the linked output is readable as an ARM ELF and reports usage.
 arm-none-eabi-size "$elf"
+cmake -DELF="$elf" -P scripts/verify-mode-layout.cmake
 stat --printf='Firmware: %n\nSize: %s bytes\nModified: %y\n' "$bin"
 printf '\nBUILD SUCCESS: configure, compile/link and artifact checks passed.\n'
 printf 'No-work incremental builds are valid; board execution is not tested here.\n'
