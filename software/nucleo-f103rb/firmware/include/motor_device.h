@@ -189,6 +189,16 @@ static inline motor_verify_report_t motor_verify_initial_report(void) {
 }
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *report);
 bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *report);
+/* Transaction primitives: no arming, no task/global control-state changes.
+ * Only existing native0/PWM2 modes may be captured/restored. */
+typedef struct { uint8_t mode[12];uint16_t valid_mask; } motor_mode_snapshot_t;
+bool motor_device_snapshot_modes(motor_mode_snapshot_t *snapshot,motor_verify_report_t *report);
+bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*allowed)(void),
+    uint16_t *restored,uint8_t *failed_id,motor_register_write_report_t *failure);
+static inline motor_register_write_status_t motor_register_validate_mode_write(const motor_register_write_request_t *q){
+    return q&&q->motor_id>=1&&q->motor_id<=12&&q->address==0x21&&q->length==1&&
+        q->options==MOTOR_REGISTER_ALLOW_EEPROM&&(q->data[0]==0||q->data[0]==2)?MOTOR_WRITE_OK:MOTOR_WRITE_FORBIDDEN;
+}
 motor_device_status_t motor_device_write_pwm(uint16_t mask, const int16_t pwm[12]);
 motor_device_status_t motor_device_torque_mask(uint16_t mask, bool enabled);
 

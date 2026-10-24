@@ -557,6 +557,31 @@ motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bo
     motor_register_write_request_t r={0};r.motor_id=id;r.address=0x21U;r.length=1U;r.options=1U;r.data[0]=mode;
     return write_register_transaction(&r,allowed,true);
 }
+bool motor_device_snapshot_modes(motor_mode_snapshot_t *snapshot,motor_verify_report_t *report)
+{
+    if(!snapshot||!report)return false;
+    memset(snapshot,0,sizeof *snapshot);*report=motor_verify_initial_report();
+    for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
+        const motor_register_status_t status=motor_device_read_register(id,0x21,1,&d);
+        if(status==MOTOR_REGISTER_OK&&(d.data[0]==0||d.data[0]==2)){
+            snapshot->mode[id-1]=d.data[0];snapshot->valid_mask|=(uint16_t)(1U<<(id-1));
+        }else if(!report->motor_id){report->motor_id=id;report->address=0x21;report->io_status=(uint8_t)status;
+            report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->servo_error=d.servo_error;}
+    }
+    return snapshot->valid_mask==YPWM_ALL_MASK;
+}
+bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*allowed)(void),
+    uint16_t *restored,uint8_t *failed_id,motor_register_write_report_t *failure)
+{
+    if(!snapshot||!restored||!failed_id||!failure||snapshot->valid_mask!=YPWM_ALL_MASK||!allowed)return false;
+    *restored=0;*failed_id=0;*failure=motor_register_initial_report();
+    for(uint8_t id=1;id<=12;++id){
+        const motor_register_write_report_t r=motor_device_write_mode(id,snapshot->mode[id-1],allowed);
+        if(r.status==MOTOR_WRITE_OK)*restored|=(uint16_t)(1U<<(id-1));
+        else if(!*failed_id){*failed_id=id;*failure=r;}
+    }
+    return *restored==YPWM_ALL_MASK&&motor_device_register_lock_uncertain_mask()==0;
+}
 
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
 { return motor_device_verify_modes_detailed(backend,mask,verified,NULL); }

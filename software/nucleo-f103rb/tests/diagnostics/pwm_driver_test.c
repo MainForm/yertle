@@ -72,5 +72,14 @@ int main(void){
  motor_verify_report_t v;memory[4][0x21]=0;
  assert(!motor_device_verify_modes_detailed(YPWM_PID,YPWM_ALL_MASK,&verified,&v)&&v.motor_id==3&&v.address==0x21&&v.actual==0&&v.io_status==0);
  memory[4][0x28]=1;assert(!motor_device_verify_torque_off_detailed(&unknown,&v)&&v.motor_id==5&&v.address==0x28&&v.actual==1);memory[4][0x28]=0;
+ motor_mode_snapshot_t original;assert(motor_device_snapshot_modes(&original,&v)&&original.valid_mask==0xfff);
+ for(unsigned i=0;i<12;++i)memory[i][0x21]=original.mode[i]==0?2:0;
+ uint16_t restored;uint8_t failed_id;
+ assert(motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&restored==0xfff&&!failed_id);
+ for(unsigned i=0;i<12;++i)assert(memory[i][0x21]==original.mode[i]&&memory[i][55]==1);
+ memory[2][0x21]=original.mode[2]==0?2:0;fail_write_id=3;
+ assert(!motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&failed_id==3&&restored==(0xfff&~4U));
+ assert(r.status==MOTOR_WRITE_IO_ERROR&&r.lock_restore_verified);fail_write_id=0;
+ override_read_id=4;assert(!motor_device_snapshot_modes(&original,&v)&&v.motor_id==4&&v.actual==1);override_read_id=0;
  puts("PASS actual PWM packet builders: BIT10, exact address/width, selected torque, range rejection, native/mixed readback");return 0;
 }
