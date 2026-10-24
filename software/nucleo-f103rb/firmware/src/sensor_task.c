@@ -1,5 +1,6 @@
 #include "sensor_task.h"
 #include "host_protocol.h"
+#include "pwm_control.h"
 
 #include <string.h>
 
@@ -158,14 +159,15 @@ static void collect_motor_register(void)
 
 static bool register_write_allowed(void)
 {
-    return host_protocol_get_state()==HOST_FSM_DISARMED && !host_protocol_is_stop_requested();
+    return host_protocol_get_state()==HOST_FSM_DISARMED && !host_protocol_is_stop_requested() &&
+        (register_write_request.address!=0x21 || pwm_control_mode_write_allowed(register_write_request.motor_id,register_write_request.data[0]));
 }
 
 bool sensor_request_motor_register_write(uint16_t sequence, const motor_register_write_request_t *request)
 {
-    if (motor_register_validate_write(request)!=MOTOR_WRITE_OK || feedback_mutex==NULL ||
+    if (!request || (request->address==0x21?motor_register_validate_mode_write(request):motor_register_validate_write(request))!=MOTOR_WRITE_OK || feedback_mutex==NULL ||
         xSemaphoreTake(feedback_mutex,pdMS_TO_TICKS(5U))!=pdTRUE) return false;
-    const bool accepted=diagnostic_job_available();
+    const bool accepted=diagnostic_job_available() && (request->address!=0x21 || pwm_control_begin_mode_write(request));
     if (accepted) {
         register_write_request=*request;
         register_write_result=(motor_register_write_result_t){ .request_sequence=sequence };
@@ -195,7 +197,9 @@ static void collect_motor_register_write(void)
     (void)xSemaphoreGive(feedback_mutex);
     if (!pending) return;
     if (!register_write_allowed()) result.report.status=result.report.primary_status=MOTOR_WRITE_INVALID_STATE;
+    else if(request.address==0x21)result.report=motor_device_write_mode(request.motor_id,request.data[0],register_write_allowed);
     else result.report=motor_device_write_register(&request,register_write_allowed);
+    if(request.address==0x21)pwm_control_end_mode_write(&result.report);
     if (xSemaphoreTake(feedback_mutex,portMAX_DELAY)==pdTRUE) {
         register_write_result=result;
         register_write_pending=false;

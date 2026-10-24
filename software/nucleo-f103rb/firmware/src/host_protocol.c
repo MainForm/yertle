@@ -46,7 +46,6 @@ enum message_type {
     MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
     MESSAGE_SET_MOTOR_REGISTER = 0x0DU,
     MESSAGE_SET_CONTROL_MODE = YPWM_MODE_MESSAGE,
-    MESSAGE_RELEASE_CONTROL = YPWM_RELEASE_MESSAGE,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -438,6 +437,10 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
         return;
     }
+    if((payload[1]==0x21 && (length!=5U || !pwm_control_mode_write_allowed(payload[0],payload[4]))) ||
+       (payload[1]!=0x21 && pwm_control_staged_epoch())){
+        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_STATE);return;
+    }
     int free_slot=-1;
     const TickType_t now=xTaskGetTickCount();
     for (unsigned i=0U;i<YERTLE_WRITE_CACHE_CAPACITY;++i) {
@@ -456,6 +459,15 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         } /* Identical in-flight duplicate: no ACK and no second job. */
         return;
     }
+    /* A staged transition writes twelve IDs; retain the bounded recent replay
+       window without exhausting all four slots after the fourth axis. The
+       mode driver independently skips an already matching EEPROM value. */
+    if(free_slot<0&&payload[1]==0x21){
+        for(unsigned i=0;i<YERTLE_WRITE_CACHE_CAPACITY;++i)
+            if(context->write_cache[i].complete&&(free_slot<0 ||
+               (TickType_t)(now-context->write_cache[i].completed_tick)>
+               (TickType_t)(now-context->write_cache[free_slot].completed_tick)))free_slot=(int)i;
+    }
     motor_register_write_request_t request={
         .motor_id=payload[0], .address=payload[1], .length=payload[2], .options=payload[3]
     };
@@ -464,7 +476,9 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         return;
     }
     memcpy(request.data,payload+4U,request.length);
-    const motor_register_write_status_t status=motor_register_validate_write(&request);
+    const motor_register_write_status_t status=request.address==0x21?
+        (motor_register_validate_mode_write(&request)==MOTOR_WRITE_OK&&pwm_control_mode_write_allowed(request.motor_id,request.data[0])?
+            MOTOR_WRITE_OK:MOTOR_WRITE_INVALID_STATE):motor_register_validate_write(&request);
     if (status!=MOTOR_WRITE_OK) {
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,(uint8_t)status);
         return;
@@ -596,6 +610,7 @@ static bool can_arm(const protocol_context_t *context)
 static void try_enter_control_ready(protocol_context_t *context)
 {
     if (can_arm(context)) {
+        pwm_control_on_armed();
         transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_LEASE_READY, true);
     }
 }
@@ -696,7 +711,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         return;
     }
     if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
-        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_RELEASE_CONTROL &&
+        type != MESSAGE_SET_CONTROL_MODE &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
@@ -710,16 +725,16 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     switch (type) {
     case MESSAGE_SET_CONTROL_MODE: {
         uint8_t error=YPWM_INVALID_STATE;
+        const bool cancel=raw[5]==YPWM_MODE_LENGTH&&raw[6]==0&&raw[8]==YPWM_CANCEL;
         if(context->host_connected && context->state==HOST_FSM_DISARMED &&
-           !context->register_job_active && !context->offsets_job_active && !context->pwm_mode_pending && !host_protocol_is_stop_requested())
+           (cancel||(!context->register_job_active && !context->offsets_job_active && !context->pwm_mode_pending && !host_protocol_is_stop_requested())))
             error=pwm_control_request_mode(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8),sequence);
         if(error)send_result(context,MESSAGE_NACK,type,sequence,error);
-        else {context->pwm_mode_pending=true;context->lease_established=false;}
+        else {context->pwm_mode_pending=true;context->lease_established=false;
+            /* A mode-write replay is valid only within this transition. No old
+               epoch may acknowledge a write that has not happened here. */
+            if(raw[8]==YPWM_PREPARE)memset(context->write_cache,0,sizeof context->write_cache);}
         break;
-    }
-    case MESSAGE_RELEASE_CONTROL: {
-        const uint8_t error=pwm_control_release(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8));
-        send_result(context,error?MESSAGE_NACK:MESSAGE_ACK,type,sequence,error);break;
     }
     case MESSAGE_SET_MOTOR_REGISTER:
         handle_motor_register_write(context,sequence,raw+YERTLE_PROTOCOL_HEADER_SIZE,

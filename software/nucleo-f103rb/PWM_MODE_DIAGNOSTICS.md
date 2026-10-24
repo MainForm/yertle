@@ -1,6 +1,7 @@
 # PWM/PID mode preparation diagnostics
 
-Existing schema2/capability4 MODE0x0E, status EVENT4 and four-byte ACK/NACK
+Schema3/capability8 MODE0x0E and status EVENT4 are defined in MODE_TRANSACTION.md.
+The additive detail codec and four-byte ACK/NACK
 are unchanged. MODE_FAILED remains14. No new host command or arming bypass.
 
 Mode completion now publishes EVENT5/version1 (64 bytes, little endian;

@@ -5,7 +5,8 @@
 #include "../../firmware/src/host_protocol.c"
 static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
 static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
-static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64];
+static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
+static motor_register_write_result_t pending_write;static bool write_ready;
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
 TickType_t xTaskGetTickCount(void){return tick;}void vTaskDelay(TickType_t t){tick+=t;}
 void vTaskDelayUntil(TickType_t *p,TickType_t t){tick=*p+t;*p=tick;}
@@ -17,7 +18,7 @@ bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROT
  assert(cobs_decode(data+1,n-2,raw,&length)&&validate_frame(raw,length,&type,&seq));
  ++tx_order;
  if(type==MESSAGE_EVENT&&raw[7]==YPWM_DIAG_EVENT){assert(raw[5]==64);diag_order=tx_order;memcpy(last_diag,raw+7,64);}
- if(type==REGISTER_WRITE_DIAGNOSTICS_TYPE){write_diag_order=tx_order;assert(raw[5]==64&&raw[11]==mode_fail_id);}
+ if(type==REGISTER_WRITE_DIAGNOSTICS_TYPE){write_diag_order=tx_order;assert(raw[5]==64);}
  if(type==MESSAGE_ACK||type==MESSAGE_NACK){last_result=type;last_error=raw[10];result_order=tx_order;}return true;
 }
 bool host_uart_try_read(uint8_t *b,bool *d){(void)b;*d=false;return false;}
@@ -25,8 +26,14 @@ bool sensor_take_position_offsets(motor_position_offsets_t *r){(void)r;return fa
 bool sensor_request_position_offsets(uint16_t s){(void)s;return false;}
 bool sensor_take_motor_register(motor_register_result_t *r){(void)r;return false;}
 bool sensor_request_motor_register(uint16_t s,uint8_t id,uint8_t a,uint8_t n){(void)s;(void)id;(void)a;(void)n;return false;}
-bool sensor_take_motor_register_write(motor_register_write_result_t *r){(void)r;return false;}
-bool sensor_request_motor_register_write(uint16_t s,const motor_register_write_request_t *r){(void)s;(void)r;return false;}
+bool sensor_take_motor_register_write(motor_register_write_result_t *r){if(!write_ready)return false;*r=pending_write;write_ready=false;return true;}
+bool sensor_request_motor_register_write(uint16_t seq,const motor_register_write_request_t *q){
+ if(!pwm_control_begin_mode_write(q))return false;
+ pending_write.request_sequence=seq;pending_write.report=motor_register_initial_report();
+ pending_write.report.status=q->motor_id==mode_fail_id?MOTOR_WRITE_VERIFY_MISMATCH:MOTOR_WRITE_OK;
+ if(pending_write.report.status==MOTOR_WRITE_OK)servo_modes[q->motor_id-1]=q->data[0];
+ pwm_control_end_mode_write(&pending_write.report);write_ready=true;return true;
+}
 uint16_t motor_device_register_lock_uncertain_mask(void){return 0;}
 void uart_diagnostics_send(void *c,uart_diag_sender_t send){(void)c;(void)send;}
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);memset(f,0,sizeof *f);memset(imu,0,sizeof *imu);
@@ -36,35 +43,63 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){(v
 motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);return MOTOR_DEVICE_OK;}
 motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask=mask;}return MOTOR_DEVICE_OK;}
 bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=0;return true;}
-bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){(void)backend;(void)mask;assert(!critical);*verified=YPWM_ALL_MASK;return true;}
+bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){
+ assert(!critical);*verified=0;for(unsigned i=0;i<12;++i)if(servo_modes[i]==((backend==YPWM_PID&&(mask&(1U<<i)))?2:0))*verified|=(uint16_t)(1U<<i);
+ return *verified==YPWM_ALL_MASK;
+}
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *r){*r=motor_verify_initial_report();return motor_device_verify_modes(backend,mask,verified);}
 bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *r){*r=motor_verify_initial_report();return motor_device_verify_torque_off(unknown);}
-motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void)){
- assert(!critical&&id>=1&&id<=12&&(mode==0||mode==2)&&allowed());motor_register_write_report_t r=motor_register_initial_report();r.status=id==mode_fail_id?MOTOR_WRITE_VERIFY_MISMATCH:MOTOR_WRITE_OK;
- if(id==mode_fail_id){r.primary_status=r.status;r.failure_stage=MOTOR_WRITE_STAGE_VERIFY;r.initial_value=0;r.verified_value=1;r.last_read_status=0;r.last_read_address=0x21;}return r;}
+bool motor_device_snapshot_modes(motor_mode_snapshot_t *m,motor_verify_report_t *r){
+ assert(!critical);memcpy(m->mode,servo_modes,12);m->valid_mask=YPWM_ALL_MASK;*r=motor_verify_initial_report();return true;
+}
+bool motor_device_restore_modes(const motor_mode_snapshot_t *m,bool (*allowed)(void),uint16_t *restored,uint8_t *id,motor_register_write_report_t *r){
+ assert(!critical&&allowed());memcpy(servo_modes,m->mode,12);*restored=YPWM_ALL_MASK;*id=0;*r=motor_register_initial_report();return true;
+}
 motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);memcpy(duty,values,sizeof duty);return MOTOR_DEVICE_OK;}
 static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t n){
- uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1,type,0,42,0};raw[5]=(uint8_t)n;if(n)memcpy(raw+7,p,n);
+ static uint16_t seq;uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1,type};ypwm_put16(raw+3,++seq);raw[5]=(uint8_t)n;if(n)memcpy(raw+7,p,n);
  ypwm_put16(raw+7+n,crc16_ccitt(raw,7+n));handle_frame(c,raw,9+n);
 }
-int main(void){protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
+static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
+ uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,backend};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,epoch);
+ receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
+ receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
+ assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!pwm_control_can_arm());
+ for(uint8_t id=1;id<=12;++id){
+  const uint8_t q[5]={id,0x21,1,1,backend==YPWM_PID?2:0};
+  receive(c,MESSAGE_SET_MOTOR_REGISTER,q,5);assert(c->register_job_active);
+  service_motor_register_write(c);assert(last_result==MESSAGE_ACK);
+ }
+ mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
+ assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established);
+ receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_ARMED);
+}
+int main(void){
+ protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
  assert(actuator_task_init());assert(pwm_control_service());assert(pwm_control_native_ready());
- uint8_t mode[8]={1,1};ypwm_put16(mode+2,YPWM_ALL_MASK);ypwm_put32(mode+4,123);
- receive(&c,MESSAGE_SET_CONTROL_MODE,mode,8);assert(last_result==MESSAGE_NACK&&!c.pwm_mode_pending);mode[0]=2;
- receive(&c,MESSAGE_SET_CONTROL_MODE,mode,8);assert(c.pwm_mode_pending);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED);
- assert(pwm_control_service());service_pwm(&c);assert(!c.pwm_mode_pending&&!c.lease_established);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED);
+ uint8_t legacy[8]={2,1};receive(&c,MESSAGE_SET_CONTROL_MODE,legacy,8);assert(last_result==MESSAGE_NACK&&!c.pwm_mode_pending);
+ const uint8_t forbidden[5]={1,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,forbidden,5);assert(last_result==MESSAGE_NACK);
+ transition(&c,YPWM_PID,123);
  assert(diag_order&&diag_order<result_order&&last_diag[3]==YPWM_DIAG_COMPLETE);
  uint8_t targets[60]={0};for(unsigned i=0;i<12;++i){ypwm_put16(targets+5*i,2200);ypwm_put16(targets+5*i+2,200);}
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&last_error==0&&queues==0);
- assert(pwm_control_service());assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);for(unsigned i=0;i<12;++i)assert(duty[i]>0&&duty[i]<=100);
- uint8_t legacy[37]={0};receive(&c,MESSAGE_RELEASE_CONTROL,legacy,37);assert(last_result==MESSAGE_NACK);
- const uint8_t release[1]={2};receive(&c,MESSAGE_RELEASE_CONTROL,release,1);service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
- assert(pwm_control_service());service_safety_state(&c);assert(!host_protocol_is_stop_requested());for(unsigned i=0;i<12;++i)assert(duty[i]==0);
- mode[1]=0;ypwm_put32(mode+4,124);receive(&c,MESSAGE_SET_CONTROL_MODE,mode,8);assert(c.pwm_mode_pending);assert(pwm_control_service());service_pwm(&c);
- assert(pwm_control_native_ready());receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);
- assert(last_result==MESSAGE_ACK&&queues==1);
- published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;mode_fail_id=2;mode[1]=1;ypwm_put32(mode+4,125);
- receive(&c,MESSAGE_SET_CONTROL_MODE,mode,8);assert(c.pwm_mode_pending);assert(pwm_control_service());service_pwm(&c);
- assert(last_result==MESSAGE_NACK&&last_error==14&&diag_order<write_diag_order&&write_diag_order<result_order);
- assert(last_diag[7]==2&&last_diag[31]==15&&last_diag[33]==8&&last_diag[35]==1&&ypwm_u16(last_diag+14)==1);
- puts("Actual host+actuator+PID: detailed mode EVENT/0x90 before correlated NACK, unchanged position/release paths passed");return 0;}
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==0);
+ assert(pwm_control_service());assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);
+ for(unsigned i=0;i<12;++i)assert(duty[i]>0&&duty[i]<=100);
+ /* Removed 0x0F must be rejected; ordinary target/heartbeat watchdog stops PID. */
+ receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);
+ tick+=501;assert(pwm_control_service());service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
+ assert(pwm_control_service());service_safety_state(&c);assert(!host_protocol_is_stop_requested());
+ for(unsigned i=0;i<12;++i)assert(duty[i]==0);
+ transition(&c,YPWM_POSITION,124);assert(pwm_control_native_ready());
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==1);
+ published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;mode_fail_id=2;
+ uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,125);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(pwm_control_service());service_pwm(&c);
+ const uint8_t q[5]={2,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,q,5);service_motor_register_write(&c);
+ assert(last_result==MESSAGE_NACK&&last_error==15&&write_diag_order<result_order);
+ assert(pwm_control_service());service_pwm(&c);assert(!pwm_control_can_arm());
+ /* Same-epoch CANCEL confirms already completed automatic rollback. */
+ mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);service_pwm(&c);
+ assert(last_result==MESSAGE_ACK);for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
+ puts("Host/task transaction: PC register writes, delayed arm, rollback, unchanged goals and watchdog release passed");return 0;
+}

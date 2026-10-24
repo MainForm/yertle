@@ -1,4 +1,4 @@
-# F103 position PID backend (schema 2)
+# F103 position PID backend (schema 3)
 
 PC still sends `SET_JOINT_TARGETS 0x06`: 12 x (position u16, speed u16,
 acceleration u8), total 60 bytes. Calibration, motor ID/sign mappings and
@@ -11,20 +11,22 @@ ONNX inputs/outputs are unchanged. No host PWM duty command is accepted.
   task generates profiled position references, computes PID and SyncWrites PWM.
   Any nonempty 12-bit mask is supported; normal robot operation selects all12.
   Nonselected servos are torqueOFF, not simultaneous native controlled axes.
-- HELLO capability mask `0x00000004`, schema2. Old capability `0x00000002`/schema1 direct-PWM clients
-  cannot prepare this backend. `SET_CONTROL_MODE 0x0E` remains 8 bytes:
-  schema u8, backend u8, mask u16LE, fresh epoch u32LE.
-- `0x0F` is now **RELEASE_CONTROL**, exactly one schema byte `02`. It never
-  accepts signed PWM data. Release remains legal without a valid epoch/lease.
+- HELLO capability mask `0x00000008`, schema3. SET_CONTROL_MODE0x0E is9 bytes:
+  schema, operation(PREPARE/COMMIT/CANCEL), backend, mask u16LE, epoch u32LE.
+  Normal servo mode writes now come from PC through SET_MOTOR_REGISTER0x0D.
+  See [MODE_TRANSACTION.md](MODE_TRANSACTION.md) for the exact state/rollback contract.
+- `0x0F` is removed. Normal release stops targets/heartbeat and uses existing
+  watchdogs; PID safe-stop writes PWM0/torqueOFF, never native raw2048.
 - Mode ACK means completed torqueOFF/mode/lock verification, not torqueON.
   Target ACK means position goal accepted, not motor arrival. EVENT4 retains
-  the 38-byte layout with schema2; counters are now accepted position goals,
+  the 38-byte layout with schema3; counters are now accepted position goals,
   timeout=500ms, following-error limit=512steps, output=first selected axis PWM.
 
 Explicit mode changes occur only DISARMED/torqueOFF, preserve EEPROM locks and
 require independent mode readback. Reboot does not reset servo EEPROM mode.
 Boot verifies actual native modes; unknown/PWM mode never enters native arming
-or the native raw2048 return path. Direct mode-register SET remains forbidden.
+or the native raw2048 return path. Mode-register SET is legal only inside the
+matching STAGED transition with exact ID/value/EEPROM options.
 
 ## Controller and units
 
@@ -90,10 +92,11 @@ not position-control limits. Conservative PWM/I clamps remain until tuning.
 
 PID computation runs in the actuator task, not the host packet or ISR path.
 All motor I/O is outside critical sections. The 2.5KB actuator stack is retained.
-The new unoptimized ARM static audit reports actuator376 + service312 + PID776
+The historical schema2 unoptimized ARM static audit reported actuator376 + service312 + PID776
 =1464 bytes before nested calls; the PWM build path adds motor144 + SyncWrite176
 + pack40 + checksum24 =384 bytes (1848 total, excluding RTOS/library/context
-overhead). This is not a runtime high-water proof; actual high-water/heap/timing
+overhead). Schema3 transition/rollback stack sizes require a new ARM audit; those
+historical figures are not a current stack proof. Actual high-water/heap/timing
 measurements are still required on hardware. No claim of stable walking or tuned gains.
 
 ## Verification
@@ -103,7 +106,7 @@ plant tests; actual host+actuator+PID integration routes unchanged0x06 to PWM;
 multi-axis/fresh-sample/timeout/cancellation/temperature/OFF protections, host-only
 current ownership (signed/boundary/summed high telemetry does not stop F103, while
 an explicit host release still zeros PWM and verifies torqueOFF);
-schema2 rejects old direct-PWM payloads. `tests/diagnostics` retains legacy
+schema3 rejects old direct-PWM and schema2 payloads. `tests/diagnostics` retains legacy
 position stop, DMA, heartbeat and register lock tests. Synthetic tests do not
 validate the real mechanism. Support the full robot and start unloaded.
 

@@ -1,6 +1,6 @@
 #ifndef YERTLE_PWM_MODE_DIAGNOSTICS_H
 #define YERTLE_PWM_MODE_DIAGNOSTICS_H
-/* Additive EVENT payload; existing schema2 status and ACK/NACK are unchanged.
+/* Additive EVENT payload; independent of the schema3 status and ACK/NACK.
  * All multibyte values are little endian. 255 means unobserved byte/status. */
 #define YPWM_DIAG_EVENT 5U
 #define YPWM_DIAG_VERSION 1U
