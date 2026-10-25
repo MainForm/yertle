@@ -248,34 +248,44 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
     return result;
 }
 
+/* Bus mutex owns this detail; capture it into the report before cleanup I/O. */
+static uint8_t register_io_detail;
 static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
     uint8_t length, motor_register_data_t *result, uint32_t timeout_ms)
 {
     memset(result, 0, sizeof(*result));
+    register_io_detail=MOTOR_IO_NONE;
 
     motor_register_status_t status = MOTOR_REGISTER_REPLY_ERROR;
     const int16_t frame_length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id, address, length);
     motor_uart_discard_rx();
     if (frame_length <= 0) {
+        register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
     } else if (!motor_uart_write(tx_frame, (size_t)frame_length, timeout_ms)) {
+        register_io_detail=MOTOR_IO_TX;
         status = MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else {
         size_t received_length = 0U;
         if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
+            register_io_detail=MOTOR_IO_RX;
             status = MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
             STS3215_Reply_t reply = { 0 };
             const STS3215_Status_t parsed = STS3215_ParseReply(rx_frame, (uint16_t)received_length, &reply);
             if (parsed != STS3215_OK && parsed != STS3215_ERR_SERVO_FAULT) {
+                register_io_detail=parsed==STS3215_ERR_BAD_CHECKSUM?MOTOR_IO_CHECKSUM:MOTOR_IO_PARSE;
                 motor_diagnostics_record(parsed == STS3215_ERR_BAD_CHECKSUM ? DIAG_BAD_CHECKSUM : DIAG_PARSE_ERROR);
             } else if (reply.id != id) {
+                register_io_detail=MOTOR_IO_ID;
                 motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
             } else if (parsed == STS3215_ERR_SERVO_FAULT) {
+                register_io_detail=MOTOR_IO_SERVO;
                 result->servo_error = reply.error;
                 motor_diagnostics_record(DIAG_SERVO_FAULT);
                 status = MOTOR_REGISTER_SERVO_ERROR;
             } else if (reply.data_len != length) {
+                register_io_detail=MOTOR_IO_LENGTH;
                 motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
             } else {
                 /* ParseReply validates the complete checksum but only copies
@@ -317,27 +327,34 @@ static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
     uint32_t timeout_ms)
 {
     *servo_error=0U;
+    register_io_detail=MOTOR_IO_NONE;
     const int16_t size=STS3215_BuildWriteRaw(tx_frame,sizeof(tx_frame),id,address,data,length);
     motor_register_status_t status=MOTOR_REGISTER_REPLY_ERROR;
     motor_uart_discard_rx();
     if (size<=0) {
+        register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
     } else if (!motor_uart_write(tx_frame,(size_t)size,timeout_ms)) {
+        register_io_detail=MOTOR_IO_TX;
         status=MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else if (response_level==STS3215_RESP_READ_PING_ONLY) {
         status=MOTOR_REGISTER_OK; /* Confirmation still requires read-back. */
     } else {
         size_t received=0U;
         if (!motor_uart_read_frame(rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
+            register_io_detail=MOTOR_IO_RX;
             status=MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
             STS3215_Reply_t reply={0};
             const STS3215_Status_t parsed=STS3215_ParseReply(rx_frame,(uint16_t)received,&reply);
             if (parsed!=STS3215_OK && parsed!=STS3215_ERR_SERVO_FAULT) {
+                register_io_detail=parsed==STS3215_ERR_BAD_CHECKSUM?MOTOR_IO_CHECKSUM:MOTOR_IO_PARSE;
                 motor_diagnostics_record(parsed==STS3215_ERR_BAD_CHECKSUM ? DIAG_BAD_CHECKSUM : DIAG_PARSE_ERROR);
             } else if (reply.id!=id || reply.data_len!=0U) {
+                register_io_detail=reply.id!=id?MOTOR_IO_ID:MOTOR_IO_LENGTH;
                 motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
             } else if (parsed==STS3215_ERR_SERVO_FAULT) {
+                register_io_detail=MOTOR_IO_SERVO;
                 *servo_error=reply.error;
                 motor_diagnostics_record(DIAG_SERVO_FAULT);
                 status=MOTOR_REGISTER_SERVO_ERROR;
@@ -364,6 +381,7 @@ static motor_register_status_t read_for_report(uint8_t id,uint8_t address,uint8_
     motor_register_data_t *data,motor_register_write_report_t *report)
 {
     const motor_register_status_t status=read_register_locked(id,address,length,data);
+    if(status!=MOTOR_REGISTER_OK)report->io_detail=register_io_detail;
     report->last_read_status=(uint8_t)status;report->last_read_address=address;
     report->last_read_value=status==MOTOR_REGISTER_OK?data->data[0]:255U;return status;
 }
@@ -371,6 +389,7 @@ static motor_register_status_t write_for_report(uint8_t id,uint8_t address,const
     uint8_t length,uint8_t response_level,motor_register_write_report_t *report)
 {
     const motor_register_status_t status=write_register_locked(id,address,data,length,response_level,&report->servo_error);
+    if(status!=MOTOR_REGISTER_OK)report->io_detail=register_io_detail;
     report->last_write_status=(uint8_t)status;report->last_write_address=address;return status;
 }
 
@@ -408,6 +427,7 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
         if (budget==0U) { lock_failure(r,5U); break; }
         ++r->lock_attempts;
         r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        if(r->lock_read_status!=MOTOR_REGISTER_OK&&!r->io_detail)r->io_detail=register_io_detail;
         r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
         r->lock_read_servo_error=current.servo_error;
         if (r->lock_read_status==MOTOR_REGISTER_SERVO_ERROR) {
@@ -423,6 +443,7 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
         r->lock_write_servo_error=0U;
         r->lock_write_status=(uint8_t)write_register_timed(id,STS3215_REG_LOCK_MARK,&expected,1U,
             response_level,&r->lock_write_servo_error,budget);
+        if(r->lock_write_status!=MOTOR_REGISTER_OK&&!r->io_detail)r->io_detail=register_io_detail;
         r->cleanup_servo_error|=r->lock_write_servo_error;
         if (r->lock_write_status!=MOTOR_REGISTER_OK) lock_failure(r,r->lock_write_servo_error ? 4U : 2U);
         if (elapsed_ms(started)+MOTOR_LOCK_SETTLE_MS>=MOTOR_LOCK_BUDGET_MS) {
@@ -432,6 +453,7 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
         budget=lock_io_budget(started,r);
         if (budget==0U) { lock_failure(r,5U);break; }
         r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        if(r->lock_read_status!=MOTOR_REGISTER_OK&&!r->io_detail)r->io_detail=register_io_detail;
         r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
         r->lock_read_servo_error=current.servo_error;
         if (r->lock_read_status==MOTOR_REGISTER_SERVO_ERROR) r->cleanup_servo_error|=current.servo_error;
@@ -529,7 +551,7 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
     report.servo_error=data.servo_error;
     if(report.status==MOTOR_WRITE_OK)report.verified_value=data.data[0];
     if (report.status==MOTOR_WRITE_OK && memcmp(data.data,request->data,request->length)!=0)
-        report.status=MOTOR_WRITE_VERIFY_MISMATCH;
+        {report.status=MOTOR_WRITE_VERIFY_MISMATCH;report.io_detail=MOTOR_IO_VALUE;}
 done:
     report.primary_status=report.status;
     if (report.status!=MOTOR_WRITE_OK) report.failure_stage=stage;
@@ -552,11 +574,22 @@ motor_register_write_report_t motor_device_write_register(const motor_register_w
                                                         bool (*allowed)(void))
 { return write_register_transaction(request,allowed,false); }
 
-motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
+static motor_register_write_report_t write_mode_once(uint8_t id,uint8_t mode,bool (*allowed)(void))
 {
     motor_register_write_request_t r={0};r.motor_id=id;r.address=0x21U;r.length=1U;r.options=1U;r.data[0]=mode;
-    return write_register_transaction(&r,allowed,true);
+    /* One target transaction per PC request. Only mandatory bounded LOCK
+       recovery remains local; the PC owns mode retry count/delay/deadline. */
+    motor_register_write_report_t result=write_register_transaction(&r,allowed,true);
+    result.mode_attempts=result.mode_attempt_limit=1;
+    result.first_mode_status=(uint8_t)result.status;
+    if(bus_mutex!=NULL&&id>=1U&&id<=12U&&take_bus()){
+        register_write_diagnostics.motor_id=id;register_write_diagnostics.address=0x21;
+        register_write_diagnostics.report=result;(void)xSemaphoreGive(bus_mutex);
+    }
+    return result;
 }
+motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
+{ return write_mode_once(id,mode,allowed); }
 bool motor_device_snapshot_modes(motor_mode_snapshot_t *snapshot,motor_verify_report_t *report)
 {
     if(!snapshot||!report)return false;
@@ -576,7 +609,7 @@ bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*all
     if(!snapshot||!restored||!failed_id||!failure||snapshot->valid_mask!=YPWM_ALL_MASK||!allowed)return false;
     *restored=0;*failed_id=0;*failure=motor_register_initial_report();
     for(uint8_t id=1;id<=12;++id){
-        const motor_register_write_report_t r=motor_device_write_mode(id,snapshot->mode[id-1],allowed);
+        const motor_register_write_report_t r=write_mode_once(id,snapshot->mode[id-1],allowed);
         if(r.status==MOTOR_WRITE_OK)*restored|=(uint16_t)(1U<<(id-1));
         else if(!*failed_id){*failed_id=id;*failure=r;}
     }

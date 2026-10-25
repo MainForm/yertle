@@ -238,7 +238,7 @@ int main(void)
     assert(!sensor_request_motor_register_write(9U,&register_write_request));
     service_motor_register_write(&context);
     check_set_result(0x1234U,0U);
-    assert(diagnostic_count==1U && diagnostic[0]==1U && diagnostic[2]==0x34U && diagnostic[3]==0x12U);
+    assert(diagnostic_count==1U && diagnostic[0]==2U && diagnostic[2]==0x34U && diagnostic[3]==0x12U);
     assert(diagnostic[4]==1U && diagnostic[5]==21U && diagnostic[16]==2U && diagnostic[24]==17U);
     assert(!context.register_job_active && pending_safety_action==HOST_SAFETY_ACTION_NONE);
     set_payload(&context,0x1234U,golden,sizeof(golden)); check_set_result(0x1234U,0U);

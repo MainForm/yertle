@@ -89,7 +89,12 @@ typedef struct {
     /* Primary transaction observations; lock cleanup has its own fields above. */
     uint8_t last_read_status,last_write_status,last_read_address,last_write_address;
     uint8_t initial_value,verified_value,last_read_value;
+    uint8_t mode_attempts,mode_attempt_limit,io_detail,first_mode_status;
 } motor_register_write_report_t;
+
+enum motor_register_io_detail { MOTOR_IO_NONE, MOTOR_IO_BUILD, MOTOR_IO_TX,
+    MOTOR_IO_RX, MOTOR_IO_CHECKSUM, MOTOR_IO_PARSE, MOTOR_IO_ID, MOTOR_IO_LENGTH,
+    MOTOR_IO_SERVO, MOTOR_IO_VALUE, MOTOR_IO_STATE, MOTOR_IO_LOCK, MOTOR_IO_BUDGET };
 
 #define MOTOR_LOCK_ATTEMPT_LIMIT 2U
 #define MOTOR_LOCK_UART_TIMEOUT_MS 10U
