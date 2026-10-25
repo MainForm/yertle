@@ -29,6 +29,16 @@ static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
 static uint32_t milliseconds(void){return (uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS);}
 static control_context snapshot(void){control_context s;taskENTER_CRITICAL();s=p;taskEXIT_CRITICAL();return s;}
+/* Output guards must not copy the goal/PWM arrays onto nested task stacks. */
+static bool pid_current(uint8_t phase){
+    taskENTER_CRITICAL();const bool ok=p.phase==phase&&!p.direct;taskEXIT_CRITICAL();return ok;
+}
+static bool raw_current(uint8_t phase,uint16_t request){
+    taskENTER_CRITICAL();const bool ok=p.phase==phase&&p.raw_pending&&p.raw_request==request;taskEXIT_CRITICAL();return ok;
+}
+static bool phase_current(uint8_t phase){
+    taskENTER_CRITICAL();const bool ok=p.phase==phase;taskEXIT_CRITICAL();return ok;
+}
 void pwm_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
@@ -392,13 +402,13 @@ static void service_pid(const control_context *s,uint32_t now){
         if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,s->goal.motor[i].speed,
             s->goal.motor[i].acceleration,f.motor[i].position,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }
-    if(snapshot().phase!=s->phase||snapshot().direct||host_protocol_is_stop_requested())return;
+    if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
-    if(snapshot().phase!=s->phase||host_protocol_is_stop_requested())return;
+    if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
     if(s->phase==YPWM_READY){
         taskENTER_CRITICAL();p.unknown|=s->mask;taskEXIT_CRITICAL();
         if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
-        if(snapshot().phase!=s->phase||host_protocol_is_stop_requested()){
+        if(!pid_current(s->phase)||host_protocol_is_stop_requested()){
             const int16_t zero[12]={0};(void)motor_device_write_pwm(s->mask,zero);
             (void)motor_device_torque_mask(YPWM_ALL_MASK,false);return;
         }
@@ -423,15 +433,14 @@ static void service_raw(const control_context *s,uint32_t now){
         if(host_protocol_get_state()!=HOST_FSM_DISARMED||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
         else if(!motor_device_verify_modes(YPWM_PID,s->mask,&verified))result=YPWM_PWM_MODE_REQUIRED;
     }
-    const control_context current=snapshot();
-    if(current.phase!=s->phase||!current.raw_pending||current.raw_request!=s->raw_request||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
+    if(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
     if(!result&&motor_device_write_pwm(s->mask,s->raw)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
-    if(!result&&(snapshot().phase!=s->phase||host_protocol_is_stop_requested()||
+    if(!result&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||
        (!s->raw_preview&&!host_protocol_is_armed())))result=YPWM_INVALID_STATE;
     if(!result&&!s->raw_preview&&s->phase==YPWM_READY){
         if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
     }
-    if(!s->raw_preview&&(snapshot().phase!=s->phase||host_protocol_is_stop_requested()||!host_protocol_is_armed())){
+    if(!s->raw_preview&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||!host_protocol_is_armed())){
         const int16_t zero[12]={0};(void)motor_device_write_pwm(s->mask,zero);
         (void)motor_device_torque_mask(YPWM_ALL_MASK,false);result=YPWM_INVALID_STATE;
     }
@@ -443,7 +452,7 @@ static void service_raw(const control_context *s,uint32_t now){
         p.dirty=true;
     }
     taskEXIT_CRITICAL();
-    if(result&&!s->raw_preview&&!host_protocol_is_stop_requested()&&snapshot().phase==s->phase)
+    if(result&&!s->raw_preview&&!host_protocol_is_stop_requested()&&phase_current(s->phase))
         pwm_control_stop(YPWM_REASON_DRIVER);
 }
 bool pwm_control_service(void){

@@ -42,7 +42,7 @@ int main(void)
 
     created = xTaskCreate(actuator_task,
                           "actuator",
-                          /* ARM .su: actuator376 + service312 + PID776;
+                          /* ARM .su: actuator376 + service440 + PID344/raw256;
                            * reserve nested motor driver/RTOS calls + margin. */
                           configMINIMAL_STACK_SIZE * 5U,
                           NULL,
