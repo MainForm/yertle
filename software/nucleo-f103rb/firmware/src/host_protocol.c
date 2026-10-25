@@ -46,6 +46,7 @@ enum message_type {
     MESSAGE_GET_MOTOR_REGISTER = 0x0CU,
     MESSAGE_SET_MOTOR_REGISTER = 0x0DU,
     MESSAGE_SET_CONTROL_MODE = YPWM_MODE_MESSAGE,
+    MESSAGE_SET_MOTOR_PWM = YPWM_DIRECT_MESSAGE,
     MESSAGE_ACK = 0x80U,
     MESSAGE_NACK = 0x81U,
     MESSAGE_HELLO_ACK = 0x82U,
@@ -321,10 +322,15 @@ static void send_diagnostic_frame(void *context, uint8_t type,
 
 static void send_hello_ack(protocol_context_t *context)
 {
+#ifdef YERTLE_SEQUENCE_AUDIT_FIRMWARE
+    const uint8_t direct_capability=0; /* Restrictive old bench overlay. */
+#else
+    const uint8_t direct_capability=YPWM_DIRECT_CAPABILITY;
+#endif
     const uint8_t payload[] = {
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
-        0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY, 0U, 0U, 0U
+        0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | direct_capability | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY, 0U, 0U, 0U
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }
@@ -722,7 +728,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         return;
     }
     if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
-        type != MESSAGE_SET_CONTROL_MODE &&
+        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_SET_MOTOR_PWM &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
         return;
@@ -748,6 +754,19 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     }
 
     switch (type) {
+    case MESSAGE_SET_MOTOR_PWM: {
+        if(raw[5]!=YPWM_DIRECT_LENGTH||raw[6]){send_result(context,MESSAGE_NACK,type,sequence,ERROR_INVALID_LENGTH);break;}
+        if(!context->host_connected){send_result(context,MESSAGE_NACK,type,sequence,ERROR_NOT_CONNECTED);break;}
+        if(context->register_job_active||context->offsets_job_active||context->pwm_mode_pending){
+            send_result(context,MESSAGE_NACK,type,sequence,ERROR_TARGET_BUSY);break;}
+        int16_t duty[12];
+        for(unsigned i=0;i<12;++i){const uint16_t word=ypwm_u16(raw+7+2*i);
+            duty[i]=(int16_t)(word<32768U?(int32_t)word:(int32_t)word-65536);}
+        const uint8_t error=pwm_control_submit_raw(duty,sequence);
+        if(error)send_result(context,MESSAGE_NACK,type,sequence,error);
+        /* Success is acknowledged by service_pwm after actuator UART TX. */
+        break;
+    }
     case MESSAGE_SET_CONTROL_MODE: {
         uint8_t error=YPWM_INVALID_STATE;
         const bool cancel=raw[5]==YPWM_MODE_LENGTH&&raw[6]==0&&raw[8]==YPWM_CANCEL;
@@ -908,6 +927,9 @@ static void process_host_rx(protocol_context_t *context)
 
 static void service_pwm(protocol_context_t *context)
 {
+    uint16_t raw_sequence;uint8_t raw_result;
+    if(pwm_control_take_raw_result(&raw_sequence,&raw_result))
+        send_result(context,raw_result?MESSAGE_NACK:MESSAGE_ACK,MESSAGE_SET_MOTOR_PWM,raw_sequence,raw_result);
     /* Also deliver a late canceled transaction diagnostic if its NACK was
        already sent while the actuator was unwinding the mode transaction. */
     send_pwm_mode_diagnostics(context,false);

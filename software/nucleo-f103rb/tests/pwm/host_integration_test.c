@@ -160,5 +160,20 @@ int main(void){
  assert(boot_status[6]==YPWM_FLASH_READ_FAILED&&boot_status[7]==YPWM_REASON_FLASH_READ&&ypwm_u32(boot_status+8)==0);
  try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
  mode_memory_read_ok=true;pwm_control_init();assert(pwm_control_status(boot_status,true)&&boot_status[6]==0&&ypwm_u32(boot_status+8)==0);
- puts("Host/task transaction and first-boot Flash NACK isolation passed");return 0;
+ /* Wrong backend rejects a complete PWM frame, even while DISARMED. */
+ mode_memory_reset();pwm_control_init();c.host_connected=true;c.pwm_mode_pending=false;
+ uint8_t raw_pwm[YPWM_DIRECT_LENGTH]={0};
+ receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
+ assert(last_result==MESSAGE_NACK&&last_error==YPWM_PWM_MODE_REQUIRED);
+ receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,23);
+ assert(last_result==MESSAGE_NACK&&last_error==ERROR_INVALID_LENGTH);
+ mode_fail_id=0;configure(&c,YPWM_PID,789);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);
+ assert(c.state==HOST_FSM_ARMED);
+ ypwm_put16(raw_pwm,(uint16_t)(int16_t)-800);ypwm_put16(raw_pwm+2,713);
+ receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
+ assert(pwm_control_service());service_pwm(&c);
+ assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-800&&duty[1]==713);
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
+ assert(duty[0]!=-800); /* existing position->PID route resumes */
+ puts("Host/task transaction, Flash isolation and direct PWM routing passed");return 0;
 }

@@ -19,6 +19,8 @@ motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bo
  (void)id;(void)mode;(void)allowed;motor_register_write_report_t r=motor_register_initial_report();r.status=MOTOR_WRITE_INVALID_STATE;return r;
 }
 bool pwm_control_submit_positions(const motor_target_set_t *g){(void)g;return false;}
+uint8_t pwm_control_submit_raw(const int16_t d[12],uint16_t s){(void)d;(void)s;return YPWM_PWM_MODE_REQUIRED;}
+bool pwm_control_take_raw_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_take_mode_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){(void)b;(void)force;return false;}
 bool pwm_control_mode_diagnostics(uint8_t d[YPWM_DIAG_LENGTH],uint8_t w[64],bool *has,bool force){(void)d;(void)w;(void)has;(void)force;return false;}

@@ -176,6 +176,12 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
 bool pwm_control_submit_positions(const motor_target_set_t *goal){
     (void)goal;return false; /* BENCH ONLY: no goal or nonzero PWM path. */
 }
+uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
+    (void)duty;(void)sequence;return YPWM_INVALID_STATE;
+}
+bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result){
+    (void)sequence;(void)result;return false;
+}
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result){
     taskENTER_CRITICAL();const bool ready=p.result_pending;
     if(ready){*sequence=p.request;*result=p.result;p.result_pending=false;
