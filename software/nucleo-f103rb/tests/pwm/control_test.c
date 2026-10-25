@@ -115,7 +115,13 @@ static void transaction_tests(void){
  reset();stage(321,8);mode_fail_id=2;assert(request(YPWM_CANCEL,321,8)==0);
  assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);
- assert(request(YPWM_PREPARE,322,8)==YPWM_BUSY);
+ assert(request(YPWM_PREPARE,322,8)==YPWM_ROLLBACK_FAILED);
+ assert(reason()==YPWM_REASON_ROLLBACK_FAILED);
+ /* Initialization drops rollback/session RAM; mode readiness is reverified. */
+ mode_fail_id=0;pwm_control_init();uint8_t fresh[YPWM_STATUS_LENGTH],old_detail[64],old_write[64];bool old_has;
+ assert(pwm_control_status(fresh,true)&&fresh[6]==0&&fresh[7]==0&&ypwm_u32(fresh+8)==0&&ypwm_u16(fresh+4)==0);
+ assert(!pwm_control_can_arm()&&!pwm_control_mode_diagnostics(old_detail,old_write,&old_has,false));
+ assert(request(YPWM_PREPARE,323,8)==0);
  reset();stage(321,8);tick+=YPWM_PREPARATION_TIMEOUT_MS;assert(pwm_control_service()&&phase()==YPWM_CANCELED);
  assert(!pwm_control_can_arm()&&reason()==YPWM_REASON_TTL);
  reset();stage(321,8);pwm_control_connection_reset();assert(pwm_control_service()&&phase()==YPWM_CANCELED&&!pwm_control_can_arm());
@@ -153,10 +159,25 @@ static void persistent_boot_tests(void){
  /* Actual motor-mode mismatch must not enable a restored PID backend. */
  mode_ok=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
  reset();mode_memory_read_ok=false;pwm_control_init();assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
- assert(pwm_control_service()&&!pwm_control_can_arm());assert(request(YPWM_PREPARE,321,8)==YPWM_BUSY);
+ assert(pwm_control_service()&&!pwm_control_can_arm());assert(request(YPWM_PREPARE,321,8)==YPWM_FLASH_READ_FAILED);
+ uint8_t boot[YPWM_STATUS_LENGTH],detail[64],write[64];bool has;
+ assert(pwm_control_status(boot,true)&&boot[6]==YPWM_FLASH_READ_FAILED&&boot[7]==YPWM_REASON_FLASH_READ);
+ assert(ypwm_u32(boot+8)==0&&ypwm_u16(boot+4)==0);
+ assert(!pwm_control_mode_diagnostics(detail,write,&has,false));
+ pwm_control_connection_reset();assert(request(YPWM_PREPARE,322,8)==YPWM_FLASH_READ_FAILED);
+ /* A real initialization, with readable Flash, drops old RAM latches/epochs. */
+ mode_memory_read_ok=true;pwm_control_init();assert(pwm_control_status(boot,true));
+ assert(boot[6]==0&&boot[7]==0&&ypwm_u32(boot+8)==0&&ypwm_u16(boot+4)==0);
+ assert(request(YPWM_PREPARE,323,8)==0);
+ /* A read failure during admitted PREPARE retains its own error after rollback. */
+ reset();mode_memory_read_ok=false;assert(request(YPWM_PREPARE,324,8)==0);
+ assert(pwm_control_service()&&phase()==YPWM_ROLLING_BACK);mode_memory_read_ok=true;
+ assert(pwm_control_service()&&phase()==YPWM_CANCELED);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_FLASH_READ_FAILED);
+ assert(request(YPWM_PREPARE,325,8)==YPWM_FLASH_READ_FAILED);
  reset();mode_memory_read_ok=false;assert(request(YPWM_PREPARE,321,8)==0&&pwm_control_service());
  assert(phase()==YPWM_ROLLING_BACK&&pwm_control_service()&&phase()==YPWM_CANCELED);
- assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED&&!mode_memory_programs&&!pwm_control_can_arm());
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_FLASH_READ_FAILED&&!mode_memory_programs&&!pwm_control_can_arm());
  /* CANCEL before ARM restores the prior persistent selection too. */
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));
@@ -171,7 +192,7 @@ static void persistent_boot_tests(void){
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));mode_memory_budget=0;
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
- assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);assert(request(YPWM_PREPARE,322,8)==YPWM_BUSY);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);assert(request(YPWM_PREPARE,322,8)==YPWM_ROLLBACK_FAILED);
 }
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */

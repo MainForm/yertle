@@ -149,5 +149,16 @@ int main(void){
  receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED&&on_count==before_on);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
  assert(on_count==before_on+1&&native_writes==0&&mode_memory_programs==before_program);
- puts("Host/task transaction: PC register writes, delayed arm, rollback, unchanged goals and watchdog release passed");return 0;
+ /* Flash read failure at first boot has its own NACK, with no adopted epoch. */
+ memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
+ mode_memory_read_ok=false;pwm_control_init();receive(&c,MESSAGE_HELLO,NULL,0);
+ mode[1]=YPWM_PREPARE;ypwm_put32(mode+5,456);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
+ assert(last_result==MESSAGE_NACK&&last_error==YPWM_FLASH_READ_FAILED&&!c.pwm_mode_pending);
+ uint8_t boot_status[YPWM_STATUS_LENGTH];assert(pwm_control_status(boot_status,true));
+ assert(boot_status[6]==YPWM_FLASH_READ_FAILED&&boot_status[7]==YPWM_REASON_FLASH_READ&&ypwm_u32(boot_status+8)==0);
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
+ mode_memory_read_ok=true;pwm_control_init();assert(pwm_control_status(boot_status,true)&&boot_status[6]==0&&ypwm_u32(boot_status+8)==0);
+ puts("Host/task transaction and first-boot Flash NACK isolation passed");return 0;
 }

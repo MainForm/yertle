@@ -14,7 +14,7 @@ typedef struct {
     motor_target_set_t goal;
     int16_t sent[12];
     bool result_pending,arm_allowed,dirty,ever_command,mode_busy,transaction_pending,snapshot_valid,rollback_failed;
-    bool preference_touched,boot_restored;
+    bool preference_touched,boot_restored,flash_read_failed;
 } control_context;
 static control_context p;
 static motor_mode_snapshot_t previous_modes;
@@ -32,7 +32,9 @@ void pwm_control_init(void){
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
     p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?YPWM_FAULT:YPWM_UNVERIFIED;
-    p.rollback_failed=stored==MODE_STORE_READ_ERROR;p.dirty=true;
+    p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
+    if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
+    p.dirty=true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;taskEXIT_CRITICAL();
 }
 void pwm_control_on_armed(void){
@@ -93,8 +95,10 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
         }
         p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
     }
+    if(p.flash_read_failed){taskEXIT_CRITICAL();return YPWM_FLASH_READ_FAILED;}
+    if(p.rollback_failed){taskEXIT_CRITICAL();return YPWM_ROLLBACK_FAILED;}
     if(host_protocol_is_stop_requested()||transitioning(p.phase)||p.phase==YPWM_ACTIVE||p.phase==YPWM_STOPPING||
-       p.result_pending||p.mode_busy||p.rollback_failed){taskEXIT_CRITICAL();return YPWM_BUSY;}
+       p.result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.epoch==p.epoch||r.epoch==p.retired_epoch){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
     p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=YPWM_PREPARING;p.operation=YPWM_PREPARE;
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;
@@ -231,7 +235,7 @@ static void prepare_mode(const control_context *s){
             taskENTER_CRITICAL();if(p.epoch==s->epoch)p.snapshot_valid=true;taskEXIT_CRITICAL();
             previous_setting=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};
             if(mode_store_read(&previous_setting)==MODE_STORE_READ_ERROR){
-                error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();
+                error=YPWM_FLASH_READ_FAILED;vr=motor_verify_initial_report();
                 diagnostic_failure(detail,YPWM_DIAG_MODE_TRANSACTION,&vr,YPWM_DIAG_IO_NONE,255);
             }
         }
@@ -244,7 +248,7 @@ static void prepare_mode(const control_context *s){
             diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}}
     if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){
         if(!error){diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);ypwm_put16(detail+18,unknown);}
-        error=YPWM_MODE_FAILED;
+        if(!error)error=YPWM_MODE_FAILED;
     }
     if(!error&&s->operation==YPWM_COMMIT){
         const control_context current=snapshot();
@@ -265,6 +269,7 @@ static void prepare_mode(const control_context *s){
     taskENTER_CRITICAL();
     if(p.phase==YPWM_PREPARING&&p.epoch==s->epoch){
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.dirty=true;
+        if(error==YPWM_FLASH_READ_FAILED){p.flash_read_failed=true;p.reason=YPWM_REASON_FLASH_READ;}
         if(error){p.phase=YPWM_ROLLING_BACK;p.arm_allowed=false;}
         else{
             p.result_pending=true;p.transaction_pending=false;
@@ -293,6 +298,7 @@ static void rollback_mode(const control_context *s){
     taskENTER_CRITICAL();
     p.unknown=unknown;p.torque=0;p.verified=restored;p.arm_allowed=false;p.ever_command=false;p.rollback_failed=!ok;
     p.phase=ok?YPWM_CANCELED:YPWM_FAULT;p.dirty=true;
+    if(!ok&&!p.flash_read_failed)p.reason=YPWM_REASON_ROLLBACK_FAILED;
     if(p.transaction_pending){if(!ok)p.result=YPWM_MODE_FAILED;p.result_pending=true;p.transaction_pending=false;}
     p.snapshot_valid=false;p.preference_touched=false;p.boot_restored=false;
     /* Keep original first-failure detail; status exposes rollback verification mask. */
