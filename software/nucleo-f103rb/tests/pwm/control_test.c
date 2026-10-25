@@ -77,7 +77,7 @@ static void ready(uint16_t mask){assert(prepare(123,mask)==0);assert(pwm_control
  motor_target_set_t g=goals(mask);assert(pwm_control_submit_positions(&g));assert(pwm_control_service());assert(phase()==YPWM_ACTIVE&&on_count==1&&on_mask==mask);
 }
 static void advance(void){tick+=20;feedback.uptime_ms=tick;++feedback.sequence;}
-static void stopped(uint8_t why){assert(phase()==YPWM_STOPPING&&reason()==why);assert(pwm_control_service());assert(phase()==YPWM_FAULT&&completed==1&&!pwm_control_can_arm());}
+static void stopped(uint8_t why){assert(phase()==YPWM_STOPPING&&reason()==why);assert(pwm_control_service());assert(phase()==YPWM_FAILED&&completed==1&&!pwm_control_can_arm());}
 static void current_is_host_owned(int16_t raw,bool all){
  reset();ready(8);
  if(all){for(unsigned i=0;i<12;++i)feedback.motor[i].current=raw;}
@@ -113,7 +113,7 @@ static void transaction_tests(void){
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service()&&phase()==YPWM_CANCELED);
  assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
  reset();stage(321,8);mode_fail_id=2;assert(request(YPWM_CANCEL,321,8)==0);
- assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ assert(pwm_control_service()&&phase()==YPWM_FAILED&&!pwm_control_can_arm());
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);
  assert(request(YPWM_PREPARE,322,8)==YPWM_ROLLBACK_FAILED);
  assert(reason()==YPWM_REASON_ROLLBACK_FAILED);
@@ -157,8 +157,8 @@ static void persistent_boot_tests(void){
  motor_target_set_t goal=goals(8);assert(!pwm_control_submit_positions(&goal));
  pwm_control_on_armed();pwm_control_connection_reset();stopped(YPWM_REASON_LINK);
  /* Actual motor-mode mismatch must not enable a restored PID backend. */
- mode_ok=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
- reset();mode_memory_read_ok=false;pwm_control_init();assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ mode_ok=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_FAILED&&!pwm_control_can_arm());
+ reset();mode_memory_read_ok=false;pwm_control_init();assert(phase()==YPWM_FAILED&&!pwm_control_can_arm());
  assert(pwm_control_service()&&!pwm_control_can_arm());assert(request(YPWM_PREPARE,321,8)==YPWM_FLASH_READ_FAILED);
  uint8_t boot[YPWM_STATUS_LENGTH],detail[64],write[64];bool has;
  assert(pwm_control_status(boot,true)&&boot[6]==YPWM_FLASH_READ_FAILED&&boot[7]==YPWM_REASON_FLASH_READ);
@@ -191,7 +191,7 @@ static void persistent_boot_tests(void){
  /* A rollback whose Flash restore fails latches rearm-blocked FAULT. */
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));mode_memory_budget=0;
- assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
+ assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(phase()==YPWM_FAILED&&!pwm_control_can_arm());
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);assert(request(YPWM_PREPARE,322,8)==YPWM_ROLLBACK_FAILED);
 }
 static void direct_pwm_tests(void){
@@ -216,7 +216,7 @@ static void direct_pwm_tests(void){
  /* Raw output has the same target TTL and stop path. */
  advance();assert(pwm_control_submit_raw(raw,55)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==0);tick+=YPWM_TARGET_TIMEOUT_MS;
- assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_service()&&phase()==YPWM_FAULT);
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_service()&&phase()==YPWM_FAILED);
  reset();ready(YPWM_ALL_MASK);assert(pwm_control_submit_raw(raw,56)==0);
  pwm_control_stop(YPWM_REASON_RELEASE);
  assert(pwm_control_take_raw_result(&seq,&result)&&seq==56&&result==YPWM_INVALID_STATE);
@@ -224,7 +224,7 @@ static void direct_pwm_tests(void){
  assert(pwm_control_take_mode_result(&seq,&result));armed=true;cancel_on=true;
  assert(pwm_control_submit_raw(raw,58)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_INVALID_STATE&&phase()==YPWM_STOPPING);
- assert(off_count>0);assert(pwm_control_service()&&phase()==YPWM_FAULT);
+ assert(off_count>0);assert(pwm_control_service()&&phase()==YPWM_FAILED);
  reset();ready(YPWM_ALL_MASK);advance();write_ok=false;
  assert(pwm_control_submit_raw(raw,59)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_MODE_FAILED&&reason()==YPWM_REASON_DRIVER);
@@ -254,7 +254,7 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  for(unsigned i=0;i<80;++i){advance();g=goals(YPWM_ALL_MASK);for(unsigned j=0;j<12;++j)g.motor[j].position=2048;
   assert(pwm_control_submit_positions(&g));assert(pwm_control_service());assert(phase()==YPWM_ACTIVE);}
  assert(tick>1000); /* no obsolete one-second bench cutoff */
- reset();pwm_control_stop(YPWM_REASON_RELEASE);assert(pwm_control_service());assert(phase()==YPWM_FAULT&&write_count==0&&on_count==0);
+ reset();pwm_control_stop(YPWM_REASON_RELEASE);assert(pwm_control_service());assert(phase()==YPWM_FAILED&&write_count==0&&on_count==0);
  reset();assert(prepare(123,8)==0);assert(pwm_control_service());pwm_control_stop(YPWM_REASON_RELEASE);
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_INVALID_STATE);stopped(YPWM_REASON_RELEASE);
  reset();uint8_t legacy[8]={2,1};assert(pwm_control_request_mode(legacy,sizeof legacy,42)==YPWM_INVALID_PAYLOAD);

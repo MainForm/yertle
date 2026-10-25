@@ -43,7 +43,7 @@ void pwm_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
-    p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?YPWM_FAULT:YPWM_UNVERIFIED;
+    p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?YPWM_FAILED:YPWM_UNVERIFIED;
     p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
     if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
     p.dirty=true;
@@ -86,7 +86,7 @@ void pwm_control_connection_reset(void){const control_context s=snapshot();
         pwm_control_stop(YPWM_REASON_LINK);return;
     }
     if(transitioning(s.phase)||(s.backend==YPWM_PID&&
-        (s.phase==YPWM_READY||s.phase==YPWM_ACTIVE||(s.phase==YPWM_FAULT&&s.unknown))))
+        (s.phase==YPWM_READY||s.phase==YPWM_ACTIVE||(s.phase==YPWM_FAILED&&s.unknown))))
         pwm_control_stop(YPWM_REASON_LINK);
 }
 uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence){
@@ -338,7 +338,7 @@ static void rollback_mode(const control_context *s){
     if(ok&&s->preference_touched)ok=mode_store_save(&previous_setting);
     taskENTER_CRITICAL();
     p.unknown=unknown;p.torque=0;p.verified=restored;p.arm_allowed=false;p.ever_command=false;p.rollback_failed=!ok;
-    p.phase=ok?YPWM_CANCELED:YPWM_FAULT;p.dirty=true;
+    p.phase=ok?YPWM_CANCELED:YPWM_FAILED;p.dirty=true;
     if(!ok&&!p.flash_read_failed)p.reason=YPWM_REASON_ROLLBACK_FAILED;
     if(p.transaction_pending){if(!ok)p.result=YPWM_MODE_FAILED;p.result_pending=true;p.transaction_pending=false;}
     p.snapshot_valid=false;p.preference_touched=false;p.boot_restored=false;
@@ -370,7 +370,7 @@ static void service_stop(const control_context *s){
     const motor_device_status_t tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
     uint16_t unknown=YPWM_ALL_MASK;const bool off=tx==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
     taskENTER_CRITICAL();p.unknown=unknown;if(off){p.torque=0;if(zero_sent)memset(p.sent,0,sizeof p.sent);}p.dirty=true;
-    if(off&&!host_protocol_is_armed()){p.phase=YPWM_FAULT;p.ever_command=false;}
+    if(off&&!host_protocol_is_armed()){p.phase=YPWM_FAILED;p.ever_command=false;}
     taskEXIT_CRITICAL();if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
 }
 static bool feedback_safe(const motor_feedback_set_t *f,uint32_t now){
@@ -470,7 +470,7 @@ bool pwm_control_service(void){
             const bool final_off=motor_device_verify_torque_off(&unknown);ready=ready&&final_off;
         }
         taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.verified=verified;
-            p.phase=ready?(s.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY):YPWM_FAULT;
+            p.phase=ready?(s.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY):YPWM_FAILED;
             p.arm_allowed=ready&&s.backend==YPWM_PID;p.dirty=true;}taskEXIT_CRITICAL();return true;
     }
     if(transitioning(s.phase)&&now-s.started_ms>=YPWM_PREPARATION_TIMEOUT_MS&&s.phase!=YPWM_ROLLING_BACK){
@@ -485,14 +485,14 @@ bool pwm_control_service(void){
          (s.phase==YPWM_ACTIVE&&!host_protocol_is_armed())))pwm_control_stop(YPWM_REASON_LINK);
     s=snapshot();
     if(s.phase==YPWM_STOPPING){service_stop(&s);return true;}
-    if(s.phase==YPWM_FAULT&&s.unknown){
+    if(s.phase==YPWM_FAILED&&s.unknown){
         (void)motor_device_torque_mask(YPWM_ALL_MASK,false);
         uint16_t unknown=YPWM_ALL_MASK;(void)motor_device_verify_torque_off(&unknown);
         taskENTER_CRITICAL();p.unknown=unknown;p.dirty=true;taskEXIT_CRITICAL();
         if(!unknown&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
         return true;
     }
-    if(s.phase==YPWM_FAULT&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
+    if(s.phase==YPWM_FAILED&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
     if(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE){if(s.direct)service_raw(&s,now);else service_pid(&s,now);}
     return true;
 }
