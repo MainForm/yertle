@@ -39,8 +39,13 @@ restored original modes, not the canceled requested backend.
 PREPARE keepalive requires proof of matching PREPARING/STAGED. Writes/readbacks
 renew heartbeat only while STAGED. COMMIT/CANCEL wait does not send heartbeat:
 a stale PREPARING event must not arm a committed controller whose ACK was lost.
-Preparation has a 5000ms total deadline; PC EEPROM target writes are never retried.
-Read-only GET may retry once on timeout. PC cleanup has a separate 3000ms budget.
+Preparation now has a120000ms total deadline; DISARMED PREPARING/STAGED permits
+20000ms link silence, while ordinary/ARMED heartbeat expiry remains1000ms.
+The PC owns up to5 explicit target requests per ID, capped by5000ms response,
+30000ms per-ID and120000ms global budgets; uncertain writes are reconciled
+before another request. F103 executes only one target transaction per request.
+Read-only GET may retry once on timeout. PC cleanup has a separate3000ms budget.
+See MODE_WRITE_RETRIES.md for current defaults and capability requirements.
 
 A mode-write failure, preparation timeout or pre-ARM link loss invalidates the
 session. F103 waits for any queued/in-flight mode write to retire, verifies OFF,

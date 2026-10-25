@@ -146,6 +146,10 @@ int main(void)
     assert(context.last_host_heartbeat_tick == 0U && !context.lease_established);
     tick = 1000U;
     service_link_heartbeat(&context);
+    assert(context.host_connected && !context.lease_established && context.state==HOST_FSM_DISARMED);
+    assert(context.last_host_heartbeat_tick==0U && context.last_idle_monitor_tick==900U);
+    tick = 1900U;
+    service_link_heartbeat(&context);
     assert(!context.host_connected);
 
     /* Initial HELLO allows one second to supply the first real heartbeat. */

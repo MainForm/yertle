@@ -14,6 +14,7 @@ bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){(void)id;(void)mode
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *q){(void)q;return false;}
 void pwm_control_end_mode_write(const motor_register_write_report_t *r){(void)r;}
 uint32_t pwm_control_staged_epoch(void){return 0;}
+bool pwm_control_preparation_pending(void){return false;}
 motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void)){
  (void)id;(void)mode;(void)allowed;motor_register_write_report_t r=motor_register_initial_report();r.status=MOTOR_WRITE_INVALID_STATE;return r;
 }

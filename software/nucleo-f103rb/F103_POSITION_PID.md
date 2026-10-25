@@ -39,7 +39,7 @@ Gains are **not** the servo's P/D/I registers. Initial untuned defaults:
 | Ki | 0.5 duty-raw / (step second) |
 | Kd | 0.05 duty-raw seconds / step |
 | I term clamp | +/-20 duty-raw |
-| PWM clamp | +/-100 of nominal1000 (10%, NOT torque/current percent) |
+| PWM clamp | +/-800 of nominal1000 (80%, NOT torque/current percent) |
 | Output slew | 2000 duty-raw/second |
 | D measurement filter | time constant0.04 seconds |
 | Output polarity | +1 relative to increasing encoder raw; **must validate unloaded** |

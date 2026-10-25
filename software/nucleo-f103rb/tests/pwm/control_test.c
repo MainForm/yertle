@@ -92,6 +92,13 @@ static void current_is_host_owned(int16_t raw,bool all){
 static void transaction_tests(void){
  uint8_t result;uint16_t seq;
  reset();stage(321,8);assert(!pwm_control_can_arm()&&!pwm_control_accepts_positions());
+ assert(!pwm_control_mode_write_allowed(0,2)&&!pwm_control_mode_write_allowed(13,2));
+ assert(!pwm_control_mode_write_allowed(4,1)&&!pwm_control_mode_write_allowed(4,255));
+ armed=true;assert(!pwm_control_mode_write_allowed(4,2));armed=false;
+ stop_requested=true;assert(!pwm_control_mode_write_allowed(4,2));stop_requested=false;
+ const uint32_t staged_tick=tick;tick+=YPWM_PREPARATION_TIMEOUT_MS-1;
+ assert(pwm_control_mode_write_allowed(4,2));++tick;
+ assert(!pwm_control_mode_write_allowed(4,2));tick=staged_tick;
  assert(!pwm_control_mode_write_allowed(4,0)&&pwm_control_mode_write_allowed(4,2)&&pwm_control_mode_write_allowed(1,0));
  motor_register_write_request_t q={0};q.motor_id=4;q.address=0x21;q.length=1;q.options=1;q.data[0]=2;
  assert(pwm_control_begin_mode_write(&q));assert(!pwm_control_begin_mode_write(&q));
@@ -102,7 +109,9 @@ static void transaction_tests(void){
  assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_take_mode_result(&seq,&result)&&result==0);
  reset();stage(321,8);assert(pwm_control_begin_mode_write(&q));r.status=MOTOR_WRITE_IO_ERROR;pwm_control_end_mode_write(&r);
- assert(pwm_control_service()&&phase()==YPWM_CANCELED&&!pwm_control_can_arm());assert(!pwm_control_take_mode_result(&seq,&result));
+ assert(pwm_control_service()&&phase()==YPWM_STAGED&&!pwm_control_can_arm());assert(!pwm_control_take_mode_result(&seq,&result));
+ assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service()&&phase()==YPWM_CANCELED);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
  reset();stage(321,8);mode_fail_id=2;assert(request(YPWM_CANCEL,321,8)==0);
  assert(pwm_control_service()&&phase()==YPWM_FAULT&&!pwm_control_can_arm());
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);

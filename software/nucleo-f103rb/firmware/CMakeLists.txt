@@ -26,8 +26,10 @@ add_executable(yertle_f103rb
     ${STM32F1_DEVICE_DIR}/Source/Templates/gcc/startup_stm32f103xb.s)
 
 target_compile_definitions(yertle_f103rb PRIVATE STM32F103xB)
-set_property(TARGET yertle_f103rb APPEND PROPERTY LINK_DEPENDS ${STM32F103RB_LINKER_SCRIPT})
-target_compile_options(yertle_f103rb PRIVATE -Wall -Wextra)
+set_property(TARGET yertle_f103rb APPEND PROPERTY LINK_DEPENDS
+    ${STM32F103RB_LINKER_SCRIPT}
+    ${CMAKE_SOURCE_DIR}/scripts/verify-sensor-stack.cmake)
+target_compile_options(yertle_f103rb PRIVATE -Wall -Wextra -fstack-usage)
 target_include_directories(yertle_f103rb PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${STS3215_DIR}/inc
@@ -45,6 +47,9 @@ target_link_options(yertle_f103rb PRIVATE
 add_custom_command(TARGET yertle_f103rb POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:yertle_f103rb>
             ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103rb.bin
+    COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/scripts/verify-sensor-stack.cmake
     BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/yertle_f103rb.bin
     COMMENT "Generating yertle_f103rb.bin")
 

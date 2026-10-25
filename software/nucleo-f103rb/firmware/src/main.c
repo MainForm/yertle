@@ -52,7 +52,10 @@ int main(void)
 
     created = xTaskCreate(sensor_task,
                           "sensors",
-                          configMINIMAL_STACK_SIZE * 2U,
+                          /* 1.5 KiB: nested mode-register transaction + lock
+                           * recovery + UART/RTOS/context-save headroom.
+                           * scripts/verify-sensor-stack.cmake checks ARM frames. */
+                          configMINIMAL_STACK_SIZE * 3U,
                           NULL,
                           tskIDLE_PRIORITY + 2U,
                           NULL);

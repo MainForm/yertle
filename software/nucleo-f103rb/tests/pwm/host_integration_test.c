@@ -62,7 +62,7 @@ static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t
  static uint16_t seq;uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1,type};ypwm_put16(raw+3,++seq);raw[5]=(uint8_t)n;if(n)memcpy(raw+7,p,n);
  ypwm_put16(raw+7+n,crc16_ccitt(raw,7+n));handle_frame(c,raw,9+n);
 }
-static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
+static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,backend};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,epoch);
  receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
  receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
@@ -74,20 +74,45 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  }
  mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
  assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established);
+}
+static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
+ configure(c,backend,epoch);
  receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_ARMED);
 }
 int main(void){
  mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
  assert(actuator_task_init());assert(pwm_control_service());assert(pwm_control_native_ready());
+ /* Slow DISARMED configuration may outlive5s, but never ARM. A silent
+    configuration still disconnects/rolls back at its own bounded20s window. */
+ uint8_t slow[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(slow+3,YPWM_ALL_MASK);ypwm_put32(slow+5,118);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,slow,9);assert(pwm_control_service());service_pwm(&c);
+ tick+=6000;expire_host_link(&c);try_enter_control_ready(&c);
+ assert(c.host_connected&&c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm()&&on_count==0&&native_writes==0);
+ tick+=YPWM_PREPARATION_LINK_TIMEOUT_MS;expire_host_link(&c);assert(!c.host_connected);
+ service_safety_state(&c);assert(pwm_control_service());service_safety_state(&c);
+ receive(&c,MESSAGE_HELLO,NULL,0);assert(c.host_connected);
  uint8_t legacy[8]={2,1};receive(&c,MESSAGE_SET_CONTROL_MODE,legacy,8);assert(last_result==MESSAGE_NACK&&!c.pwm_mode_pending);
  const uint8_t forbidden[5]={1,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,forbidden,5);assert(last_result==MESSAGE_NACK);
+ /* Configure-only: read queries preserve the idle link for an arbitrary wait,
+    but cannot establish a lease, ARM, turn torque on or send a native target. */
+ configure(&c,YPWM_PID,120);
+ for(unsigned i=0;i<12;++i){tick+=250;receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,NULL,0);
+  try_enter_control_ready(&c);assert(c.host_connected&&!c.lease_established&&c.state==HOST_FSM_DISARMED);
+  assert(pwm_control_service());assert(on_count==0&&native_writes==0&&pwm_control_can_arm());}
+ /* Losing the monitoring link before H still restores the previous setting. */
+ tick+=1001;expire_host_link(&c);assert(!c.host_connected);service_safety_state(&c);assert(pwm_control_service());service_safety_state(&c);
+ for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
+ receive(&c,MESSAGE_HELLO,NULL,0);assert(c.host_connected);
  transition(&c,YPWM_PID,123);
+ /* Even continuous read traffic cannot renew an established control lease. */
+ const TickType_t heartbeat_tick=c.last_host_heartbeat_tick;
+ tick+=1;receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,NULL,0);assert(c.last_host_heartbeat_tick==heartbeat_tick);
  assert(diag_order&&diag_order<result_order&&last_diag[3]==YPWM_DIAG_COMPLETE);
  uint8_t targets[60]={0};for(unsigned i=0;i<12;++i){ypwm_put16(targets+5*i,2200);ypwm_put16(targets+5*i+2,200);}
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==0);
  assert(pwm_control_service());assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);
- for(unsigned i=0;i<12;++i)assert(duty[i]>0&&duty[i]<=100);
+ for(unsigned i=0;i<12;++i)assert(duty[i]>0&&duty[i]<=YPWM_DUTY_LIMIT);
  /* Removed 0x0F must be rejected; ordinary target/heartbeat watchdog stops PID. */
  receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);
  tick+=501;assert(pwm_control_service());service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
@@ -100,8 +125,15 @@ int main(void){
  receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(pwm_control_service());service_pwm(&c);
  const uint8_t q[5]={2,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,q,5);service_motor_register_write(&c);
  assert(last_result==MESSAGE_NACK&&last_error==15&&write_diag_order<result_order);
+ uint8_t failure_detail[64],write_detail[64];bool has_write;
+ assert(pwm_control_mode_diagnostics(failure_detail,write_detail,&has_write,false));
+ assert(failure_detail[3]==YPWM_DIAG_MODE_TRANSACTION&&failure_detail[7]==2&&failure_detail[6]==YPWM_MODE_FAILED);
+ assert(pwm_control_service());try_enter_control_ready(&c);assert(!pwm_control_can_arm()&&c.state==HOST_FSM_DISARMED);
+ /* Transient 0x0D failures wait safely for the PC's explicit CANCEL/retry. */
+ mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
  assert(pwm_control_service());service_pwm(&c);assert(!pwm_control_can_arm());
- /* Same-epoch CANCEL confirms already completed automatic rollback. */
+ assert(last_diag[3]==YPWM_DIAG_ROLLBACK&&last_diag[6]==0&&ypwm_u16(last_diag+16)==YPWM_ALL_MASK);
+ /* Same-epoch CANCEL confirms already completed requested rollback. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);service_pwm(&c);
  assert(last_result==MESSAGE_ACK);for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
  /* Reboot with a stored PID preference: HELLO cannot ARM; fresh heartbeat can

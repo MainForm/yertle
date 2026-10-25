@@ -127,6 +127,8 @@ typedef struct {
     uint32_t writes_completed,writes_failed;
     host_fsm_state_t state;
     TickType_t last_host_heartbeat_tick;
+    TickType_t last_idle_monitor_tick;
+    bool idle_monitor_seen;
     TickType_t last_f103_heartbeat_tick;
     host_unsafe_reason_t last_reported_unsafe_reason;
     uint16_t tx_sequence;
@@ -322,7 +324,7 @@ static void send_hello_ack(protocol_context_t *context)
     const uint8_t payload[] = {
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
-        0x01U | YPWM_CAPABILITY, 0U, 0U, 0U /* legacy FSM + complete PWM bench */
+        0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY, 0U, 0U, 0U
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }
@@ -593,7 +595,7 @@ static void set_host_connected(protocol_context_t *context, bool connected)
         return;
     }
     context->host_connected = connected;
-    if (!connected) {context->lease_established = false;pwm_control_connection_reset();}
+    if (!connected) {context->lease_established = false;context->idle_monitor_seen=false;pwm_control_connection_reset();}
     const uint8_t payload[] = { EVENT_HOST_LINK_CHANGED, connected ? 1U : 0U };
     send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
 }
@@ -618,10 +620,19 @@ static void try_enter_control_ready(protocol_context_t *context)
 static void expire_host_link(protocol_context_t *context)
 {
     const TickType_t now = xTaskGetTickCount();
-    /* Only accepted PC heartbeat RX keeps an established link alive.
-     * Expire before sending telemetry; local TX cannot prove host liveness. */
-    if (context->host_connected &&
-        ((TickType_t)(now - context->last_host_heartbeat_tick) >= pdMS_TO_TICKS(YERTLE_HOST_TIMEOUT_MS))) {
+    /* An ARMED/leased controller requires accepted heartbeat RX. Idle monitor
+     * queries may keep the link alive, but NEVER establish/renew an ARM lease.
+     * Expire before telemetry; local TX cannot prove host liveness. */
+    TickType_t age=(TickType_t)(now-context->last_host_heartbeat_tick);
+    if(context->state==HOST_FSM_DISARMED && !context->lease_established && context->idle_monitor_seen){
+        const TickType_t monitor_age=(TickType_t)(now-context->last_idle_monitor_tick);
+        if(monitor_age<age)age=monitor_age;
+    }
+    /* Only DISARMED configuration may wait for slow register replies. Never
+       lengthen ARMED target/heartbeat watchdogs or ordinary idle monitoring. */
+    const uint32_t link_timeout=context->state==HOST_FSM_DISARMED&&pwm_control_preparation_pending()?
+        YPWM_PREPARATION_LINK_TIMEOUT_MS:YERTLE_HOST_TIMEOUT_MS;
+    if (context->host_connected && age >= pdMS_TO_TICKS(link_timeout)) {
         if (context->state == HOST_FSM_ARMED) {
             enter_safe_stop(context, HOST_FSM_DISARMED, STATE_CAUSE_HEARTBEAT_TIMEOUT);
         }
@@ -721,6 +732,20 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
      * remains nonempty or a previous response took time to transmit. */
     service_safety_state(context);
     expire_host_link(context);
+
+    /* Keep a completed, pre-ARM mode transaction available while the PC is
+     * actively monitoring it. No writes/targets, no lease, and no automatic ARM.
+     * Silence still expires the link and rolls the pre-ARM snapshot back.
+     * Once a heartbeat establishes a lease, reads cannot hide its timeout. */
+    if (context->host_connected && context->state==HOST_FSM_DISARMED &&
+        !context->lease_established &&
+        (type==MESSAGE_GET_SENSOR_FEEDBACK || type==MESSAGE_GET_FSM_STATE ||
+         type==MESSAGE_GET_UART_STATS ||
+         (type==MESSAGE_GET_MOTOR_REGISTER && raw[5]==3U && raw[6]==0U &&
+          motor_register_request_valid(raw[7],raw[8],raw[9])))){
+        context->last_idle_monitor_tick=xTaskGetTickCount();
+        context->idle_monitor_seen=true;
+    }
 
     switch (type) {
     case MESSAGE_SET_CONTROL_MODE: {
@@ -840,6 +865,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             break;
         }
         context->last_host_heartbeat_tick = xTaskGetTickCount();
+        context->idle_monitor_seen=false;
         context->lease_established = true;
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
         break;
