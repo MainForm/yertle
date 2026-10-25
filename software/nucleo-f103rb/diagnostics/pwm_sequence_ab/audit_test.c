@@ -1,12 +1,14 @@
 #undef NDEBUG
 /* Reuse existing production-control stubs, replacing only the motor behavior.
  * This is a hypothetical motor model, not a real-device result. */
+#define motor_device_read_register prior_read_register
 #define main existing_control_tests_main
 #define motor_device_set_torque prior_set_torque
 #define motor_device_write_pwm prior_write_pwm
 #define motor_device_verify_torque_off prior_verify_off
 #define motor_device_verify_torque_off_detailed prior_verify_off_detailed
 #include "../../tests/pwm/control_test.c"
+#undef motor_device_read_register
 #undef main
 #undef motor_device_set_torque
 #undef motor_device_write_pwm

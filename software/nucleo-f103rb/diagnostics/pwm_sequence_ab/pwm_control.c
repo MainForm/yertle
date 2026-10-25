@@ -55,7 +55,7 @@ bool pwm_control_can_arm(void){return false;} /* BENCH ONLY: H/P cannot ARM. */
 static bool transitioning(uint8_t phase){return phase==YPWM_PREPARING||phase==YPWM_STAGED||phase==YPWM_ROLLING_BACK;}
 void pwm_control_stop(uint8_t reason){
     taskENTER_CRITICAL();
-    if(transitioning(p.phase)){
+    if(p.rollback_failed){p.arm_allowed=false;p.dirty=true;}else if(transitioning(p.phase)){
         p.phase=YPWM_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
     }else if(p.phase!=YPWM_STOPPING){
         p.phase=YPWM_STOPPING;p.reason=reason;p.arm_allowed=false;
@@ -83,6 +83,7 @@ void pwm_control_connection_reset(void){const control_context s=snapshot();
 }
 uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence){
     ypwm_mode_request r;if(!ypwm_decode_mode(bytes,n,&r))return YPWM_INVALID_PAYLOAD;
+    if(r.operation==YPWM_SEQUENCE_AUDIT)return YPWM_INVALID_PAYLOAD;
     if(host_protocol_get_state()!=HOST_FSM_DISARMED)return YPWM_INVALID_STATE;
     taskENTER_CRITICAL();
     if(r.operation!=YPWM_PREPARE){
@@ -90,6 +91,7 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
         if(p.result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
         if(r.operation==YPWM_CANCEL){
             if(!transitioning(p.phase)&&p.phase!=YPWM_CANCELED&&
+               !(p.rollback_failed&&p.phase==YPWM_FAILED)&&
                !(p.snapshot_valid&&(p.phase==YPWM_READY||p.phase==YPWM_NATIVE_READY))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
             p.request=sequence;p.operation=YPWM_CANCEL;p.transaction_pending=true;p.result=YPWM_OK;p.arm_allowed=false;
             if(p.phase==YPWM_CANCELED){p.result_pending=true;p.transaction_pending=false;}
@@ -337,7 +339,7 @@ static void rollback_mode(const control_context *s){
     p.phase=ok?YPWM_CANCELED:YPWM_FAILED;p.dirty=true;
     if(!ok&&!p.flash_read_failed)p.reason=YPWM_REASON_ROLLBACK_FAILED;
     if(p.transaction_pending){if(!ok)p.result=YPWM_MODE_FAILED;p.result_pending=true;p.transaction_pending=false;}
-    p.snapshot_valid=false;p.preference_touched=false;p.boot_restored=false;
+    if(ok){p.snapshot_valid=false;p.preference_touched=false;if(s->rollback_failed&&!p.flash_read_failed)p.reason=YPWM_REASON_NONE;}p.boot_restored=false;
     /* Keep original first-failure detail; status exposes rollback verification mask. */
     if(mode_detail_valid){
         memcpy(rollback_detail,mode_detail,YPWM_DIAG_LENGTH);rollback_detail[1]=YPWM_DIAG_VERSION;

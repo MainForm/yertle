@@ -19,6 +19,9 @@
 #define YPWM_PREPARE 0U
 #define YPWM_COMMIT 1U
 #define YPWM_CANCEL 2U
+/* DISARMED measurement; never COMMIT/Flash/ARM. */
+#define YPWM_SEQUENCE_AUDIT 3U
+#define YPWM_SEQUENCE_AUDIT_CAPABILITY 0x00000100UL
 #define YPWM_PREPARATION_TIMEOUT_MS 120000U
 #define YPWM_PREPARATION_LINK_TIMEOUT_MS 20000U
 #define YPWM_STATUS_LENGTH 38U
@@ -52,7 +55,7 @@ static inline void ypwm_put32(uint8_t *p,uint32_t v) { ypwm_put16(p,(uint16_t)v)
 static inline bool ypwm_single(uint16_t m) { return m && !(m&(uint16_t)(m-1U)) && !(m&~YPWM_ALL_MASK); }
 static inline bool ypwm_mask(uint16_t m) { return m && !(m&~YPWM_ALL_MASK); }
 static inline bool ypwm_decode_mode(const uint8_t *p,size_t n,ypwm_mode_request *v) {
-    if(!p||!v||n!=YPWM_MODE_LENGTH||p[0]!=YPWM_SCHEMA||p[1]>YPWM_CANCEL||p[2]>YPWM_PID)return false;
+    if(!p||!v||n!=YPWM_MODE_LENGTH||p[0]!=YPWM_SCHEMA||p[1]>YPWM_SEQUENCE_AUDIT||p[2]>YPWM_PID)return false;
     v->operation=p[1];v->backend=p[2];v->mask=ypwm_u16(p+3);v->epoch=ypwm_u32(p+5);
     return v->epoch!=0 && (v->backend==YPWM_PID?ypwm_mask(v->mask):v->mask==YPWM_ALL_MASK);
 }

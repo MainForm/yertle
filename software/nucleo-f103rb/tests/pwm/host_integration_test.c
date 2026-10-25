@@ -58,6 +58,10 @@ bool motor_device_restore_modes(const motor_mode_snapshot_t *m,bool (*allowed)(v
  assert(!critical&&allowed());memcpy(servo_modes,m->mode,12);*restored=YPWM_ALL_MASK;*id=0;*r=motor_register_initial_report();return true;
 }
 motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);memcpy(duty,values,sizeof duty);return MOTOR_DEVICE_OK;}
+motor_register_status_t motor_device_read_register(uint8_t id,uint8_t address,uint8_t length,motor_register_data_t *r){
+ assert(id>=1&&id<=12&&address==0x28&&length==1&&!critical);
+ memset(r,0,sizeof *r);return MOTOR_REGISTER_OK;
+}
 static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t n){
  static uint16_t seq;uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1,type};ypwm_put16(raw+3,++seq);raw[5]=(uint8_t)n;if(n)memcpy(raw+7,p,n);
  ypwm_put16(raw+7+n,crc16_ccitt(raw,7+n));handle_frame(c,raw,9+n);
