@@ -23,7 +23,6 @@ static motor_mode_snapshot_t previous_modes;
 static mode_setting_t previous_setting;
 /* Kept out of snapshot() to avoid enlarging every actuator stack frame. */
 static uint8_t mode_detail[YPWM_DIAG_LENGTH],mode_write_detail[64],rollback_detail[YPWM_DIAG_LENGTH];
-static uint8_t sequence_audit[3][64],sequence_audit_count,sequence_audit_next;
 static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write,rollback_detail_pending;
 /* These numerical states belong exclusively to the actuator task. */
 static position_pid_t axes[12];
@@ -48,7 +47,6 @@ void pwm_control_init(void){
     p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
     if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
     p.dirty=true;
-    sequence_audit_count=sequence_audit_next=0;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;taskEXIT_CRITICAL();
 }
 void pwm_control_on_armed(void){
@@ -110,7 +108,6 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
             else p.phase=YPWM_ROLLING_BACK;
         }else{
             if(p.phase!=YPWM_STAGED||p.mode_busy||host_protocol_is_stop_requested()){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
-            if(r.operation==YPWM_SEQUENCE_AUDIT&&p.backend!=YPWM_PID){taskEXIT_CRITICAL();return YPWM_PWM_MODE_REQUIRED;}
             p.request=sequence;p.operation=r.operation;p.phase=YPWM_PREPARING;p.transaction_pending=true;
         }
         p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
@@ -246,10 +243,6 @@ bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
 static bool rollback_allowed(void){return snapshot().phase==YPWM_ROLLING_BACK;}
 bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write[64],bool *has_write,bool force){
     taskENTER_CRITICAL();
-    if(sequence_audit_next<sequence_audit_count){
-        memcpy(detail,sequence_audit[sequence_audit_next++],64);
-        *has_write=false;taskEXIT_CRITICAL();return true;
-    }
     if(rollback_detail_pending&&!mode_detail_pending){memcpy(detail,rollback_detail,YPWM_DIAG_LENGTH);
         *has_write=false;rollback_detail_pending=false;taskEXIT_CRITICAL();return true;}
     const bool ready=mode_detail_valid&&(force||mode_detail_pending);
@@ -263,27 +256,6 @@ static void diagnostic_failure(uint8_t d[YPWM_DIAG_LENGTH],uint8_t stage,const m
     if(d[3])return; /* Preserve the first failure even if final OFF verification fails. */
     d[3]=stage;d[24]=r->address;d[25]=r->expected;d[26]=r->actual;
     d[7]=r->motor_id;d[27]=domain;d[28]=status;d[29]=r->servo_error;
-}
-/* Torque ON after PWM0 is measurement data, not an abort condition. */
-static bool sequence_capture(const control_context *s,uint8_t step,uint8_t tx){
-    uint8_t *d=sequence_audit[step-1];memset(d,0,64);
-    d[0]=6;d[1]=1;d[2]=step;d[3]=s->backend;
-    ypwm_put16(d+4,s->request);ypwm_put16(d+6,s->mask);ypwm_put32(d+8,s->epoch);
-    ypwm_put32(d+12,milliseconds());d[16]=tx;
-    const uint32_t started=milliseconds();uint16_t valid=0,off=0,on=0;
-    for(uint8_t id=1;id<=12;++id){
-        motor_register_data_t r;memset(&r,0,sizeof r);
-        const motor_register_status_t status=motor_device_read_register(id,0x28,1,&r);
-        d[24+id-1]=(uint8_t)status;d[36+id-1]=255;d[48+id-1]=r.servo_error;
-        if(status==MOTOR_REGISTER_OK&&!r.servo_error){
-            const uint16_t bit=(uint16_t)(1U<<(id-1));valid|=bit;d[36+id-1]=r.data[0];
-            if(r.data[0]==0)off|=bit;else if(r.data[0]==1)on|=bit;
-        }
-    }
-    ypwm_put16(d+18,valid);ypwm_put16(d+20,off);ypwm_put16(d+22,on);
-    ypwm_put32(d+60,milliseconds()-started);
-    taskENTER_CRITICAL();sequence_audit_count=step;taskEXIT_CRITICAL();
-    return valid==YPWM_ALL_MASK;
 }
 static void prepare_mode(const control_context *s){
     uint16_t unknown=YPWM_ALL_MASK,verified=0;uint8_t error=YPWM_OK;
@@ -313,27 +285,12 @@ static void prepare_mode(const control_context *s){
             }
         }
     }
-    if(!error&&(s->operation==YPWM_COMMIT||s->operation==YPWM_SEQUENCE_AUDIT)&&!motor_device_verify_modes_detailed(s->backend,s->mask,&verified,&vr)){error=YPWM_MODE_FAILED;
+    if(!error&&s->operation==YPWM_COMMIT&&!motor_device_verify_modes_detailed(s->backend,s->mask,&verified,&vr)){error=YPWM_MODE_FAILED;
         diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);}
     if(!error&&s->operation==YPWM_COMMIT&&s->backend==YPWM_PID){const int16_t zero[12]={0};
         const motor_device_status_t tx=motor_device_write_pwm(s->mask,zero);
         if(tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();vr.address=0x2c;vr.expected=0;
             diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}}
-    if(!error&&s->operation==YPWM_SEQUENCE_AUDIT){
-        taskENTER_CRITICAL();sequence_audit_count=sequence_audit_next=0;taskEXIT_CRITICAL();
-        const bool before=sequence_capture(s,1,(uint8_t)off_tx);
-        const int16_t zero[12]={0};
-        const motor_device_status_t zero_tx=motor_device_write_pwm(s->mask,zero);
-        const bool after=sequence_capture(s,2,(uint8_t)zero_tx);
-        /* Always perform B even if A read/TX failed or torque reads ON. */
-        const motor_device_status_t final_tx=motor_device_set_torque(false);
-        const bool final=sequence_capture(s,3,(uint8_t)final_tx);
-        if(!before||!after||!final||zero_tx!=MOTOR_DEVICE_OK||final_tx!=MOTOR_DEVICE_OK||
-           ypwm_u16(sequence_audit[0]+20)!=YPWM_ALL_MASK||ypwm_u16(sequence_audit[2]+20)!=YPWM_ALL_MASK){
-            error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();
-            diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)final_tx);
-        }
-    }
     if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){
         if(!error){diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);ypwm_put16(detail+18,unknown);}
         if(!error)error=YPWM_MODE_FAILED;
@@ -361,7 +318,7 @@ static void prepare_mode(const control_context *s){
         if(error){p.phase=YPWM_ROLLING_BACK;p.arm_allowed=false;}
         else{
             p.result_pending=true;p.transaction_pending=false;
-            p.phase=(s->operation==YPWM_PREPARE||s->operation==YPWM_SEQUENCE_AUDIT)?YPWM_STAGED:(p.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY);
+            p.phase=s->operation==YPWM_PREPARE?YPWM_STAGED:(p.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY);
         }
     }
     else {detail[6]=YPWM_INVALID_STATE;if(!error)detail[3]=YPWM_DIAG_CANCELED;}

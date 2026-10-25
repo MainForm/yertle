@@ -322,21 +322,11 @@ static void send_diagnostic_frame(void *context, uint8_t type,
 
 static void send_hello_ack(protocol_context_t *context)
 {
-#ifdef YERTLE_SEQUENCE_AUDIT_FIRMWARE
-    const uint8_t direct_capability=0; /* Restrictive old bench overlay. */
-#else
-    const uint8_t direct_capability=YPWM_DIRECT_CAPABILITY;
-#endif
     const uint8_t payload[] = {
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
-        0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | direct_capability | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY,
-#ifdef YERTLE_SEQUENCE_AUDIT_FIRMWARE
-        0U,
-#else
-        (uint8_t)(YPWM_SEQUENCE_AUDIT_CAPABILITY>>8),
-#endif
-        0U, 0U
+        0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_DIRECT_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY,
+        0U, 0U, 0U
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }

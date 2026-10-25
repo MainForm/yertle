@@ -1,3 +1,8 @@
+> Historical experiment, retired 2026-10-26. F7, operation3/capability0x100,
+> EVENT6 production emission and the separate test overlay are removed.
+> The observations below are retained as evidence; the old run/flash instructions
+> no longer apply. Normal same-epoch rollback recovery remains supported.
+
 # F7 torque sequence and same-boot rollback recovery
 
 ## Protocol and behavior
