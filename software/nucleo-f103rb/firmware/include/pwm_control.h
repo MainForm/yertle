@@ -21,7 +21,8 @@ uint32_t pwm_control_staged_epoch(void);
 bool pwm_control_preparation_pending(void);
 bool pwm_control_submit_positions(const motor_target_set_t *goal);
 /* Signed host duties, ID1..12. ACK is deferred until actuator TX completes.
- * Only all-zero diagnostics may run DISARMED; they never enable torque. */
+ * Only all-zero diagnostics may run DISARMED; their ACK does not prove
+ * torque OFF (PWM0 can activate servo torque without a global ARM). */
 uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence);
 bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result);
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result);

@@ -22,7 +22,7 @@ void host_protocol_complete_safe_stop(void){++completed;stop_requested=false;}
 void host_protocol_latch_unsafe(host_unsafe_reason_t r){assert(r==HOST_UNSAFE_CURRENT_LIMIT);++unsafe_count;}
 bool motor_device_validate_targets(const motor_target_set_t *g){if(!g)return false;for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);++off_count;if(off_ok)servo_torque_on=0;return off_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
-motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;on_mask=mask;if(cancel_on)pwm_control_stop(YPWM_REASON_RELEASE);}else ++off_count;if(off_ok)servo_torque_on=0;return off_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
+motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;on_mask=mask;if(cancel_on)pwm_control_stop(YPWM_REASON_RELEASE);}else{++off_count;if(off_ok)servo_torque_on&=(uint16_t)~mask;}return off_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
 bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=off_ok?servo_torque_on:YPWM_ALL_MASK;return off_ok&&!servo_torque_on;}
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){assert(!critical);(void)backend;(void)mask;*verified=mode_ok?YPWM_ALL_MASK:0;return mode_ok;}
 bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *r){
@@ -208,6 +208,41 @@ static void persistent_boot_tests(void){
  assert(pwm_control_take_mode_result(&seq,&result)&&result==0&&!pwm_control_can_arm());
  assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
 }
+/* Real-device observation: writing PWM0 may energize a previously OFF motor. */
+static void zero_then_explicit_off_tests(void){
+ uint8_t b[YPWM_STATUS_LENGTH],d[64],w[64],result;uint16_t seq;bool has;
+ reset();stage(801,YPWM_ALL_MASK);pwm_auto_enable=true;
+ unsigned before_off=off_count;
+ assert(request(YPWM_COMMIT,801,YPWM_ALL_MASK)==0&&pwm_control_service());
+ assert(phase()==YPWM_READY&&!armed&&!pwm_control_can_arm()&&!servo_torque_on&&on_count==0);
+ assert(off_count>=before_off+2&&pwm_control_status(b,true)&&!ypwm_u16(b+18));
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==0&&pwm_control_can_arm());
+ /* A persisted PWM selection is ready only after explicit OFF and readback. */
+ const mode_setting_t pref={YPWM_PID,YPWM_ALL_MASK};
+ reset();assert(mode_store_save(&pref));pwm_auto_enable=true;pwm_control_init();before_off=off_count;
+ assert(pwm_control_service()&&phase()==YPWM_READY&&!armed&&!servo_torque_on&&on_count==0);
+ assert(off_count>=before_off+2&&pwm_control_can_arm());
+ /* A PWM TX error still attempts OFF; the original zero-TX failure is retained. */
+ reset();stage(802,YPWM_ALL_MASK);write_ok=false;before_off=off_count;
+ assert(request(YPWM_COMMIT,802,YPWM_ALL_MASK)==0&&pwm_control_service());
+ assert(phase()==YPWM_ROLLING_BACK&&!pwm_control_can_arm()&&off_count>=before_off+2);
+ assert(pwm_control_mode_diagnostics(d,w,&has,false)&&d[3]==YPWM_DIAG_ZERO_TX&&d[24]==0x2c);
+ /* An explicit OFF TX error must block preparation readiness. */
+ reset();stage(803,YPWM_ALL_MASK);pwm_auto_enable=fail_off_after_pwm=true;
+ assert(request(YPWM_COMMIT,803,YPWM_ALL_MASK)==0&&pwm_control_service());
+ assert(phase()==YPWM_ROLLING_BACK&&!pwm_control_can_arm());
+ assert(pwm_control_mode_diagnostics(d,w,&has,false)&&d[3]==YPWM_DIAG_TORQUE_OFF_TX&&d[24]==0x28&&d[27]==YPWM_DIAG_IO_DEVICE);
+ /* A readable ON value at the last OFF check also blocks completion. */
+ reset();stage(804,YPWM_ALL_MASK);fail_off_call=verify_off_calls+2;
+ assert(request(YPWM_COMMIT,804,YPWM_ALL_MASK)==0&&pwm_control_service());
+ assert(phase()==YPWM_ROLLING_BACK&&!pwm_control_can_arm());
+ assert(pwm_control_mode_diagnostics(d,w,&has,false)&&d[3]==YPWM_DIAG_FINAL_OFF_VERIFY&&d[24]==0x28);
+ /* Boot must attempt OFF after PWM TX failure, and never enable ARM. */
+ reset();assert(mode_store_save(&pref));write_ok=false;pwm_control_init();before_off=off_count;
+ assert(pwm_control_service()&&phase()==YPWM_FAILED&&!pwm_control_can_arm()&&off_count>=before_off+2);
+ reset();assert(mode_store_save(&pref));pwm_auto_enable=fail_off_after_pwm=true;pwm_control_init();
+ assert(pwm_control_service()&&phase()==YPWM_FAILED&&!pwm_control_can_arm());
+}
 static void direct_pwm_tests(void){
  int16_t raw[12]={0};uint16_t seq;uint8_t result;
  reset();assert(pwm_control_submit_raw(raw,50)==YPWM_PWM_MODE_REQUIRED);
@@ -244,7 +279,7 @@ static void direct_pwm_tests(void){
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_MODE_FAILED&&reason()==YPWM_REASON_DRIVER);
 }
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
- direct_pwm_tests();
+ zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);

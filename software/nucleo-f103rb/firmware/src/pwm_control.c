@@ -290,7 +290,14 @@ static void prepare_mode(const control_context *s){
     if(!error&&s->operation==YPWM_COMMIT&&s->backend==YPWM_PID){const int16_t zero[12]={0};
         const motor_device_status_t tx=motor_device_write_pwm(s->mask,zero);
         if(tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();vr.address=0x2c;vr.expected=0;
-            diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}}
+            diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}
+        /* PWM0 can enable torque. Always explicitly switch OFF after attempting
+         * it, including a possibly partial PWM TX, then independently read OFF. */
+        const motor_device_status_t final_tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
+        if(final_tx!=MOTOR_DEVICE_OK&&!error){error=YPWM_MODE_FAILED;
+            vr=motor_verify_initial_report();vr.address=0x28;vr.expected=0;
+            diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)final_tx);}
+    }
     if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){
         if(!error){diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);ypwm_put16(detail+18,unknown);}
         if(!error)error=YPWM_MODE_FAILED;
@@ -473,8 +480,12 @@ bool pwm_control_service(void){
         const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
         bool ready=off&&motor_device_verify_modes(s.backend,s.mask,&verified);
         if(ready&&s.backend==YPWM_PID){const int16_t zero[12]={0};
-            ready=motor_device_write_pwm(s.mask,zero)==MOTOR_DEVICE_OK;
-            const bool final_off=motor_device_verify_torque_off(&unknown);ready=ready&&final_off;
+            const motor_device_status_t zero_tx=motor_device_write_pwm(s.mask,zero);
+            /* A persisted PWM backend needs the same zero/OFF/readback order as
+             * COMMIT. OFF cleanup is attempted even if the PWM TX failed. */
+            const motor_device_status_t final_tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
+            const bool final_off=motor_device_verify_torque_off(&unknown);
+            ready=zero_tx==MOTOR_DEVICE_OK&&final_tx==MOTOR_DEVICE_OK&&final_off;
         }
         taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.verified=verified;
             p.phase=ready?(s.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY):YPWM_FAILED;

@@ -42,9 +42,9 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){a
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){(void)g;++native_writes;return MOTOR_DEVICE_OK;}
-motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);return MOTOR_DEVICE_OK;}
-motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask=mask;}return MOTOR_DEVICE_OK;}
-bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=0;return true;}
+motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);torque_mask=0;return MOTOR_DEVICE_OK;}
+motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask|=mask;}else torque_mask&=(uint16_t)~mask;return MOTOR_DEVICE_OK;}
+bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=torque_mask;return !torque_mask;}
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){
  assert(!critical);*verified=0;for(unsigned i=0;i<12;++i)if(servo_modes[i]==((backend==YPWM_PID&&(mask&(1U<<i)))?2:0))*verified|=(uint16_t)(1U<<i);
  return *verified==YPWM_ALL_MASK;
@@ -57,7 +57,7 @@ bool motor_device_snapshot_modes(motor_mode_snapshot_t *m,motor_verify_report_t 
 bool motor_device_restore_modes(const motor_mode_snapshot_t *m,bool (*allowed)(void),uint16_t *restored,uint8_t *id,motor_register_write_report_t *r){
  assert(!critical&&allowed());memcpy(servo_modes,m->mode,12);*restored=YPWM_ALL_MASK;*id=0;*r=motor_register_initial_report();return true;
 }
-motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);memcpy(duty,values,sizeof duty);return MOTOR_DEVICE_OK;}
+motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);memcpy(duty,values,sizeof duty);torque_mask|=mask;return MOTOR_DEVICE_OK;}
 static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t n){
  static uint16_t seq;uint8_t raw[YERTLE_PROTOCOL_MAX_RAW]={1,type};ypwm_put16(raw+3,++seq);raw[5]=(uint8_t)n;if(n)memcpy(raw+7,p,n);
  ypwm_put16(raw+7+n,crc16_ccitt(raw,7+n));handle_frame(c,raw,9+n);
@@ -73,7 +73,7 @@ static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
   service_motor_register_write(c);assert(last_result==MESSAGE_ACK);
  }
  mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
- assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established);
+ assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established&&torque_mask==0);
 }
 static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  configure(c,backend,epoch);
