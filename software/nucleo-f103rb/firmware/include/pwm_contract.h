@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #define YPWM_MODE_MESSAGE 0x0eU
+#define YPWM_DIRECT_MESSAGE 0x0fU
+#define YPWM_DIRECT_LENGTH 24U
+#define YPWM_DIRECT_CAPABILITY 0x00000020UL
 #define YPWM_CAPABILITY 0x00000008UL
 #define YPWM_IDLE_MONITOR_CAPABILITY 0x00000010UL
 #define YPWM_HOST_MODE_RETRY_CAPABILITY 0x00000040UL
@@ -38,7 +41,7 @@ enum ypwm_reason { YPWM_REASON_NONE,YPWM_REASON_RELEASE,YPWM_REASON_TTL,
     YPWM_REASON_FLASH_READ,YPWM_REASON_ROLLBACK_FAILED };
 enum ypwm_error { YPWM_OK=0,YPWM_INVALID_STATE=5,YPWM_INVALID_PAYLOAD=8,
     YPWM_BUSY=11,YPWM_MODE_FAILED=14,YPWM_STALE_EPOCH=18,YPWM_OLD_COMMAND=19,
-    YPWM_FLASH_READ_FAILED=20,YPWM_ROLLBACK_FAILED=21 };
+    YPWM_FLASH_READ_FAILED=20,YPWM_ROLLBACK_FAILED=21,YPWM_PWM_MODE_REQUIRED=22 };
 typedef struct { uint8_t operation,backend; uint16_t mask; uint32_t epoch; } ypwm_mode_request;
 static inline uint16_t ypwm_u16(const uint8_t *p) { return (uint16_t)p[0]|(uint16_t)((uint16_t)p[1]<<8); }
 static inline uint32_t ypwm_u32(const uint8_t *p) { return (uint32_t)ypwm_u16(p)|((uint32_t)ypwm_u16(p+2)<<16); }

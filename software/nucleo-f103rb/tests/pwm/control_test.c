@@ -194,7 +194,43 @@ static void persistent_boot_tests(void){
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(phase()==YPWM_FAULT&&!pwm_control_can_arm());
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);assert(request(YPWM_PREPARE,322,8)==YPWM_ROLLBACK_FAILED);
 }
+static void direct_pwm_tests(void){
+ int16_t raw[12]={0};uint16_t seq;uint8_t result;
+ reset();assert(pwm_control_submit_raw(raw,50)==YPWM_PWM_MODE_REQUIRED);
+ stage(600,YPWM_ALL_MASK);raw[0]=1;assert(pwm_control_submit_raw(raw,51)==YPWM_INVALID_STATE);
+ raw[0]=0;const unsigned before_on=on_count;
+ assert(pwm_control_submit_raw(raw,52)==0&&!pwm_control_take_raw_result(&seq,&result));
+ assert(pwm_control_service()&&pwm_control_take_raw_result(&seq,&result)&&seq==52&&result==0);
+ assert(on_count==before_on&&!pwm_control_can_arm()&&phase()==YPWM_STAGED);
+ reset();stage(601,YPWM_ALL_MASK);mode_ok=false;
+ assert(pwm_control_submit_raw(raw,57)==0);const unsigned no_tx=write_count;
+ assert(pwm_control_service()&&pwm_control_take_raw_result(&seq,&result)&&result==YPWM_PWM_MODE_REQUIRED&&write_count==no_tx);
+ reset();ready(YPWM_ALL_MASK);raw[0]=-800;raw[1]=713;raw[11]=-1;advance();
+ assert(pwm_control_submit_raw(raw,53)==0&&pwm_control_service());
+ assert(pwm_control_take_raw_result(&seq,&result)&&seq==53&&result==0);
+ assert(memcmp(raw,sent,sizeof raw)==0); /* bypass P/I/D, profile and slew */
+ raw[0]=-801;assert(pwm_control_submit_raw(raw,54)==YPWM_INVALID_PAYLOAD);raw[0]=-800;
+ /* A new position packet switches back to PID with fresh measured history. */
+ motor_target_set_t g=goals(YPWM_ALL_MASK);advance();assert(pwm_control_submit_positions(&g));
+ assert(pwm_control_service()&&sent[0]!=raw[0]);
+ /* Raw output has the same target TTL and stop path. */
+ advance();assert(pwm_control_submit_raw(raw,55)==0&&pwm_control_service());
+ assert(pwm_control_take_raw_result(&seq,&result)&&result==0);tick+=YPWM_TARGET_TIMEOUT_MS;
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_service()&&phase()==YPWM_FAULT);
+ reset();ready(YPWM_ALL_MASK);assert(pwm_control_submit_raw(raw,56)==0);
+ pwm_control_stop(YPWM_REASON_RELEASE);
+ assert(pwm_control_take_raw_result(&seq,&result)&&seq==56&&result==YPWM_INVALID_STATE);
+ reset();assert(prepare(123,YPWM_ALL_MASK)==0&&pwm_control_service());
+ assert(pwm_control_take_mode_result(&seq,&result));armed=true;cancel_on=true;
+ assert(pwm_control_submit_raw(raw,58)==0&&pwm_control_service());
+ assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_INVALID_STATE&&phase()==YPWM_STOPPING);
+ assert(off_count>0);assert(pwm_control_service()&&phase()==YPWM_FAULT);
+ reset();ready(YPWM_ALL_MASK);advance();write_ok=false;
+ assert(pwm_control_submit_raw(raw,59)==0&&pwm_control_service());
+ assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_MODE_FAILED&&reason()==YPWM_REASON_DRIVER);
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
+ direct_pwm_tests();
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);

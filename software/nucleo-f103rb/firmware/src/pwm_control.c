@@ -13,6 +13,8 @@ typedef struct {
     uint32_t epoch,retired_epoch,command_count,accepted_ms,last_service,status_ms,started_ms;
     motor_target_set_t goal;
     int16_t sent[12];
+    int16_t raw[12];uint16_t raw_request;uint8_t raw_result;
+    bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart;
     bool result_pending,arm_allowed,dirty,ever_command,mode_busy,transaction_pending,snapshot_valid,rollback_failed;
     bool preference_touched,boot_restored,flash_read_failed;
 } control_context;
@@ -50,6 +52,7 @@ bool pwm_control_can_arm(void){const control_context s=snapshot();return
 static bool transitioning(uint8_t phase){return phase==YPWM_PREPARING||phase==YPWM_STAGED||phase==YPWM_ROLLING_BACK;}
 void pwm_control_stop(uint8_t reason){
     taskENTER_CRITICAL();
+    if(p.raw_pending){p.raw_pending=false;p.raw_result_pending=true;p.raw_result=YPWM_INVALID_STATE;}
     if(transitioning(p.phase)){
         p.phase=YPWM_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
     }else if(p.phase!=YPWM_STOPPING){
@@ -98,11 +101,12 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     if(p.flash_read_failed){taskEXIT_CRITICAL();return YPWM_FLASH_READ_FAILED;}
     if(p.rollback_failed){taskEXIT_CRITICAL();return YPWM_ROLLBACK_FAILED;}
     if(host_protocol_is_stop_requested()||transitioning(p.phase)||p.phase==YPWM_ACTIVE||p.phase==YPWM_STOPPING||
-       p.result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
+       p.result_pending||p.mode_busy||p.raw_pending||p.raw_result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.epoch==p.epoch||r.epoch==p.retired_epoch){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
     p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=YPWM_PREPARING;p.operation=YPWM_PREPARE;
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;
     p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;p.boot_restored=false;
+    p.direct=p.raw_preview=p.pid_restart=false;
     memset(&p.goal,0,sizeof p.goal);memset(p.sent,0,sizeof p.sent);p.dirty=true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;
     taskEXIT_CRITICAL();return YPWM_OK;
@@ -171,11 +175,38 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
 bool pwm_control_submit_positions(const motor_target_set_t *goal){
     if(!goal||!motor_device_validate_targets(goal)||!host_protocol_is_armed()||host_protocol_is_stop_requested())return false;
     taskENTER_CRITICAL();
-    if(p.backend!=YPWM_PID||!p.arm_allowed||(p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)){taskEXIT_CRITICAL();return false;}
+    if(p.backend!=YPWM_PID||!p.arm_allowed||p.raw_pending||p.raw_result_pending||(p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)){taskEXIT_CRITICAL();return false;}
     for(unsigned i=0;i<12;++i)if((p.mask&(1U<<i))&&!goal->motor[i].speed){taskEXIT_CRITICAL();return false;}
     /* New position goals do not reset the integrator or derivative history. */
+    if(p.direct)p.pid_restart=true;
+    p.direct=false;
     p.goal=*goal;p.accepted_ms=milliseconds();++p.command_count;p.ever_command=true;p.dirty=true;
     taskEXIT_CRITICAL();return true;
+}
+uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
+    if(!duty)return YPWM_INVALID_PAYLOAD;
+    const bool armed=host_protocol_is_armed();bool zero=true;
+    taskENTER_CRITICAL();
+    if(p.backend!=YPWM_PID){taskEXIT_CRITICAL();return YPWM_PWM_MODE_REQUIRED;}
+    for(unsigned i=0;i<12;++i){
+        if(duty[i]<-YPWM_DUTY_LIMIT||duty[i]>YPWM_DUTY_LIMIT||(!(p.mask&(1U<<i))&&duty[i])){
+            taskEXIT_CRITICAL();return YPWM_INVALID_PAYLOAD;}
+        if(duty[i])zero=false;
+    }
+    if(p.raw_pending||p.raw_result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
+    const bool preview=!armed&&zero&&host_protocol_get_state()==HOST_FSM_DISARMED&&
+        (p.phase==YPWM_READY||p.phase==YPWM_STAGED);
+    if(host_protocol_is_stop_requested()||(!preview&&(!armed||!p.arm_allowed||
+        (p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
+    memcpy(p.raw,duty,sizeof p.raw);p.raw_request=sequence;p.raw_pending=true;p.raw_preview=preview;
+    if(preview)p.arm_allowed=false; /* PWM0 is not proof that torque stayed OFF. */
+    else{p.direct=true;p.ever_command=true;p.accepted_ms=milliseconds();}
+    p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
+}
+bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result){
+    taskENTER_CRITICAL();const bool ready=p.raw_result_pending;
+    if(ready){*sequence=p.raw_request;*result=p.raw_result;p.raw_result_pending=false;}
+    taskEXIT_CRITICAL();return ready;
 }
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result){
     taskENTER_CRITICAL();const bool ready=p.result_pending;
@@ -351,8 +382,9 @@ static void service_pid(const control_context *s,uint32_t now){
     if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     if(!feedback_safe(&f,now))return;
     /* Never integrate/differentiate the same measurement more than once. */
-    if(s->phase==YPWM_ACTIVE&&f.sequence==last_sample)return;
-    const uint32_t dt_ms=s->phase==YPWM_READY?20U:f.uptime_ms-last_feedback_ms;
+    if(!s->pid_restart&&s->phase==YPWM_ACTIVE&&f.sequence==last_sample)return;
+    if(s->pid_restart){memset(axes,0,sizeof axes);taskENTER_CRITICAL();p.pid_restart=false;taskEXIT_CRITICAL();}
+    const uint32_t dt_ms=s->phase==YPWM_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
     if(!dt_ms||dt_ms>50U){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     const float dt=(float)dt_ms*0.001f;
     const position_pid_config_t config=position_pid_default_config();int16_t out[12]={0};
@@ -360,7 +392,7 @@ static void service_pid(const control_context *s,uint32_t now){
         if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,s->goal.motor[i].speed,
             s->goal.motor[i].acceleration,f.motor[i].position,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }
-    if(snapshot().phase!=s->phase||host_protocol_is_stop_requested())return;
+    if(snapshot().phase!=s->phase||snapshot().direct||host_protocol_is_stop_requested())return;
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
     if(snapshot().phase!=s->phase||host_protocol_is_stop_requested())return;
     if(s->phase==YPWM_READY){
@@ -374,6 +406,45 @@ static void service_pid(const control_context *s,uint32_t now){
     last_sample=f.sequence;last_feedback_ms=f.uptime_ms;
     taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=YPWM_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
         p.feedback_age=(uint16_t)(now-f.uptime_ms);memcpy(p.sent,out,sizeof out);p.dirty=true;}taskEXIT_CRITICAL();
+}
+static void service_raw(const control_context *s,uint32_t now){
+    if(!s->raw_preview){
+        if(!host_protocol_is_armed()||host_protocol_is_stop_requested()){pwm_control_stop(YPWM_REASON_LINK);return;}
+        if(now-s->accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
+        if(s->phase==YPWM_ACTIVE&&now-s->last_service>30U){pwm_control_stop(YPWM_REASON_DEADLINE);return;}
+        taskENTER_CRITICAL();p.last_service=now;taskEXIT_CRITICAL();
+        motor_feedback_set_t f;imu_feedback_t imu;
+        if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
+        if(!feedback_safe(&f,now))return;
+    }
+    if(!s->raw_pending)return;
+    uint8_t result=YPWM_OK;
+    if(s->raw_preview){uint16_t verified=0;
+        if(host_protocol_get_state()!=HOST_FSM_DISARMED||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
+        else if(!motor_device_verify_modes(YPWM_PID,s->mask,&verified))result=YPWM_PWM_MODE_REQUIRED;
+    }
+    const control_context current=snapshot();
+    if(current.phase!=s->phase||!current.raw_pending||current.raw_request!=s->raw_request||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
+    if(!result&&motor_device_write_pwm(s->mask,s->raw)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
+    if(!result&&(snapshot().phase!=s->phase||host_protocol_is_stop_requested()||
+       (!s->raw_preview&&!host_protocol_is_armed())))result=YPWM_INVALID_STATE;
+    if(!result&&!s->raw_preview&&s->phase==YPWM_READY){
+        if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
+    }
+    if(!s->raw_preview&&(snapshot().phase!=s->phase||host_protocol_is_stop_requested()||!host_protocol_is_armed())){
+        const int16_t zero[12]={0};(void)motor_device_write_pwm(s->mask,zero);
+        (void)motor_device_torque_mask(YPWM_ALL_MASK,false);result=YPWM_INVALID_STATE;
+    }
+    taskENTER_CRITICAL();
+    if(p.raw_pending&&p.raw_request==s->raw_request){
+        p.raw_pending=false;p.raw_result=result;p.raw_result_pending=true;
+        if(!result){memcpy(p.sent,s->raw,sizeof p.sent);p.unknown|=s->mask;
+            if(!s->raw_preview){p.phase=YPWM_ACTIVE;p.torque=s->mask;}else p.raw_preview=false;}
+        p.dirty=true;
+    }
+    taskEXIT_CRITICAL();
+    if(result&&!s->raw_preview&&!host_protocol_is_stop_requested()&&snapshot().phase==s->phase)
+        pwm_control_stop(YPWM_REASON_DRIVER);
 }
 bool pwm_control_service(void){
     control_context s=snapshot();const uint32_t now=milliseconds();
@@ -397,6 +468,7 @@ bool pwm_control_service(void){
         pwm_control_stop(YPWM_REASON_TTL);s=snapshot();
     }
     if(s.phase==YPWM_ROLLING_BACK){rollback_mode(&s);return true;}
+    if(s.raw_pending&&s.raw_preview){service_raw(&s,now);return true;}
     if(s.phase==YPWM_STAGED||s.phase==YPWM_CANCELED)return true;
     if(s.phase==YPWM_PREPARING){prepare_mode(&s);return true;}
     if((s.phase==YPWM_READY||s.phase==YPWM_ACTIVE)&&
@@ -412,6 +484,6 @@ bool pwm_control_service(void){
         return true;
     }
     if(s.phase==YPWM_FAULT&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
-    if(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE)service_pid(&s,now);
+    if(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE){if(s.direct)service_raw(&s,now);else service_pid(&s,now);}
     return true;
 }
