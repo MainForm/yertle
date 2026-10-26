@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "pwm_control.h"
+#include "position_pid.h"
 #include "sensor_task.h"
 #include "host_protocol.h"
 #include "mode_store.h"
@@ -302,6 +303,16 @@ static void calibrated_pid_tests(void){
  assert(pwm_control_submit_positions(&g)&&pwm_control_service());
  assert(phase()==YPWM_STOPPING&&reason()==YPWM_REASON_CALIBRATION&&write_count==writes);
 }
+static void motor_polarity_service_tests(void){
+ const int8_t expected[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+ for(int direction=-1;direction<=1;direction+=2){
+  reset();ready(YPWM_ALL_MASK);
+  motor_target_set_t target=goals(YPWM_ALL_MASK);
+  for(unsigned i=0;i<12;++i){target.motor[i].position=(uint16_t)(2048+direction*100);target.motor[i].speed=30000;}
+  advance();assert(pwm_control_submit_positions(&target)&&pwm_control_service());
+  for(unsigned i=0;i<12;++i)assert(sent[i]*direction*expected[i]>0);
+ }
+}
 static void pid_trace_tests(void){
  uint8_t b[64],stats[28];reset();ready(YPWM_ALL_MASK);
  assert(pwm_control_pid_detail(b));FILE *fixture=fopen("pid_detail_fixture.bin","wb");assert(fixture);assert(fwrite(b,1,64,fixture)==64);const uint32_t first=ypwm_u32(b+2);
@@ -309,7 +320,9 @@ static void pid_trace_tests(void){
  for(unsigned j=0;j<2;++j){float reference,error,term;memcpy(&reference,b+16+j*24,4);
   memcpy(&error,b+20+j*24,4);memcpy(&term,b+24+j*24,4);
   assert(reference>2048&&error>0&&term>0&&b[38+j*24]&1);
-  assert((int16_t)ypwm_u16(b+36+j*24)==sent[j]);}
+  assert((int16_t)ypwm_u16(b+36+j*24)==sent[j]);
+  assert(b[38+j*24]&32); /* IDs1/2 reversed, P/I/D remain pre-polarity */
+  assert(sent[j]<0);}
  pwm_control_pid_detail_result(true);
  advance();assert(pwm_control_service());advance();assert(pwm_control_service()); /* pending replaced */
  for(unsigned pair=1;pair<6;++pair){assert(pwm_control_pid_detail(b));assert(b[12]==pair*2+1&&ypwm_u32(b+2)==first);assert(fwrite(b,1,64,fixture)==64);pwm_control_pid_detail_result(true);}
@@ -322,7 +335,7 @@ static void pid_trace_tests(void){
  advance();write_ok=false;assert(pwm_control_service());assert(!pwm_control_pid_detail(b)); /* no fake sent result */
 }
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
- pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
+ motor_polarity_service_tests();pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);
@@ -342,7 +355,8 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_status(b,true)&&ypwm_u16(b+18)==YPWM_ALL_MASK);off_ok=true;stopped(YPWM_REASON_RELEASE);
  reset();assert(prepare(123,8)==0);assert(pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));armed=true;
  motor_target_set_t g=goals(8);assert(pwm_control_submit_positions(&g));cancel_on=true;assert(pwm_control_service());assert(sent[3]==0);stopped(YPWM_REASON_RELEASE);
- reset();ready(YPWM_ALL_MASK);for(unsigned i=0;i<12;++i)assert(sent[i]>0);
+ reset();ready(YPWM_ALL_MASK);for(unsigned i=0;i<12;++i)
+  assert(sent[i]*position_pid_motor_polarity((uint8_t)(i+1U))>0);
  for(unsigned i=0;i<80;++i){advance();g=goals(YPWM_ALL_MASK);for(unsigned j=0;j<12;++j)g.motor[j].position=2048;
   assert(pwm_control_submit_positions(&g));assert(pwm_control_service());assert(phase()==YPWM_ACTIVE);}
  assert(tick>1000); /* no obsolete one-second bench cutoff */

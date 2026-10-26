@@ -7,6 +7,13 @@ position_pid_config_t position_pid_default_config(void){
     const position_pid_config_t config={2.0f,0.5f,0.05f,20.0f,YPWM_DUTY_LIMIT,1};
     return config;
 }
+int8_t position_pid_motor_polarity(uint8_t motor_id){
+    /* Bench log robot_20261026_192238_20012: sustained opposite raw motion.
+     * Other IDs retain +1 pending a separate physical direction check.
+     * This is NOT the joint-angle-to-raw direction_sign calibration. */
+    static const int8_t polarity[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+    return motor_id>=1U&&motor_id<=12U?polarity[motor_id-1U]:0;
+}
 void position_pid_reset(position_pid_t *pid,float measured){
     memset(pid,0,sizeof *pid);pid->reference=measured;pid->previous_position=measured;pid->initialized=true;
 }

@@ -466,12 +466,14 @@ static void service_pid(const control_context *s,uint32_t now){
     const uint32_t dt_ms=s->phase==YPWM_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
     if(!dt_ms||dt_ms>50U){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     const float dt=(float)dt_ms*0.001f;
-    const position_pid_config_t config=position_pid_default_config();int16_t out[12]={0};
+    int16_t out[12]={0};
     for(unsigned i=0;i<12;++i)if(s->mask&(1U<<i)){
         int16_t measured;
         if(!calibration_cache_position((uint8_t)(i+1U),f.motor[i].position,&measured)){
             pwm_control_stop(YPWM_REASON_CALIBRATION);return;
         }
+        position_pid_config_t config=position_pid_default_config();
+        config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
         if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,s->goal.motor[i].speed,
             s->goal.motor[i].acceleration,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }

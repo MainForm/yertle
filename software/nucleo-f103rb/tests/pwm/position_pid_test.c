@@ -4,7 +4,22 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+static void motor_polarity_tests(void){
+ const int8_t expected[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+ assert(position_pid_motor_polarity(0)==0&&position_pid_motor_polarity(13)==0&&position_pid_motor_polarity(255)==0);
+ for(uint8_t id=1;id<=12;++id)for(int sign=-1;sign<=1;sign+=2){
+  position_pid_config_t config=position_pid_default_config();position_pid_t pid={0};int16_t out=0;
+  config.polarity=position_pid_motor_polarity(id);assert(config.polarity==expected[id-1]);
+  assert(position_pid_step(&pid,&config,(uint16_t)(2048+sign*100),30000,0,2048,.02f,&out));
+  assert(pid.trace_error==sign*100&&pid.trace_p==sign*200&&pid.trace_d==0);
+  assert(out*sign*expected[id-1]>0); /* signed error retained, only final output reverses */
+  assert(((pid.trace_flags&32)!=0)==(expected[id-1]<0));
+  position_pid_reset(&pid,2048);
+  assert(position_pid_step(&pid,&config,2048,200,0,2048,.02f,&out)&&out==0);
+ }
+}
 int main(void){
+ motor_polarity_tests();
  position_pid_config_t c=position_pid_default_config();position_pid_t p={0};int16_t out;
  assert(YPWM_DUTY_LIMIT==800&&c.duty_limit==800);
  assert(position_pid_step(&p,&c,2148,200,0,2048,.02f,&out));assert(out==8&&p.velocity==0&&p.reference<=2052.01f);
