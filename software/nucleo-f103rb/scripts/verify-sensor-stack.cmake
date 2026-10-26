@@ -65,3 +65,14 @@ check_path(calibration_program sensor_task collect_motor_register motor_device_r
     calibration_flash_program flash_operation)
 check_path(calibration_dedicated sensor_task collect_next_position_offset motor_device_read_position_offset
     calibration_cache_observe calibration_store_save calibration_scan checksum)
+
+if(NOT main_source MATCHES "xTaskCreate\\(actuator_task,[^)]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
+ message(FATAL_ERROR "Cannot determine actuator stack multiplier")
+endif()
+set(actuator_multiplier "${CMAKE_MATCH_1}")
+if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
+ message(FATAL_ERROR "Cannot determine minimal stack words")
+endif()
+math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
+check_path(actuator_calibrated_position actuator_task pwm_control_service service_pid
+    calibration_cache_position calibration_cache_get)

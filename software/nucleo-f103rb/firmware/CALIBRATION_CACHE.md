@@ -1,7 +1,8 @@
 # Persistent motor calibration cache
 
-This change only captures/stores offsets. It does not transform position feedback,
-F103 PID errors, target raw values, policy observations, motor IDs/signs or poses.
+Calibration capture persists offsets. The PWM PID now uses the calibrated current
+position; original sensor/serial feedback stays raw. The active PC CLI normalizes
+its snapshot copies for UI/control/policy. See PWM_POSITION_REFERENCE.md.
 
 ## Storage and boot
 

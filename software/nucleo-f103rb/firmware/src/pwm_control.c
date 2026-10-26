@@ -1,6 +1,7 @@
 #include "pwm_control.h"
 #include "position_pid.h"
 #include "mode_store.h"
+#include "calibration_store.h"
 #include "sensor_task.h"
 #include "host_protocol.h"
 #include "FreeRTOS.h"
@@ -56,9 +57,14 @@ bool pwm_control_native_ready(void){const control_context s=snapshot();return s.
 bool pwm_control_accepts_positions(void){const control_context s=snapshot();return
     (s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY)||
     (s.backend==YPWM_PID&&s.arm_allowed&&(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE));}
+static bool calibration_ready(uint16_t mask){
+    uint16_t raw;int16_t steps;
+    for(unsigned i=0;i<12;++i)if((mask&(1U<<i))&&!calibration_cache_get((uint8_t)(i+1U),&raw,&steps))return false;
+    return true;
+}
 bool pwm_control_can_arm(void){const control_context s=snapshot();return
     (s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY)||
-    (s.backend==YPWM_PID&&s.phase==YPWM_READY&&s.arm_allowed);}
+    (s.backend==YPWM_PID&&s.phase==YPWM_READY&&s.arm_allowed&&calibration_ready(s.mask));}
 static bool transitioning(uint8_t phase){return phase==YPWM_PREPARING||phase==YPWM_STAGED||phase==YPWM_ROLLING_BACK;}
 void pwm_control_stop(uint8_t reason){
     taskENTER_CRITICAL();
@@ -413,8 +419,12 @@ static void service_pid(const control_context *s,uint32_t now){
     const float dt=(float)dt_ms*0.001f;
     const position_pid_config_t config=position_pid_default_config();int16_t out[12]={0};
     for(unsigned i=0;i<12;++i)if(s->mask&(1U<<i)){
+        int16_t measured;
+        if(!calibration_cache_position((uint8_t)(i+1U),f.motor[i].position,&measured)){
+            pwm_control_stop(YPWM_REASON_CALIBRATION);return;
+        }
         if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,s->goal.motor[i].speed,
-            s->goal.motor[i].acceleration,f.motor[i].position,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
+            s->goal.motor[i].acceleration,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }
     if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}

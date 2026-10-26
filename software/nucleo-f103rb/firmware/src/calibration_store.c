@@ -106,3 +106,11 @@ bool calibration_cache_observe(uint8_t id,uint8_t address,const uint8_t *data,ui
     cached.raw[index]=raw;cached.valid_mask|=(uint16_t)(1U<<index);
     return calibration_store_save(&cached);
 }
+
+bool calibration_cache_position(uint8_t id,int16_t wire_position,int16_t *position){
+    uint16_t raw;int16_t offset;
+    if(!position||wire_position<0||wire_position>4095||!calibration_cache_get(id,&raw,&offset))return false;
+    int32_t value=((int32_t)wire_position-offset)%4096;
+    if(value<0)value+=4096;
+    *position=(int16_t)value;return true;
+}

@@ -326,7 +326,7 @@ static void send_hello_ack(protocol_context_t *context)
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
         0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_DIRECT_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY,
-        2U, 0U, 0U /* capability 0x200: persistent calibration on successful GET */
+        6U, 0U, 0U /* 0x200 persistent cache + 0x400 calibrated PWM PID positions */
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }

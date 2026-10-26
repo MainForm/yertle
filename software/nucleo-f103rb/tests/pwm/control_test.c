@@ -6,6 +6,10 @@
 #include "sensor_task.h"
 #include "host_protocol.h"
 #include "mode_store.h"
+#include "calibration_store.h"
+void calibration_memory_reset(void);
+static void seed_calibration(void){calibration_memory_reset();calibration_cache_init();
+ const uint8_t zero[2]={0};for(unsigned id=1;id<=12;++id)assert(calibration_cache_observe((uint8_t)id,31,zero,2));}
 #include "mode_memory.h"
 static uint32_t tick;static unsigned critical,on_count,off_count,write_count,completed,unsafe_count;
 static bool pwm_auto_enable,fail_off_after_pwm;static uint16_t servo_torque_on;
@@ -48,7 +52,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){a
 static uint8_t phase(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[3];}
 static uint8_t reason(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[7];}
 static void reset(void){
- mode_memory_reset();pwm_auto_enable=fail_off_after_pwm=false;servo_torque_on=0;
+ seed_calibration();mode_memory_reset();pwm_auto_enable=fail_off_after_pwm=false;servo_torque_on=0;
  tick=100;critical=on_count=off_count=write_count=completed=unsafe_count=0;on_mask=0;stop_requested=armed=false;
  off_ok=mode_ok=feedback_ok=write_ok=true;cancel_mode=cancel_on=false;memset(sent,0,sizeof sent);
  mode_fail_id=0;verify_off_calls=fail_off_call=0;verify_modes_ok=true;
@@ -278,8 +282,28 @@ static void direct_pwm_tests(void){
  assert(pwm_control_submit_raw(raw,59)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_MODE_FAILED&&reason()==YPWM_REASON_DRIVER);
 }
+static void calibrated_pid_tests(void){
+ uint16_t seq;uint8_t result;const uint16_t offsets[]={3011,1328,1432};
+ const int16_t wire[]={1085,3376,3480};
+ for(unsigned id=1;id<=3;++id){
+  reset();const uint8_t bytes[]={(uint8_t)offsets[id-1],(uint8_t)(offsets[id-1]>>8)};
+  assert(calibration_cache_observe((uint8_t)id,31,bytes,2));
+  const uint16_t mask=(uint16_t)(1U<<(id-1));
+  assert(prepare(123,mask)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));
+  assert(pwm_control_can_arm());armed=true;feedback.motor[id-1].position=wire[id-1];
+  motor_target_set_t g=goals(mask);g.motor[id-1].position=2048;
+  assert(pwm_control_submit_positions(&g)&&pwm_control_service());
+  assert(phase()==YPWM_ACTIVE&&sent[id-1]==0); /* calibrated current == target */
+  assert(feedback.motor[id-1].position==wire[id-1]); /* raw snapshot preserved */
+ }
+ reset();assert(prepare(123,1)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));
+ calibration_memory_reset();calibration_cache_init();assert(!pwm_control_can_arm());
+ armed=true;motor_target_set_t g=goals(1);const unsigned writes=write_count;
+ assert(pwm_control_submit_positions(&g)&&pwm_control_service());
+ assert(phase()==YPWM_STOPPING&&reason()==YPWM_REASON_CALIBRATION&&write_count==writes);
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
- zero_then_explicit_off_tests();direct_pwm_tests();
+ calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);

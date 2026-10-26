@@ -4,6 +4,10 @@
 #include <string.h>
 #include "mode_memory.h"
 #include "mode_store.h"
+#include "calibration_store.h"
+void calibration_memory_reset(void);
+static void seed_calibration(void){calibration_memory_reset();calibration_cache_init();
+ const uint8_t zero[2]={0};for(unsigned id=1;id<=12;++id)assert(calibration_cache_observe((uint8_t)id,31,zero,2));}
 #include "../../firmware/src/host_protocol.c"
 static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
 static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
@@ -80,7 +84,7 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_ARMED);
 }
 int main(void){
- mode_memory_reset();
+ seed_calibration();mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
  assert(actuator_task_init());assert(pwm_control_service());assert(pwm_control_native_ready());
  /* Slow DISARMED configuration may outlive5s, but never ARM. A silent

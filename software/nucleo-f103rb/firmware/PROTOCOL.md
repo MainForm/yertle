@@ -465,3 +465,12 @@ successful persisted observation). GET_POSITION_OFFSETS (0x0B) is DISARMED only;
 its per-motor status 7 reports the same local storage failure. No motor EEPROM
 writes occur. HELLO capability bit 0x200 advertises this persistence contract.
 See CALIBRATION_CACHE.md for layout, boot, wear avoidance and failure recovery.
+
+## Calibrated PWM position capability (0x400)
+
+F103 PWM PID compares position-mode target raw values against current motor
+feedback minus the cached signed offset, modulo4096. MOTOR_FEEDBACK 0x8B
+continues to contain original encoder readings; PC applies its own one-time
+snapshot normalization. Mode0 and direct PWM are unchanged. A missing offset
+blocks PWM PID arming and produces stop reason15 CALIBRATION if a PID cycle
+is attempted. Use the matching PC CLI to prevent mixed-reference startup.

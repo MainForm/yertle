@@ -41,5 +41,12 @@ int main(void){
  calibration_memory_reset();for(unsigned i=0;i<80;++i){s.raw[0]=(uint16_t)i;assert(calibration_store_save(&s));}
  assert(calibration_erases==4);calibration_read_ok=false;assert(calibration_store_load(&r)==CALIBRATION_READ_ERROR&&!calibration_store_save(&s));
  calibration_read_ok=true;calibration_allowed=false;s.raw[0]=90;assert(!calibration_store_save(&s));
+ int16_t pos=-123;
+ calibration_memory_reset();calibration_cache_init();assert(!calibration_cache_position(1,1085,&pos)&&pos==-123);
+ const uint8_t known[]={0xc3,0x0b};assert(calibration_cache_observe(1,31,known,2));
+ assert(calibration_cache_position(1,1085,&pos)&&pos==2048);
+ assert(calibration_cache_position(1,4095,&pos)&&pos==962);
+ assert(calibration_cache_position(1,0,&pos)&&pos==963);
+ assert(!calibration_cache_position(1,-1,&pos)&&!calibration_cache_position(1,4096,&pos));
  puts("Calibration journal/cache: boot, split/block reads, signed offsets, no-op writes, power cuts, CRC, rotation and storage errors passed");return 0;
 }

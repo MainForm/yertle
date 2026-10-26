@@ -12,6 +12,8 @@ bool calibration_store_save(const calibration_snapshot_t *snapshot);
 void calibration_cache_init(void);
 bool calibration_cache_observe(uint8_t id,uint8_t address,const uint8_t *data,uint8_t length);
 bool calibration_cache_get(uint8_t id,uint16_t *raw,int16_t *steps);
+/* Pure cached conversion: no Flash/UART access, output unchanged on failure. */
+bool calibration_cache_position(uint8_t id,int16_t wire_position,int16_t *position);
 bool calibration_flash_read(uint32_t offset,uint16_t *value);
 bool calibration_flash_program(uint32_t offset,uint16_t value);
 bool calibration_flash_erase(unsigned page);
