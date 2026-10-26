@@ -16,7 +16,8 @@ typedef enum {
     MOTOR_REGISTER_BUSY = 1,
     MOTOR_REGISTER_COMMUNICATION_ERROR = 2,
     MOTOR_REGISTER_REPLY_ERROR = 3,
-    MOTOR_REGISTER_SERVO_ERROR = 4
+    MOTOR_REGISTER_SERVO_ERROR = 4,
+    MOTOR_REGISTER_STORAGE_ERROR = 5 /* F103 calibration Flash/value failure */
 } motor_register_status_t;
 
 typedef struct {
@@ -153,7 +154,8 @@ typedef enum {
     MOTOR_DEVICE_BUSY,
     MOTOR_DEVICE_PROTOCOL_ERROR,
     MOTOR_DEVICE_UART_ERROR,
-    MOTOR_DEVICE_PARTIAL_FEEDBACK
+    MOTOR_DEVICE_PARTIAL_FEEDBACK,
+    MOTOR_DEVICE_STORAGE_ERROR
 } motor_device_status_t;
 
 typedef struct {
@@ -168,10 +170,12 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *targe
 motor_device_status_t motor_device_set_torque(bool enabled);
 motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback);
 /* Read-only EEPROM address 31..32. Bit 11 is sign, bits 0..10 magnitude.
- * No torque, calibration, EEPROM unlock or write is performed. */
+ * No motor torque/calibration/EEPROM write is performed. Successful reads
+ * also update the F103 calibration Flash cache; use DISARMED diagnostics. */
 motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset);
 /* One bounded READ transaction under the bus mutex. Raw bytes only, no writes,
- * torque changes, retry loop or register-dependent conversion. */
+ * torque changes or register-dependent conversion. Validated reads covering
+ * bytes 31/32 also update the F103 calibration Flash cache (status 5 on failure). */
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
                                                   uint8_t length, motor_register_data_t *result);
 /* allowed() is rechecked under the bus mutex before every non-cleanup write.

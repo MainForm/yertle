@@ -7,6 +7,8 @@
 #include "motor_dma.h"
 #include "motor_uart.h"
 #include "motor_device.h"
+#include "calibration_store.h"
+extern bool calibration_allowed;
 #include "uart_diagnostics.h"
 #include "sts3215_protocol.h"
 DWT_Type test_dwt;
@@ -30,6 +32,7 @@ static bool offset_bad_checksum;
 static bool inject_register, register_bad_checksum;
 static uint8_t register_address, register_length, register_reply_length;
 static uint8_t register_reply_id, register_error;
+static uint16_t register_calibration=3011;
 void USART1_IRQHandler(void);
 void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
@@ -93,6 +96,10 @@ void vTaskDelay(uint32_t ticks) {
             const size_t size=reply(packet,register_reply_id ? register_reply_id : q[2],register_reply_length);
             packet[4]=register_error;
             for (unsigned i=0U;i<register_reply_length;++i) packet[5U+i]=(uint8_t)(0x80U+i);
+            for(unsigned i=0;i<register_reply_length;++i){
+                if(register_address+i==31U)packet[5U+i]=(uint8_t)register_calibration;
+                if(register_address+i==32U)packet[5U+i]=(uint8_t)(register_calibration>>8);
+            }
             unsigned sum=0U;
             for (unsigned i=2U;i<size-1U;++i) sum+=packet[i];
             packet[size-1U]=(uint8_t)~sum;
@@ -226,6 +233,9 @@ int main(void) {
         assert(offset.raw==raws[i] && offset.offset_steps==expected[i] && offset.servo_error==0U);
         assert(!(DMA1_Channel5->CCR & DMA_CCR_EN));
     }
+    uint16_t cached_raw;int16_t cached_steps;
+    assert(calibration_cache_get(12,&cached_raw,&cached_steps)&&cached_raw==0x0800U&&cached_steps==0);
+    calibration_cache_init();assert(calibration_cache_get(12,&cached_raw,&cached_steps)&&cached_raw==0x0800U);
     offset_raw=0x1000U;
     assert(motor_device_read_position_offset(1U,&offset)==MOTOR_DEVICE_PROTOCOL_ERROR);
     offset_raw=42U; offset_reply_id=2U;
@@ -282,6 +292,25 @@ int main(void) {
     assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_REPLY_ERROR);
     register_bad_checksum=false; register_error=4U; register_reply_length=0U;
     assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_SERVO_ERROR && registers.servo_error==4U);
+    register_bad_checksum=false;register_error=0;register_reply_id=0;
+    register_address=31;register_length=register_reply_length=2;
+    assert(motor_device_read_register(1,31,2,&registers)==MOTOR_REGISTER_OK);
+    calibration_cache_init();assert(calibration_cache_get(1,&cached_raw,&cached_steps)&&cached_raw==3011&&cached_steps==-963);
+    register_calibration=1328;register_address=0;register_length=register_reply_length=32;
+    assert(motor_device_read_register(2,0,32,&registers)==MOTOR_REGISTER_OK);
+    register_address=32;register_length=register_reply_length=24;
+    assert(motor_device_read_register(2,32,24,&registers)==MOTOR_REGISTER_OK);
+    calibration_cache_init();assert(calibration_cache_get(2,&cached_raw,&cached_steps)&&cached_raw==1328&&cached_steps==1328);
+    register_calibration=1432;register_address=31;register_length=register_reply_length=2;
+    calibration_allowed=false;
+    assert(motor_device_read_register(3,31,2,&registers)==MOTOR_REGISTER_STORAGE_ERROR);
+    calibration_allowed=true;calibration_cache_init();assert(!calibration_cache_get(3,&cached_raw,&cached_steps));
+    register_bad_checksum=true;
+    assert(motor_device_read_register(3,31,2,&registers)==MOTOR_REGISTER_REPLY_ERROR);
+    assert(!calibration_cache_get(3,&cached_raw,&cached_steps));
+    register_bad_checksum=false;
+    assert(motor_device_read_register(3,31,2,&registers)==MOTOR_REGISTER_OK);
+    calibration_cache_init();assert(calibration_cache_get(3,&cached_raw,&cached_steps)&&cached_raw==1432);
     inject_register=false;
     assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
     assert(registers.servo_error==0U && registers.data[0]==0U);

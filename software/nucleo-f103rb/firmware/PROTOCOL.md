@@ -455,3 +455,13 @@ Target and feedback messages are implemented as described above. IMU feedback
 is telemetry only; this version does not use it for actuator safety decisions.
 Current/voltage/load automatic limits are not enabled; their measurements are
 provided to the PC for host-side handling. No numeric unsafe threshold is added.
+
+## Persistent calibration capture capability (0x200)
+
+GET_MOTOR_REGISTER still uses message 0x0C and response 0x8F. Successful reads
+covering EEPROM bytes 31/32 update the F103 RAM + Flash calibration snapshot.
+Status 5 in MOTOR_REGISTER means local calibration storage/value failure (not a
+successful persisted observation). GET_POSITION_OFFSETS (0x0B) is DISARMED only;
+its per-motor status 7 reports the same local storage failure. No motor EEPROM
+writes occur. HELLO capability bit 0x200 advertises this persistence contract.
+See CALIBRATION_CACHE.md for layout, boot, wear avoidance and failure recovery.

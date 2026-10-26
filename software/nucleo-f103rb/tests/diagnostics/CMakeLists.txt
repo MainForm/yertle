@@ -125,3 +125,9 @@ foreach(legacy firmware_offset_job_test firmware_safe_stop_test firmware_target_
  firmware_heartbeat_test firmware_result_tx_test firmware_register_query_test)
  target_sources(${legacy} PRIVATE ../safe_stop/pwm_legacy_stubs.c)
 endforeach()
+
+foreach(target firmware_dma_test firmware_register_write_driver_test firmware_pwm_driver_test)
+ if(TARGET ${target})
+  target_sources(${target} PRIVATE ../../firmware/src/calibration_store.c ../pwm/calibration_memory.c)
+ endif()
+endforeach()

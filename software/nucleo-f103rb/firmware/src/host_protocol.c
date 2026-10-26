@@ -326,7 +326,7 @@ static void send_hello_ack(protocol_context_t *context)
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
         0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_DIRECT_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY,
-        0U, 0U, 0U
+        2U, 0U, 0U /* capability 0x200: persistent calibration on successful GET */
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }
@@ -806,8 +806,9 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         break;
     }
     case MESSAGE_GET_POSITION_OFFSETS: {
-        /* Read-only, asynchronous: no host lease/FSM/torque side effects. */
-        const bool accepted = !context->pwm_mode_pending && pwm_control_native_ready() && sensor_request_position_offsets(sequence);
+        /* Motor-read-only; successful values also persist to F103 Flash while DISARMED. */
+        const bool accepted = context->state==HOST_FSM_DISARMED && !host_protocol_is_stop_requested() &&
+            !context->pwm_mode_pending && pwm_control_native_ready() && sensor_request_position_offsets(sequence);
         if(accepted)context->offsets_job_active=true;
         send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
                     type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);

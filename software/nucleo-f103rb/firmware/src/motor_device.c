@@ -1,4 +1,5 @@
 #include "motor_device.h"
+#include "calibration_store.h"
 #include "pwm_contract.h"
 
 #include <stddef.h>
@@ -136,6 +137,7 @@ bool motor_device_init(void)
     if (bus_mutex == NULL) {
         return false;
     }
+    calibration_cache_init();
     motor_uart_init();
     return true;
 }
@@ -238,7 +240,8 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
                     const int16_t magnitude = (int16_t)(offset->raw & 0x07ffU);
                     offset->offset_steps = (offset->raw & 0x0800U) != 0U ? (int16_t)-magnitude : magnitude;
                     motor_diagnostics_record(DIAG_VALID_REPLY);
-                    result = MOTOR_DEVICE_OK;
+                    result = calibration_cache_observe(id,31U,reply.data,2U)
+                        ? MOTOR_DEVICE_OK : MOTOR_DEVICE_STORAGE_ERROR;
                 }
             }
         }
@@ -293,7 +296,8 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
                  * truncated vendor structure, for reads up to 32 bytes. */
                 memcpy(result->data, &rx_frame[5], length);
                 motor_diagnostics_record(DIAG_VALID_REPLY);
-                status = MOTOR_REGISTER_OK;
+                status = calibration_cache_observe(id,address,result->data,length)
+                    ? MOTOR_REGISTER_OK : MOTOR_REGISTER_STORAGE_ERROR;
             }
         }
     }
