@@ -15,8 +15,13 @@ first ID, count2, integration dt_ms, reserved0. Each24B motor record contains
 reference/error/P/I/D (five IEEE754 float32 little endian), final signed PWM
 i16, flags, reserved0. Reference and error are calibrated position-mode steps;
 P/I/D are duty raw per1000 before controller polarity. Flags: valid1,
-duty clipping2, slew clipping4, integral clamp8, antiwindup16, negative polarity32,
-reset64. Unselected axes are invalid zero records.
+duty clipping2, reserved4(always0), integral clamp8, antiwindup16, negative polarity32,
+reset64. Unselected axes are invalid zero records. Old logs can contain bit4
+for the former PWM slew limiter; its wire bit is not reused. Current firmware
+has no PWM change-rate limiter and no derivative low-pass filter. D uses the
+fresh measured-position difference divided by actual sample dt. Speed/ACC
+still profile the internal position reference; the PWM ceiling800, I clamp20,
+Kp2/Ki0.5/Kd0.05 and other guards remain unchanged.
 
 EVENT8/schema1 is28B: reserved u16 then uptime, published, pending-coalesced,
 completed TX sets, failed TX sets, last sensor sequence (six u32 LE).

@@ -5,10 +5,11 @@
 /* Units: position encoder steps, time seconds, output duty raw /1000. These
  * gains are independent of servo EEPROM PID registers. No angle/raw remapping. */
 typedef struct {
-    float kp,ki,kd,integral_limit,duty_limit,slew_per_s,derivative_tau_s;
+    float kp,ki,kd,integral_limit,duty_limit;
     int8_t polarity;
 } position_pid_config_t;
 typedef struct {
+    /* velocity is the unfiltered measured-position difference / actual dt. */
     float reference,reference_velocity,previous_position,velocity,integral,output;
     float trace_error,trace_p,trace_d;
     uint8_t trace_flags;

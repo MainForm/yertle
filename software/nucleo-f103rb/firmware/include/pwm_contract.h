@@ -19,7 +19,7 @@
  * target_sequence u16,first_id u8,count2 u8,PID_dt_ms u8,reserved0.
  * Per motor24B: reference,error,P,I,D float32 LE; sentPWM i16 LE;
  * flags u8,reserved0. Contributions precede polarity; bit5 marks negative.
- * Flags: valid1, duty-clipped2, slew-clipped4, I-clamped8, antiwindup16,
+ * Flags: valid1, duty-clipped2, reserved4(always0), I-clamped8, antiwindup16,
  * negative-polarity32, reset64. Invalid/unselected records are all zero.
  * EVENT8/version1/length28: uptime,published,coalesced,completed,TXfailures,
  * last_sensor_sequence (all u32 LE). Counters reset only on MCU boot/init.

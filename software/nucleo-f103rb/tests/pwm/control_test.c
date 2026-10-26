@@ -261,7 +261,7 @@ static void direct_pwm_tests(void){
  reset();ready(YPWM_ALL_MASK);raw[0]=-800;raw[1]=713;raw[11]=-1;advance();
  assert(pwm_control_submit_raw(raw,53)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&seq==53&&result==0);
- assert(memcmp(raw,sent,sizeof raw)==0); /* bypass P/I/D, profile and slew */
+ assert(memcmp(raw,sent,sizeof raw)==0); /* bypass P/I/D and reference profile */
  raw[0]=-801;assert(pwm_control_submit_raw(raw,54)==YPWM_INVALID_PAYLOAD);raw[0]=-800;
  /* A new position packet switches back to PID with fresh measured history. */
  motor_target_set_t g=goals(YPWM_ALL_MASK);advance();assert(pwm_control_submit_positions(&g));
