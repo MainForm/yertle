@@ -21,7 +21,7 @@ for the former PWM slew limiter; its wire bit is not reused. Current firmware
 has no PWM change-rate limiter and no derivative low-pass filter. D uses the
 fresh measured-position difference divided by actual sample dt. Speed/ACC
 still profile the internal position reference; the PWM ceiling800, I clamp20,
-Kp2/Ki0.5/Kd0.05 and other guards remain unchanged.
+Telemetry does not change gains. Current controller defaults are Kp10/Ki3/Kd0.10, integral-output clamp100; other guards remain unchanged.
 
 EVENT8/schema1 is28B: reserved u16 then uptime, published, pending-coalesced,
 completed TX sets, failed TX sets, last sensor sequence (six u32 LE).
