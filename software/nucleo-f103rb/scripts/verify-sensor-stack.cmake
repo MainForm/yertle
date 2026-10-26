@@ -55,3 +55,13 @@ if(frame_pwm_control_mode_write_allowed GREATER 64)
     message(FATAL_ERROR "Mode-write permission frame exceeds 64bytes; avoid full context copies")
 endif()
 message(STATUS "Sensor ARM stack budget passed (live high-water validation still required)")
+
+# A calibration-covering generic GET persists below the bus-lock read path.
+check_path(calibration_query sensor_task collect_motor_register motor_device_read_register
+    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
+    calibration_scan checksum)
+check_path(calibration_program sensor_task collect_motor_register motor_device_read_register
+    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
+    calibration_flash_program flash_operation)
+check_path(calibration_dedicated sensor_task collect_next_position_offset motor_device_read_position_offset
+    calibration_cache_observe calibration_store_save calibration_scan checksum)

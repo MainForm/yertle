@@ -1,15 +1,18 @@
-/* Project-owned STM32F103RB layout: reserve the last two 1KiB Flash pages.
+/* Project-owned STM32F103RB layout: reserve independent calibration and mode Flash journals (2KiB each).
    Settings have no loadable section; normal application BIN never includes them. */
 ENTRY(Reset_Handler)
 MEMORY
 {
-  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 126K
+  FLASH (rx) : ORIGIN = 0x08000000, LENGTH = 124K
+  CALIBRATION (r) : ORIGIN = 0x0801F000, LENGTH = 2K
   SETTINGS (r) : ORIGIN = 0x0801F800, LENGTH = 2K
   RAM (xrw) : ORIGIN = 0x20000000, LENGTH = 20K
 }
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 _Min_Heap_Size = 0x200;
 _Min_Stack_Size = 0x400;
+__calibration_store_start__ = ORIGIN(CALIBRATION);
+__calibration_store_end__ = ORIGIN(CALIBRATION) + LENGTH(CALIBRATION);
 __mode_store_start__ = ORIGIN(SETTINGS);
 __mode_store_end__ = ORIGIN(SETTINGS) + LENGTH(SETTINGS);
 SECTIONS
@@ -44,6 +47,6 @@ SECTIONS
     . += _Min_Heap_Size; . += _Min_Stack_Size; . = ALIGN(8);
   } > RAM
   .ARM.attributes 0 : { *(.ARM.attributes) }
-  ASSERT(LOADADDR(.data) + SIZEOF(.data) <= ORIGIN(SETTINGS), "firmware overlaps persistent mode pages")
+  ASSERT(LOADADDR(.data) + SIZEOF(.data) <= ORIGIN(CALIBRATION), "firmware overlaps persistent settings pages")
   ASSERT(_estack % 8 == 0, "MSP must be 8-byte aligned")
 }

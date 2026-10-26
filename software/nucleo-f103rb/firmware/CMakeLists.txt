@@ -18,6 +18,7 @@ add_executable(yertle_f103rb
     src/actuator_task.c
     src/pwm_control.c
     src/position_pid.c
+    src/calibration_store.c
     src/mode_store.c
     src/mode_flash.c
     src/sensor_task.c

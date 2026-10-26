@@ -1,4 +1,8 @@
 #include "mode_flash.h"
+#include "calibration_store.h"
+#include "host_protocol.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "stm32f1xx.h"
 #include <stddef.h>
 extern uint8_t __mode_store_start__,__mode_store_end__;
@@ -44,4 +48,33 @@ bool mode_flash_program(uint32_t offset,uint16_t value){
 bool mode_flash_erase(unsigned page){
     if(page>=2||!region_valid())return false;
     return flash_operation(MODE_BASE+page*MODE_FLASH_PAGE_BYTES,0,true);
+}
+
+extern uint8_t __calibration_store_start__,__calibration_store_end__;
+#define CALIBRATION_BASE 0x0801f000UL
+static bool calibration_region_valid(void){
+    return region_valid()&&(uintptr_t)&__calibration_store_start__==CALIBRATION_BASE&&
+        (uintptr_t)&__calibration_store_end__==MODE_BASE;
+}
+static bool calibration_write_allowed(void){
+    return host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested();
+}
+bool calibration_flash_read(uint32_t offset,uint16_t *value){
+    if(!value||!calibration_region_valid()||(offset&1U)||offset>=CALIBRATION_FLASH_BYTES)return false;
+    *value=*(volatile const uint16_t *)(uintptr_t)(CALIBRATION_BASE+offset);return true;
+}
+bool calibration_flash_program(uint32_t offset,uint16_t value){
+    uint16_t old,verify;bool ok=false;
+    /* Keep the DISARMED test atomic with starting Flash programming. */
+    taskENTER_CRITICAL();
+    if(calibration_write_allowed()&&calibration_flash_read(offset,&old)&&old==0xffffU)
+        ok=flash_operation(CALIBRATION_BASE+offset,value,false);
+    taskEXIT_CRITICAL();
+    return ok&&calibration_flash_read(offset,&verify)&&verify==value;
+}
+bool calibration_flash_erase(unsigned page){
+    if(page>=2||!calibration_region_valid())return false;
+    taskENTER_CRITICAL();
+    const bool ok=calibration_write_allowed()&&flash_operation(CALIBRATION_BASE+page*CALIBRATION_FLASH_PAGE_BYTES,0,true);
+    taskEXIT_CRITICAL();return ok;
 }
