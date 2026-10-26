@@ -10,6 +10,8 @@ typedef struct {
 } position_pid_config_t;
 typedef struct {
     float reference,reference_velocity,previous_position,velocity,integral,output;
+    float trace_error,trace_p,trace_d;
+    uint8_t trace_flags;
     bool initialized;
 } position_pid_t;
 position_pid_config_t position_pid_default_config(void);

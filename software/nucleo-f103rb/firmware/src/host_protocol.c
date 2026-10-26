@@ -326,7 +326,7 @@ static void send_hello_ack(protocol_context_t *context)
         1U, 0U, 0U,                         /* firmware semantic version */
         YERTLE_PROTOCOL_VERSION,
         0x01U | YPWM_CAPABILITY | YPWM_IDLE_MONITOR_CAPABILITY | YPWM_DIRECT_CAPABILITY | YPWM_HOST_MODE_RETRY_CAPABILITY | YPWM_LONG_PREPARATION_CAPABILITY,
-        6U, 0U, 0U /* 0x200 persistent cache + 0x400 calibrated PWM PID positions */
+        14U, 0U, 0U /* cache0x200 + calibrated PID0x400 + detail feedback0x800 */
     };
     send_frame(context, MESSAGE_HELLO_ACK, payload, sizeof(payload));
 }
@@ -939,6 +939,17 @@ static void service_pwm(protocol_context_t *context)
     if(pwm_control_status(status,false))send_frame(context,MESSAGE_EVENT,status,sizeof status);
 }
 
+/* Best-effort low priority diagnostics. At most one 76-byte wire frame per
+ * 2ms pass (~0.76ms at1Mbps). Always service safety, RX, queued ACKs, sensors,
+ * mode results and heartbeat first. A failed critical TX suppresses logging. */
+static void service_pid_detail(protocol_context_t *context){
+    if(!context->host_connected||context->result_count||context->register_job_active||context->pwm_mode_pending)return;
+    uint8_t bytes[YPWM_PID_DETAIL_LENGTH];
+    if(pwm_control_pid_detail(bytes))
+        pwm_control_pid_detail_result(send_frame(context,MESSAGE_EVENT,bytes,sizeof bytes));
+    if(pwm_control_pid_stats(bytes))send_frame(context,MESSAGE_EVENT,bytes,YPWM_PID_STATS_LENGTH);
+}
+
 void host_protocol_task(void *argument)
 {
     /* One host task owns the replay/diagnostic cache. Keep it off the 2 KiB
@@ -982,6 +993,7 @@ void host_protocol_task(void *argument)
 
         /* The FSM owns the transition; heartbeat only provides a healthy lease. */
         try_enter_control_ready(&context);
+        service_pid_detail(&context);
 
         vTaskDelay(pdMS_TO_TICKS(2));
     }

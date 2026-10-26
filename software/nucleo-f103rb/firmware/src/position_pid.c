@@ -18,7 +18,8 @@ bool position_pid_step(position_pid_t *pid,const position_pid_config_t *c,uint16
        !isfinite(c->duty_limit)||c->duty_limit<=0||c->duty_limit>YPWM_DUTY_LIMIT||
        !isfinite(c->slew_per_s)||c->slew_per_s<=0||!isfinite(c->derivative_tau_s)||c->derivative_tau_s<0||
        (c->polarity!=1&&c->polarity!=-1))return false;
-    if(!pid->initialized)position_pid_reset(pid,(float)measured);
+    const bool reset=!pid->initialized;
+    if(reset)position_pid_reset(pid,(float)measured);
     /* Speed is explicitly encoder steps/s in this backend. ACC uses the STS
      * documented 8.7deg/s^2 per unit; zero means no acceleration ramp. */
     const float distance=(float)goal-pid->reference;
@@ -38,7 +39,8 @@ bool position_pid_step(position_pid_t *pid,const position_pid_config_t *c,uint16
     pid->previous_position=(float)measured;
     const float error=pid->reference-(float)measured;
     if(fabsf(error)>(float)YPWM_FOLLOWING_ERROR_LIMIT)return false;
-    const float candidate=clamp(pid->integral+c->ki*error*dt,-c->integral_limit,c->integral_limit);
+    const float integral_unclipped=pid->integral+c->ki*error*dt;
+    const float candidate=clamp(integral_unclipped,-c->integral_limit,c->integral_limit);
     const float without_i=c->kp*error-c->kd*pid->velocity;
     const float unsaturated=without_i+candidate;
     /* Conditional integration prevents windup at duty and slew saturation. */
@@ -49,5 +51,14 @@ bool position_pid_step(position_pid_t *pid,const position_pid_config_t *c,uint16
     const float requested=clamp(without_i+pid->integral,low,high);
     pid->output=(float)c->polarity*requested;
     if(!isfinite(pid->output))return false;
+    /* Trace arithmetic is observational: never feeds the controller. */
+    pid->trace_error=error;pid->trace_p=c->kp*error;pid->trace_d=-c->kd*pid->velocity;
+    const float requested_unclipped=without_i+pid->integral;
+    const float duty_clamped=clamp(requested_unclipped,-c->duty_limit,c->duty_limit);
+    pid->trace_flags=(uint8_t)(1U|(fabsf(requested_unclipped)>c->duty_limit?2U:0U)|
+        (fabsf(duty_clamped-physical_previous)>c->slew_per_s*dt?4U:0U)|
+        (fabsf(integral_unclipped)>c->integral_limit?8U:0U)|
+        ((unsaturated>high&&error>0)||(unsaturated<low&&error<0)?16U:0U)|
+        (c->polarity<0?32U:0U)|(reset?64U:0U));
     *duty=(int16_t)lroundf(pid->output);return true;
 }

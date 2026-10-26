@@ -11,6 +11,7 @@ static void seed_calibration(void){calibration_memory_reset();calibration_cache_
 #include "../../firmware/src/host_protocol.c"
 static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
 static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
+static unsigned detail_frames,stats_frames;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
 static motor_register_write_result_t pending_write;static bool write_ready;
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
@@ -23,6 +24,8 @@ BaseType_t xQueueReset(void *q){assert(q);return pdPASS;}
 bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROTOCOL_MAX_RAW],type=0;uint16_t seq=0;size_t length=0;
  assert(cobs_decode(data+1,n-2,raw,&length)&&validate_frame(raw,length,&type,&seq));
  ++tx_order;
+ if(type==MESSAGE_EVENT&&raw[7]==7){assert(raw[5]==64);++detail_frames;}
+ if(type==MESSAGE_EVENT&&raw[7]==8){assert(raw[5]==28);++stats_frames;}
  if(type==MESSAGE_EVENT&&raw[7]==YPWM_DIAG_EVENT){assert(raw[5]==64);diag_order=tx_order;memcpy(last_diag,raw+7,64);}
  if(type==REGISTER_WRITE_DIAGNOSTICS_TYPE){write_diag_order=tx_order;assert(raw[5]==64);}
  if(type==MESSAGE_ACK||type==MESSAGE_NACK){last_result=type;last_error=raw[10];result_order=tx_order;}return true;
@@ -179,5 +182,11 @@ int main(void){
  assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-800&&duty[1]==713);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
  assert(duty[0]!=-800); /* existing position->PID route resumes */
+ /* Host pressure delays diagnostics; never pop a partial set before ACKs. */
+ unsigned before_detail=detail_frames;c.result_count=1;service_pid_detail(&c);assert(detail_frames==before_detail);c.result_count=0;
+ c.host_connected=false;service_pid_detail(&c);assert(detail_frames==before_detail);c.host_connected=true;
+ for(unsigned pair=0;pair<6;++pair){service_pid_detail(&c);assert(detail_frames==before_detail+pair+1);}
+ /* Continuous diagnostics still emit 1Hz producer/loss counters. */
+ tick+=1000;service_pid_detail(&c);assert(stats_frames>0);
  puts("Host/task transaction, Flash isolation and direct PWM routing passed");return 0;
 }

@@ -302,8 +302,27 @@ static void calibrated_pid_tests(void){
  assert(pwm_control_submit_positions(&g)&&pwm_control_service());
  assert(phase()==YPWM_STOPPING&&reason()==YPWM_REASON_CALIBRATION&&write_count==writes);
 }
+static void pid_trace_tests(void){
+ uint8_t b[64],stats[28];reset();ready(YPWM_ALL_MASK);
+ assert(pwm_control_pid_detail(b));FILE *fixture=fopen("pid_detail_fixture.bin","wb");assert(fixture);assert(fwrite(b,1,64,fixture)==64);const uint32_t first=ypwm_u32(b+2);
+ assert(b[0]==7&&b[1]==1&&b[12]==1&&b[13]==2&&b[14]==20&&b[15]==0);
+ for(unsigned j=0;j<2;++j){float reference,error,term;memcpy(&reference,b+16+j*24,4);
+  memcpy(&error,b+20+j*24,4);memcpy(&term,b+24+j*24,4);
+  assert(reference>2048&&error>0&&term>0&&b[38+j*24]&1);
+  assert((int16_t)ypwm_u16(b+36+j*24)==sent[j]);}
+ pwm_control_pid_detail_result(true);
+ advance();assert(pwm_control_service());advance();assert(pwm_control_service()); /* pending replaced */
+ for(unsigned pair=1;pair<6;++pair){assert(pwm_control_pid_detail(b));assert(b[12]==pair*2+1&&ypwm_u32(b+2)==first);assert(fwrite(b,1,64,fixture)==64);pwm_control_pid_detail_result(true);}
+ assert(fclose(fixture)==0);
+ assert(pwm_control_pid_detail(b)&&ypwm_u32(b+2)==feedback.sequence);pwm_control_pid_detail_result(false);
+ assert(!pwm_control_pid_detail(b));tick+=1000;
+ assert(pwm_control_pid_stats(stats)&&ypwm_u32(stats+8)==3&&ypwm_u32(stats+12)==1&&ypwm_u32(stats+16)==1&&ypwm_u32(stats+20)==1);
+ reset();ready(1);assert(pwm_control_pid_detail(b));assert(b[38]&1);for(unsigned j=40;j<64;++j)assert(b[j]==0);
+ for(unsigned pair=0;pair<6;++pair){assert(pwm_control_pid_detail(b));pwm_control_pid_detail_result(true);}
+ advance();write_ok=false;assert(pwm_control_service());assert(!pwm_control_pid_detail(b)); /* no fake sent result */
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
- calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
+ pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);

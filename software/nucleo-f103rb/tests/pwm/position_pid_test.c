@@ -10,8 +10,9 @@ int main(void){
  assert(position_pid_step(&p,&c,2148,200,0,2048,.02f,&out));assert(out>0&&out<=40&&p.velocity==0&&p.reference<=2052.01f);
  const float previous=p.reference;assert(position_pid_step(&p,&c,1948,200,0,2048,.02f,&out));assert(p.reference<previous&&p.velocity==0);
  p=(position_pid_t){0};c.kp=100;c.ki=20;
+ assert(position_pid_step(&p,&c,2148,30000,0,2048,.02f,&out));assert((p.trace_flags&6)==6);
  for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,2148,30000,0,2048,.02f,&out));assert(out<=800&&out>=-800);}
- assert(out==800);
+ assert(out==800);assert((p.trace_flags&3)==3&&!(p.trace_flags&4)&&p.trace_p>800&&p.trace_d==0);
  assert(fabsf(p.integral)<.01f); /* saturating P must not accumulate I */
  for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,1948,30000,0,2048,.02f,&out));assert(out<=800&&out>=-800);}
  assert(out==-800&&fabsf(p.integral)<.01f);

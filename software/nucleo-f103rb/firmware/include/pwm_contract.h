@@ -14,6 +14,22 @@
 #define YPWM_IDLE_MONITOR_CAPABILITY 0x00000010UL
 #define YPWM_HOST_MODE_RETRY_CAPABILITY 0x00000040UL
 #define YPWM_LONG_PREPARATION_CAPABILITY 0x00000080UL
+/* EVENT telemetry v1: six 64-byte payloads, ID pairs 1/2..11/12.
+ * header: event7,version1,sensor_sequence u32,output_uptime_ms u32,
+ * target_sequence u16,first_id u8,count2 u8,PID_dt_ms u8,reserved0.
+ * Per motor24B: reference,error,P,I,D float32 LE; sentPWM i16 LE;
+ * flags u8,reserved0. Contributions precede polarity; bit5 marks negative.
+ * Flags: valid1, duty-clipped2, slew-clipped4, I-clamped8, antiwindup16,
+ * negative-polarity32, reset64. Invalid/unselected records are all zero.
+ * EVENT8/version1/length28: uptime,published,coalesced,completed,TXfailures,
+ * last_sensor_sequence (all u32 LE). Counters reset only on MCU boot/init.
+ * These are cached software commands, NOT measured torque/current/PWM. */
+#define YPWM_PID_DETAIL_EVENT 7U
+#define YPWM_PID_STATS_EVENT 8U
+#define YPWM_PID_DETAIL_SCHEMA 1U
+#define YPWM_PID_DETAIL_LENGTH 64U
+#define YPWM_PID_STATS_LENGTH 28U
+#define YPWM_PID_DETAIL_CAPABILITY 0x00000800UL
 #define YPWM_EVENT_CODE 4U
 #define YPWM_SCHEMA 3U
 #define YPWM_MODE_LENGTH 9U

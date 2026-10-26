@@ -29,6 +29,53 @@ static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write,rollback
 static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
 static uint32_t milliseconds(void){return (uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS);}
+/* Two bounded snapshots: actuator publishes latest, host drains a frozen set.
+ * No allocation, motor queries, queue wait or host UART from the actuator.
+ * Slow host consumes newest pending set; counted coalescing cannot stop PID. */
+typedef struct { uint8_t frame[6][YPWM_PID_DETAIL_LENGTH]; } pid_trace_set;
+static pid_trace_set trace_latest,trace_active;
+static bool trace_pending,trace_draining;
+static uint8_t trace_chunk;
+static uint32_t trace_published,trace_coalesced,trace_completed,trace_tx_failed,trace_stats_ms;
+static void trace_float(uint8_t *b,float value){uint32_t word;memcpy(&word,&value,4);ypwm_put32(b,word);}
+/* Called under the existing successful-output commit critical section. */
+static void publish_pid_trace(const control_context *s,const motor_feedback_set_t *f,uint32_t now,uint8_t dt){
+    if(trace_pending)++trace_coalesced;
+    for(unsigned pair=0;pair<6;++pair){uint8_t *b=trace_latest.frame[pair];memset(b,0,64);
+        b[0]=YPWM_PID_DETAIL_EVENT;b[1]=YPWM_PID_DETAIL_SCHEMA;ypwm_put32(b+2,f->sequence);
+        ypwm_put32(b+6,now);ypwm_put16(b+10,(uint16_t)s->goal.sequence);
+        b[12]=(uint8_t)(pair*2U+1U);b[13]=2;b[14]=dt;
+        for(unsigned j=0;j<2;++j){const unsigned i=pair*2U+j;if(!(s->mask&(1U<<i)))continue;
+            uint8_t *r=b+16+j*24;const position_pid_t *a=&axes[i];
+            trace_float(r,a->reference);trace_float(r+4,a->trace_error);trace_float(r+8,a->trace_p);
+            trace_float(r+12,a->integral);trace_float(r+16,a->trace_d);
+            ypwm_put16(r+20,(uint16_t)p.sent[i]);r[22]=a->trace_flags;
+        }
+    }
+    ++trace_published;trace_pending=true;
+}
+bool pwm_control_pid_detail(uint8_t b[YPWM_PID_DETAIL_LENGTH]){
+    taskENTER_CRITICAL();
+    if(!trace_draining&&trace_pending){trace_active=trace_latest;trace_pending=false;trace_draining=true;trace_chunk=0;}
+    const bool available=trace_draining;
+    if(available)memcpy(b,trace_active.frame[trace_chunk],64);
+    taskEXIT_CRITICAL();return available;
+}
+void pwm_control_pid_detail_result(bool sent){
+    taskENTER_CRITICAL();if(trace_draining){
+        if(!sent){++trace_tx_failed;trace_draining=false;} /* discard incomplete set, never retry stale logs */
+        else if(++trace_chunk==6){++trace_completed;trace_draining=false;}
+    }taskEXIT_CRITICAL();
+}
+bool pwm_control_pid_stats(uint8_t b[YPWM_PID_STATS_LENGTH]){
+    const uint32_t now=milliseconds();taskENTER_CRITICAL();
+    if(!trace_published||now-trace_stats_ms<1000U){taskEXIT_CRITICAL();return false;}
+    trace_stats_ms=now;b[0]=YPWM_PID_STATS_EVENT;b[1]=YPWM_PID_DETAIL_SCHEMA;b[2]=b[3]=0;
+    ypwm_put32(b+4,now);ypwm_put32(b+8,trace_published);ypwm_put32(b+12,trace_coalesced);
+    ypwm_put32(b+16,trace_completed);ypwm_put32(b+20,trace_tx_failed);ypwm_put32(b+24,last_sample);
+    taskEXIT_CRITICAL();return true;
+}
+
 static control_context snapshot(void){control_context s;taskENTER_CRITICAL();s=p;taskEXIT_CRITICAL();return s;}
 /* Output guards must not copy the goal/PWM arrays onto nested task stacks. */
 static bool pid_current(uint8_t phase){
@@ -43,6 +90,8 @@ static bool phase_current(uint8_t phase){
 void pwm_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
+    trace_pending=trace_draining=false;trace_chunk=0;
+    trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
     p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?YPWM_FAILED:YPWM_UNVERIFIED;
     p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
@@ -439,7 +488,8 @@ static void service_pid(const control_context *s,uint32_t now){
     }
     last_sample=f.sequence;last_feedback_ms=f.uptime_ms;
     taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=YPWM_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
-        p.feedback_age=(uint16_t)(now-f.uptime_ms);memcpy(p.sent,out,sizeof out);p.dirty=true;}taskEXIT_CRITICAL();
+        p.feedback_age=(uint16_t)(now-f.uptime_ms);memcpy(p.sent,out,sizeof out);p.dirty=true;
+        publish_pid_trace(s,&f,milliseconds(),(uint8_t)dt_ms);}taskEXIT_CRITICAL();
 }
 static void service_raw(const control_context *s,uint32_t now){
     if(!s->raw_preview){
