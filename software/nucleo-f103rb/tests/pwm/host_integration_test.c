@@ -119,7 +119,7 @@ int main(void){
  uint8_t targets[60]={0};for(unsigned i=0;i<12;++i){ypwm_put16(targets+5*i,2200);ypwm_put16(targets+5*i+2,200);}
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==0);
  assert(pwm_control_service());assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);
- for(unsigned i=0;i<12;++i){const int8_t expected[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+ for(unsigned i=0;i<12;++i){const int8_t expected[12]={-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,-1};
   assert(duty[i]*expected[i]>0&&duty[i]>=-YPWM_DUTY_LIMIT&&duty[i]<=YPWM_DUTY_LIMIT);}
  /* Removed 0x0F must be rejected; ordinary target/heartbeat watchdog stops PID. */
  receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);

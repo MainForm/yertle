@@ -8,10 +8,11 @@ position_pid_config_t position_pid_default_config(void){
     return config;
 }
 int8_t position_pid_motor_polarity(uint8_t motor_id){
-    /* Bench log robot_20261026_192238_20012: sustained opposite raw motion.
-     * Other IDs retain +1 pending a separate physical direction check.
+    /* Bench logs robot_20261026_192238_20012 (H) and
+     * robot_20261026_203423_16352 (U): sustained opposite raw motion.
+     * Only IDs3/9 retain +1 pending a physical direction check.
      * This is NOT the joint-angle-to-raw direction_sign calibration. */
-    static const int8_t polarity[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+    static const int8_t polarity[12]={-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,-1};
     return motor_id>=1U&&motor_id<=12U?polarity[motor_id-1U]:0;
 }
 void position_pid_reset(position_pid_t *pid,float measured){

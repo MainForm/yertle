@@ -304,7 +304,7 @@ static void calibrated_pid_tests(void){
  assert(phase()==YPWM_STOPPING&&reason()==YPWM_REASON_CALIBRATION&&write_count==writes);
 }
 static void motor_polarity_service_tests(void){
- const int8_t expected[12]={-1,-1,1,1,1,-1,1,1,1,-1,-1,-1};
+ const int8_t expected[12]={-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,-1};
  for(int direction=-1;direction<=1;direction+=2){
   reset();ready(YPWM_ALL_MASK);
   motor_target_set_t target=goals(YPWM_ALL_MASK);
@@ -336,8 +336,8 @@ static void pid_trace_tests(void){
 }
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  motor_polarity_service_tests();pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
- reset();ready(8);assert(sent[3]>0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
- advance();assert(pwm_control_service());assert(sent[3]>0); /* updated sample */
+ reset();ready(8);assert(sent[3]<0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
+ advance();assert(pwm_control_service());assert(sent[3]<0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);
  reset();ready(8);feedback.motor[3].position=1000;advance();assert(pwm_control_service());stopped(YPWM_REASON_TRAVEL);
  current_is_host_owned(307,false);current_is_host_owned(308,false);current_is_host_owned(309,false);

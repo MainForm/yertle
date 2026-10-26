@@ -7,11 +7,18 @@ linkage. Do not multiply the API direction_sign into the raw PID error.
 
 | Motor IDs | PID output polarity |
 |---|---:|
-| 1, 2, 6, 10, 11, 12 | -1 |
-| 3, 4, 5, 7, 8, 9 | +1 (retained; physical direction not established) |
+| 1, 2, 4, 5, 6, 7, 8, 10, 11, 12 | -1 |
+| 3, 9 | +1 (retained; physical direction not established) |
 
-Source: robot_20261026_192238_20012.jsonl. The selected six motors showed
-sustained movement opposite to the raw PID output assumption during H/seated.
+Evidence:
+- robot_20261026_192238_20012.jsonl: IDs1,2,6,10,11,12 showed
+  sustained opposite raw motion during H/seated.
+- robot_20261026_203423_16352.jsonl: after the first correction, IDs4,5,7,8
+  showed sustained opposite motion during U/standing; corrected IDs1,2,10,11
+  moved toward their requested raw direction. Extend reversal to these four.
+  The run stopped with F103 thermal/voltage protection and a PC >6A aggregate
+  absolute-feedback-current trip. Retain both protections without changes.
+
 This is a provisional bench correction; it is not a completed 12-axis unloaded
 direction calibration or a validated walking gain selection.
 
