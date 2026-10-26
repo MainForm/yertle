@@ -304,7 +304,7 @@ static void calibrated_pid_tests(void){
  assert(phase()==YPWM_STOPPING&&reason()==YPWM_REASON_CALIBRATION&&write_count==writes);
 }
 static void motor_polarity_service_tests(void){
- const int8_t expected[12]={-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,-1};
+ const int8_t expected[12]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
  for(int direction=-1;direction<=1;direction+=2){
   reset();ready(YPWM_ALL_MASK);
   motor_target_set_t target=goals(YPWM_ALL_MASK);

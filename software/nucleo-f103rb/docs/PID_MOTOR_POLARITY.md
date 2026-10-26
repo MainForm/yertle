@@ -7,8 +7,7 @@ linkage. Do not multiply the API direction_sign into the raw PID error.
 
 | Motor IDs | PID output polarity |
 |---|---:|
-| 1, 2, 4, 5, 6, 7, 8, 10, 11, 12 | -1 |
-| 3, 9 | +1 (retained; physical direction not established) |
+| 1 through 12 | -1 |
 
 Evidence:
 - robot_20261026_192238_20012.jsonl: IDs1,2,6,10,11,12 showed
@@ -18,6 +17,13 @@ Evidence:
   moved toward their requested raw direction. Extend reversal to these four.
   The run stopped with F103 thermal/voltage protection and a PC >6A aggregate
   absolute-feedback-current trip. Retain both protections without changes.
+
+- robot_20261026_213947_37532.jsonl: during H/seated, ID3 target decreased
+  from2112 toward2048 while measured raw increased to2533 and PWM saturated
+  at-800. F103 reported following protection (reason5), then the PC received
+  invalid_state NACK. Reverse ID3 from+1 to-1. The user explicitly requested
+  ID9 reversal as well; its observed movement was too small to establish its
+  physical direction. Both are now-1; ID9 still needs physical validation.
 
 This is a provisional bench correction; it is not a completed 12-axis unloaded
 direction calibration or a validated walking gain selection.

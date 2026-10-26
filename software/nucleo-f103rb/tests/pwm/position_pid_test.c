@@ -5,7 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 static void motor_polarity_tests(void){
- const int8_t expected[12]={-1,-1,1,-1,-1,-1,-1,-1,1,-1,-1,-1};
+ const int8_t expected[12]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
  assert(position_pid_motor_polarity(0)==0&&position_pid_motor_polarity(13)==0&&position_pid_motor_polarity(255)==0);
  for(uint8_t id=1;id<=12;++id)for(int sign=-1;sign<=1;sign+=2){
   position_pid_config_t config=position_pid_default_config();position_pid_t pid={0};int16_t out=0;
