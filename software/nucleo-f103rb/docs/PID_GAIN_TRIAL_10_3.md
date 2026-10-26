@@ -1,5 +1,8 @@
 # F103 position PID gain trial: P10 / I3 / D0.10
 
+Historical trial. Superseded by [P5 / I3 / D0.10](PID_GAIN_TRIAL_5_3.md).
+The polarity notes below describe the earlier trial, not the current table.
+
 User-requested settings: P10, I3, integral output limited to +/-100 PWM raw.
 Select D0.10 as an initial measured-position damping trial, with no D filter or
 PWM slew limit. PWM remains capped at +/-800. Per-motor polarity is unchanged:

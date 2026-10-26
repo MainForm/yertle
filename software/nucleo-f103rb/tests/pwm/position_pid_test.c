@@ -11,7 +11,7 @@ static void motor_polarity_tests(void){
   position_pid_config_t config=position_pid_default_config();position_pid_t pid={0};int16_t out=0;
   config.polarity=position_pid_motor_polarity(id);assert(config.polarity==expected[id-1]);
   assert(position_pid_step(&pid,&config,(uint16_t)(2048+sign*100),30000,0,2048,.02f,&out));
-  assert(pid.trace_error==sign*100&&pid.trace_p==sign*1000&&pid.trace_d==0);
+  assert(pid.trace_error==sign*100&&pid.trace_p==sign*500&&pid.trace_d==0);
   assert(out*sign*expected[id-1]>0); /* signed error retained, only final output reverses */
   assert(((pid.trace_flags&32)!=0)==(expected[id-1]<0));
   position_pid_reset(&pid,2048);
@@ -22,8 +22,8 @@ int main(void){
  motor_polarity_tests();
  position_pid_config_t c=position_pid_default_config();position_pid_t p={0};int16_t out;
  assert(YPWM_DUTY_LIMIT==800&&c.duty_limit==800);
- assert(c.kp==10.0f&&c.ki==3.0f&&fabsf(c.kd-.10f)<1e-7f&&c.integral_limit==100.0f);
- assert(position_pid_step(&p,&c,2148,200,0,2048,.02f,&out));assert(out==40&&p.velocity==0&&p.reference<=2052.01f);
+ assert(c.kp==5.0f&&c.ki==3.0f&&fabsf(c.kd-.10f)<1e-7f&&c.integral_limit==100.0f);
+ assert(position_pid_step(&p,&c,2148,200,0,2048,.02f,&out));assert(out==20&&p.velocity==0&&p.reference<=2052.01f);
  const float previous=p.reference;assert(position_pid_step(&p,&c,1948,200,0,2048,.02f,&out));assert(p.reference<previous&&p.velocity==0);
  p=(position_pid_t){0};c.kp=100;c.ki=20;
  assert(position_pid_step(&p,&c,2148,30000,0,2048,.02f,&out));assert(out==800&&(p.trace_flags&2)&&!(p.trace_flags&4)); /* no ramp from zero */

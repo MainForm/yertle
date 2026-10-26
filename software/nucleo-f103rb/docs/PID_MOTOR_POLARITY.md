@@ -38,8 +38,8 @@ Generic default config remains +1; invalid IDs return 0 and fail PID validation.
 Native motor position mode and explicit SET_MOTOR_PWM retain their existing
 semantics. Only the F103 position-to-PWM PID route uses this table. Neither
 EEPROM phase registers nor raw calibration nor PC/API/model files are changed.
-Current F103 defaults: P=10, I=3, D=0.10, integral-output clamp +/-100,
-PWM ceiling +/-800. This gain trial follows the completed polarity corrections;
+Current F103 defaults: P=5, I=3, D=0.10, integral-output clamp +/-100,
+PWM ceiling +/-800. See PID_GAIN_TRIAL_5_3.md for the P-only reduction trial. It follows the polarity corrections;
 it does not change any direction or calibration. Firmware guards and PC current
 limits remain in place. No new message type is added.
 
