@@ -106,6 +106,9 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.wrong_side_foot_placement = RewTerm(func=wrong_side_foot_placement, weight=-0.25, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES), "lower": -0.17453292519943295, "upper": 0.17453292519943295})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
+    rewards.body_height_barrier = RewTerm(
+        func=body_height_barrier, weight=-0.08,
+        params={"asset_cfg": SceneEntityCfg("robot"), "lower_m": 0.10, "upper_m": 0.15, "transition_m": 0.02})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
     rewards.energy = RewTerm(func=joint_energy_l1, weight=-2.0e-5, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
@@ -379,6 +382,15 @@ def stance_width_barrier(env, sensor_cfg: SceneEntityCfg, lower_m: float = 0.12,
     left_y = (feet[:, LEFT_FEET, 1] * left).sum(dim=1) / left.sum(dim=1).clamp_min(1)
     right_y = (feet[:, RIGHT_FEET, 1] * right).sum(dim=1) / right.sum(dim=1).clamp_min(1)
     return _interval_barrier(torch.abs(left_y - right_y), lower_m, upper_m, transition_m) * valid
+
+
+def body_height_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower_m: float = 0.10, upper_m: float = 0.15, transition_m: float = 0.02):
+    """Low-body height interval cost, measured at the base origin above z=0.
+
+    Flat-ground task only: this is not ground-relative height on rough terrain.
+    A negative weight penalizes either side of the interval, with no command gate.
+    """
+    return _interval_barrier(env.scene[asset_cfg.name].data.root_pos_w[:, 2], lower_m, upper_m, transition_m)
 
 
 def foot_workspace_barrier(env, lower_x_m: float = -0.20, upper_x_m: float = 0.20, lower_abs_y_m: float = 0.03, upper_abs_y_m: float = 0.20, transition_m: float = 0.03):

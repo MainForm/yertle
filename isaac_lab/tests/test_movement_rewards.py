@@ -47,10 +47,10 @@ class MovementRewardTests(unittest.TestCase):
         configure=next(n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name=='configure_rewards')
         self.assertFalse(any(isinstance(n,ast.Attribute) and n.attr=='swing_foot_clearance_barrier' for n in ast.walk(configure)))
 
-    def test_body_height_barrier_is_removed_from_registration_and_implementation(self):
-        self.assertFalse(any(isinstance(n,ast.FunctionDef) and n.name=='body_height_barrier' for n in TREE.body))
+    def test_body_height_barrier_is_restored(self):
+        self.assertTrue(any(isinstance(n,ast.FunctionDef) and n.name=='body_height_barrier' for n in TREE.body))
         configure=next(n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name=='configure_rewards')
-        self.assertNotIn('body_height_barrier',ast.unparse(configure))
+        self.assertIn('body_height_barrier',ast.unparse(configure))
 
     def test_vx_only_standing_does_not_get_free_vy_score(self):
         env = env_for([[.1, 0, 0]])
