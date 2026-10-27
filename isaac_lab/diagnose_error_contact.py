@@ -7,6 +7,7 @@ plant is identified physical hardware. No hardware or training writes.
 """
 import argparse,ctypes as ct,hashlib,json,sys,traceback
 from pathlib import Path
+from pid_unit_conversion import MOTOR_RESPONSE_GAIN, MODEL_STALL_TORQUE_NM, MODEL_FREE_SPEED_RAD_S
 import numpy as np
 import torch
 from rsl_rl.runners import OnPolicyRunner
@@ -19,7 +20,8 @@ p.add_argument('--backend',choices=['implicit-pd','full-pid'],default='full-pid'
 p.add_argument('--kp',type=float,nargs='+')
 p.add_argument('--ki',type=float,nargs='+',default=[3.])
 p.add_argument('--kd',type=float,nargs='+')
-p.add_argument('--motor-gain',type=float,nargs='+',default=[.5,.75,1.,1.5,2.,3.,4.,6.])
+p.add_argument('--motor-gain',type=float,nargs='+',choices=[MOTOR_RESPONSE_GAIN],default=[MOTOR_RESPONSE_GAIN],
+               help='Fixed at1.0; response scaling is not a PID tuning variable.')
 p.add_argument('--plant',choices=['ideal','dc','both'],default='both')
 p.add_argument('--initial-integral',choices=['zero','log'],default='zero')
 p.add_argument('--sync-start',action='store_true',help='Copy env0 standing state after warmup, adjusted for environment origins.')
@@ -62,6 +64,7 @@ else:
  cases=[dict(kp=kp,ki=0.,kd=kd,profile=profile,repeat=r) for kp in args.kp for kd in args.kd for profile in profiles for r in range(args.repeats)]
 (out/f'{args.label}_config.json').write_text(json.dumps(dict(arguments=vars(args)|{'data_dir':str(args.data_dir),'out_dir':str(args.out_dir)},cases=cases),indent=2))
 (out/f'{args.label}_script.py').write_bytes(source_bytes)
+(out/'pid_unit_conversion.py').write_bytes(Path(__file__).with_name('pid_unit_conversion.py').read_bytes())
 n=len(cases);steps=round(args.seconds/.02)
 c=YertleFlatEnvCfg_PLAY();c.scene.num_envs=n;c.scene.env_spacing=3.;c.seed=0;c.sim.device=args.device
 c.sim.dt=args.physics_dt;c.decimation=round(.02/args.physics_dt)
@@ -192,7 +195,6 @@ try:
    else:
     env.action_manager.process_action(actions)
     matrix=torch.tensor(direct,dtype=torch.float32,device=env.device)
-    motor_gain=torch.tensor([k['motor_gain'] for k in cases],device=env.device)[:,None]
     dc=torch.tensor([k['plant']=='dc' for k in cases],device=env.device)[:,None]
     # Firmware polarity -1 is inverted by the motor's measured physical PWM
     # direction, before the unchanged signed individual-joint torque mapping.
@@ -201,7 +203,7 @@ try:
     for _ in range(c.decimation):
      env.action_manager.apply_action()
      motor_velocity=robot.data.joint_vel[:,order]@matrix.T
-     torque=torch.clamp(1.28*motor_gain*(drive-torch.where(dc,motor_velocity/2.3,0.)),-1.024,1.024)
+     torque=torch.clamp(MODEL_STALL_TORQUE_NM*MOTOR_RESPONSE_GAIN*(drive-torch.where(dc,motor_velocity/MODEL_FREE_SPEED_RAD_S,0.)),-1.024,1.024)
      torque[dead]=0.
      joint_torque=torque@matrix
      robot.set_joint_effort_target(joint_torque[:,np.argsort(order)])
@@ -222,10 +224,10 @@ try:
     print('ALL_CASES_TERMINAL',step+1,flush=True);break
  steps=len(trace['raw_before'])
  x={k:np.asarray(v) for k,v in trace.items()};np.savez_compressed(out/f'{args.label}_trace.npz',initial_observation=initial_observation,**x)
- result=dict(physics_dt=args.physics_dt,control_dt=.02,seconds=steps*.02,max_seconds=args.seconds,steps=steps,linear_velocity_input='forced_xyz_zero',sync_start=args.sync_start,
+ result=dict(physics_dt=args.physics_dt,control_dt=.02,seconds=steps*.02,max_seconds=args.seconds,steps=steps,linear_velocity_input='forced_xyz_zero',sync_start=args.sync_start,motor_response_gain=MOTOR_RESPONSE_GAIN,
   contact_sensor_update_period_s=c.scene.contact_forces.update_period,contact_history_length=c.scene.contact_forces.history_length,
   limits=dict(integral_output_raw=100,pwm_raw=800,following_error_raw=512,speed_min_raw_s=200,speed_max_raw_s=3000,acc_raw=100,
-              physics_effort_Nm=1.024,physics_velocity_rad_s=2.3,plant_nominal_torque_Nm=1.28,plant_free_velocity_rad_s=2.3),
+              physics_effort_Nm=1.024,physics_velocity_rad_s=2.3,plant_nominal_torque_Nm=MODEL_STALL_TORQUE_NM,plant_free_velocity_rad_s=MODEL_FREE_SPEED_RAD_S),
   motor_polarity=polarity.tolist(),individual_torque_matrix=direct.tolist(),
   target_error_raw=132.8900293240416,error_tolerance_fraction=.1,mapping_checks=mapping_checks,initial_observation_max_spread=initial_spread,
   checkpoint_sha256=hashlib.sha256((args.data_dir/'model_6999.pt').read_bytes()).hexdigest(),

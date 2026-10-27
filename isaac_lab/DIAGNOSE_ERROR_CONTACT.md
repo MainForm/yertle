@@ -7,6 +7,12 @@ bridge, including the real P5/I3/D0.10, I-output limit100, PWM limit800,
 PWM slew limiter. The twelve physical PWM polarities are read from that C
 controller; angle/raw calibration and motor IDs are preserved.
 
+Response scaling is now FIXED at1.0 in `pid_unit_conversion.py`. The actual
+torque formula uses this constant; `--motor-gain` rejects every other value.
+The old0.320/0.318 response experiments are historical motor-model variants,
+not valid evidence from a PID-only tuning experiment. They are preserved in
+the artifact directory and old source snapshots, not silently relabeled.
+
 ## Reproduce
 
 The prepared data/model/API/C bridge live in
@@ -15,7 +21,7 @@ Results for this experiment are under
 `/workspace/yertle-artifacts/error_contact_sweep_20261027`.
 
 ```powershell
-docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/real_sim_tracking_20261027 --out-dir /workspace/yertle-artifacts/error_contact_sweep_20261027 --backend full-pid --kp 5 --ki 3 --kd .1 --plant dc --motor-gain .32 --physics-dt .0005 --seconds 3 --initial-integral log --sync-start --repeats 3 --label repeat_match --headless --device cuda:0
+docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/real_sim_tracking_20261027 --out-dir /workspace/yertle-artifacts/error_contact_sweep_20261027 --backend full-pid --kp 5 --ki 3 --kd .1 --plant dc --motor-gain 1.0 --physics-dt .0005 --seconds 3 --initial-integral log --sync-start --repeats 3 --label fixed_motor_baseline --headless --device cuda:0
 ```
 
 Use a new label to preserve the original traces. New runs write `_SUCCESS`
@@ -62,8 +68,7 @@ dc:    tau_motor = clamp(1.28 * motor_gain * (drive - motor_velocity/2.3), +/-1.
 ```
 
 The motor velocity and torque are mapped with the existing signed individual
-joint permutation. `motor_gain` changes the simulated motor response, not the
-P/I/D coefficients. The plant has not been identified from real PWM/current/
+joint permutation. `motor_gain` is fixed at1.0. The plant has not been identified from real PWM/current/
 torque measurements and is not an exact electrical or linkage model.
 The optional `implicit-pd` backend has I=0 and joint-unit P/D, so it is only
 a separate reference and must not be described as the real raw/PWM PID.
@@ -103,3 +108,24 @@ experiments, not predictions of firmware current/temperature/UART shutdowns.
 No firmware, physical motor registers, deployment mapping or training defaults
 are modified. Headless computation is tested; container Vulkan GUI/probe errors
 remain outside this experiment's validation scope.
+
+## Original joint-PD gain conversion (fixed response1.0)
+
+For4096steps/revolution,1step=2*pi/4096rad. Model torque conversion is
+1.28Nm/1000PWMraw=0.00128Nm/PWMraw. Original joint-PD P25,D0.5 therefore
+converts to P0.03834952Nm/position_raw, D0.0007669904Nm/(velocity_raw/s),
+or P29.9605623,I0,D0.59921125 in PWMraw output units on a1:1 axis.
+
+This is a controller-block unit conversion, not a verified full-model gain
+replacement: the current DC model adds damping1.28/2.3=0.55652174Nm*s/rad.
+Keeping D0.59921125 adds another0.5, giving total1.05652174. Matching total
+0.5 would require controller D_raw=-0.06773692, rejected by production C.
+Also, the calibrated shin raw contains thigh motion. Under the current
+individual-joint torque ablation, a scalar triplet leaves shin/thigh cross
+terms. A full coordinate transformation is a matrix, not one gain per axis.
+The Speed/ACC intermediate reference and20ms sampling remain separate from
+this algebra. No mapping, action reference or firmware gains were changed.
+
+`pid_unit_conversion.py` computes the scalar values without Isaac. Numerical
+proof and the current-model matrices are saved under
+`/workspace/yertle-artifacts/pid_gain_conversion_20261027/conversion_verified.json`.
