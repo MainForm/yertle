@@ -945,6 +945,7 @@ static void service_pwm(protocol_context_t *context)
 static void service_pid_detail(protocol_context_t *context){
     if(!context->host_connected||context->result_count||context->register_job_active||context->pwm_mode_pending)return;
     uint8_t bytes[YPWM_PID_DETAIL_LENGTH];
+    if(pwm_control_stop_detail(bytes)){send_frame(context,MESSAGE_EVENT,bytes,20);return;}
     if(pwm_control_pid_detail(bytes))
         pwm_control_pid_detail_result(send_frame(context,MESSAGE_EVENT,bytes,sizeof bytes));
     if(pwm_control_pid_stats(bytes))send_frame(context,MESSAGE_EVENT,bytes,YPWM_PID_STATS_LENGTH);

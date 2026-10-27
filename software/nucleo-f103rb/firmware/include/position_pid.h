@@ -17,7 +17,7 @@ typedef struct {
 } position_pid_t;
 position_pid_config_t position_pid_default_config(void);
 /* Encoder-raw increase versus signed PWM, separate from simulation angle/raw
- * mapping. All IDs except 3/9 are reversed for the supported bench robot.
+ * mapping. All twelve IDs are reversed for the supported bench robot.
  * Invalid motor IDs return 0, rejected by position_pid_step (never guessed). */
 int8_t position_pid_motor_polarity(uint8_t motor_id);
 void position_pid_reset(position_pid_t *pid,float measured);

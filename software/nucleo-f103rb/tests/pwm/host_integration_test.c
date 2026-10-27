@@ -124,7 +124,8 @@ int main(void){
  /* Removed 0x0F must be rejected; ordinary target/heartbeat watchdog stops PID. */
  receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);
  tick+=501;assert(pwm_control_service());service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
- assert(pwm_control_service());service_safety_state(&c);assert(!host_protocol_is_stop_requested());
+ for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
+ assert(!host_protocol_is_stop_requested());
  for(unsigned i=0;i<12;++i)assert(duty[i]==0);
  transition(&c,YPWM_POSITION,124);assert(pwm_control_native_ready());
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==1);

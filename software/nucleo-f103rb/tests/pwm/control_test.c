@@ -83,7 +83,9 @@ static void ready(uint16_t mask){assert(prepare(123,mask)==0);assert(pwm_control
  motor_target_set_t g=goals(mask);assert(pwm_control_submit_positions(&g));assert(pwm_control_service());assert(phase()==YPWM_ACTIVE&&on_count==1&&on_mask==mask);
 }
 static void advance(void){tick+=20;feedback.uptime_ms=tick;++feedback.sequence;}
-static void stopped(uint8_t why){assert(phase()==YPWM_STOPPING&&reason()==why);assert(pwm_control_service());assert(phase()==YPWM_FAILED&&completed==1&&!pwm_control_can_arm());}
+static void stopped(uint8_t why){assert(phase()==YPWM_STOPPING&&reason()==why);
+ for(unsigned attempt=0;attempt<30&&phase()==YPWM_STOPPING;++attempt){assert(pwm_control_service());advance();}
+ assert(phase()==YPWM_FAILED&&completed==1&&!pwm_control_can_arm());}
 static void current_is_host_owned(int16_t raw,bool all){
  reset();ready(8);
  if(all){for(unsigned i=0;i<12;++i)feedback.motor[i].current=raw;}
@@ -270,7 +272,7 @@ static void direct_pwm_tests(void){
  /* Raw output has the same target TTL and stop path. */
  advance();assert(pwm_control_submit_raw(raw,55)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==0);tick+=YPWM_TARGET_TIMEOUT_MS;
- assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_service()&&phase()==YPWM_FAILED);
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING);stopped(YPWM_REASON_TTL);
  reset();ready(YPWM_ALL_MASK);assert(pwm_control_submit_raw(raw,56)==0);
  pwm_control_stop(YPWM_REASON_RELEASE);
  assert(pwm_control_take_raw_result(&seq,&result)&&seq==56&&result==YPWM_INVALID_STATE);
@@ -278,7 +280,7 @@ static void direct_pwm_tests(void){
  assert(pwm_control_take_mode_result(&seq,&result));armed=true;cancel_on=true;
  assert(pwm_control_submit_raw(raw,58)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_INVALID_STATE&&phase()==YPWM_STOPPING);
- assert(off_count>0);assert(pwm_control_service()&&phase()==YPWM_FAILED);
+ assert(off_count>0);stopped(YPWM_REASON_RELEASE);
  reset();ready(YPWM_ALL_MASK);advance();write_ok=false;
  assert(pwm_control_submit_raw(raw,59)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&result==YPWM_MODE_FAILED&&reason()==YPWM_REASON_DRIVER);
@@ -334,8 +336,41 @@ static void pid_trace_tests(void){
  for(unsigned pair=0;pair<6;++pair){assert(pwm_control_pid_detail(b));pwm_control_pid_detail_result(true);}
  advance();write_ok=false;assert(pwm_control_service());assert(!pwm_control_pid_detail(b)); /* no fake sent result */
 }
+static void return_first_tests(void){
+ /* Simulate physical encoder progress, not only a goal/reference update. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;advance();assert(pwm_control_service());
+ pwm_control_stop(YPWM_REASON_LINK);const unsigned before_off=off_count;
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING&&off_count==before_off);
+ const unsigned before_write=write_count;assert(pwm_control_service()&&write_count==before_write);
+ assert(sent[0]>0); /* all-negative physical PWM polarity: move raw downward */
+ for(unsigned a=0;a<8;++a){advance();feedback.motor[0].position-=4;assert(pwm_control_service());}
+ feedback.motor[0].position=2048;
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_FAILED&&completed==1);
+ assert(off_count>before_off&&servo_torque_on==0);
+ uint8_t detail[20];assert(pwm_control_stop_detail(detail)&&detail[2]==2&&ypwm_u16(detail+16)==0&&ypwm_u16(detail+18)==0);
+ /* New session must reset numerical history after the return has finished. */
+ assert(prepare(124,YPWM_ALL_MASK)==0&&pwm_control_service());
+ uint16_t seq;uint8_t result;assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
+ armed=true;motor_target_set_t g=goals(YPWM_ALL_MASK);advance();
+ assert(pwm_control_submit_positions(&g)&&pwm_control_service());
+ uint8_t trace[64];assert(pwm_control_pid_detail(trace));assert(trace[38]&64U);
+
+ /* A mechanically stalled motor and stale sensor both fall back to OFF. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;pwm_control_stop(YPWM_REASON_RELEASE);
+ for(unsigned a=0;a<30&&phase()==YPWM_STOPPING;++a){advance();assert(pwm_control_service());}
+ assert(phase()==YPWM_FAILED&&completed==1);
+ assert(pwm_control_stop_detail(detail)&&detail[2]==7);
+ reset();ready(YPWM_ALL_MASK);feedback_ok=false;pwm_control_stop(YPWM_REASON_SENSOR);
+ assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
+ /* Nonzero calibration must be removed before checking the raw2048 center. */
+ reset();ready(YPWM_ALL_MASK);const uint8_t offset[2]={100,0};
+ assert(calibration_cache_observe(1,31,offset,2));feedback.motor[0].position=2148;
+ pwm_control_stop(YPWM_REASON_RELEASE);stopped(YPWM_REASON_RELEASE);
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
- motor_polarity_service_tests();pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
+ return_first_tests();motor_polarity_service_tests();pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]<0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]<0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);
@@ -366,9 +401,9 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  reset();ready(8);tick+=31;assert(pwm_control_service());stopped(YPWM_REASON_DEADLINE);
  reset();ready(8);advance();write_ok=false;assert(pwm_control_service());write_ok=true;stopped(YPWM_REASON_DRIVER);
  reset();ready(8);pwm_control_stop(YPWM_REASON_RELEASE);off_ok=false;
- assert(pwm_control_service()&&phase()==YPWM_STOPPING);assert(pwm_control_status(b,true)&&ypwm_u16(b+18)==YPWM_ALL_MASK);off_ok=true;stopped(YPWM_REASON_RELEASE);
+ for(unsigned a=0;a<4;++a){advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);}assert(pwm_control_status(b,true)&&ypwm_u16(b+18)==YPWM_ALL_MASK);off_ok=true;stopped(YPWM_REASON_RELEASE);
  reset();assert(prepare(123,8)==0);assert(pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));armed=true;
- motor_target_set_t g=goals(8);assert(pwm_control_submit_positions(&g));cancel_on=true;assert(pwm_control_service());assert(sent[3]==0);stopped(YPWM_REASON_RELEASE);
+ motor_target_set_t g=goals(8);assert(pwm_control_submit_positions(&g));cancel_on=true;assert(pwm_control_service());stopped(YPWM_REASON_RELEASE);
  reset();ready(YPWM_ALL_MASK);for(unsigned i=0;i<12;++i)
   assert(sent[i]*position_pid_motor_polarity((uint8_t)(i+1U))>0);
  for(unsigned i=0;i<80;++i){advance();g=goals(YPWM_ALL_MASK);for(unsigned j=0;j<12;++j)g.motor[j].position=2048;

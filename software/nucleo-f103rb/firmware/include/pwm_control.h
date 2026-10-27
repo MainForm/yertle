@@ -31,5 +31,6 @@ bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write
 /* Host-owned consumer, one low-priority frame per host pass. No bus reads. */
 bool pwm_control_pid_detail(uint8_t bytes[YPWM_PID_DETAIL_LENGTH]);
 void pwm_control_pid_detail_result(bool sent);
+bool pwm_control_stop_detail(uint8_t bytes[20]);
 bool pwm_control_pid_stats(uint8_t bytes[YPWM_PID_STATS_LENGTH]);
 #endif

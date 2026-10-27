@@ -28,3 +28,5 @@ bool pwm_control_mode_diagnostics(uint8_t d[YPWM_DIAG_LENGTH],uint8_t w[64],bool
 bool pwm_control_pid_detail(uint8_t b[YPWM_PID_DETAIL_LENGTH]){(void)b;return false;}
 void pwm_control_pid_detail_result(bool sent){(void)sent;}
 bool pwm_control_pid_stats(uint8_t b[YPWM_PID_STATS_LENGTH]){(void)b;return false;}
+
+bool pwm_control_stop_detail(uint8_t b[20]){(void)b;return false;}
