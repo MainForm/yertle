@@ -369,7 +369,18 @@ static void return_first_tests(void){
  assert(calibration_cache_observe(1,31,offset,2));feedback.motor[0].position=2148;
  pwm_control_stop(YPWM_REASON_RELEASE);stopped(YPWM_REASON_RELEASE);
 }
+static void speed_acc_do_not_shape_pwm(void){
+ const uint16_t speeds[]={0,1,200,3000,32767};
+ const uint8_t accs[]={0,10,100,255};int16_t expected[12]={0};
+ for(unsigned v=0;v<sizeof speeds/sizeof speeds[0];++v)for(unsigned a=0;a<sizeof accs/sizeof accs[0];++a){
+  reset();ready(YPWM_ALL_MASK);advance();motor_target_set_t g=goals(YPWM_ALL_MASK);
+  for(unsigned i=0;i<12;++i){g.motor[i].position=2148;g.motor[i].speed=speeds[v];g.motor[i].acceleration=accs[a];}
+  assert(pwm_control_submit_positions(&g));assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+  if(!v&&!a)memcpy(expected,sent,sizeof sent);else assert(memcmp(expected,sent,sizeof sent)==0);
+ }
+}
 int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
+ speed_acc_do_not_shape_pwm();
  return_first_tests();motor_polarity_service_tests();pid_trace_tests();calibrated_pid_tests();zero_then_explicit_off_tests();direct_pwm_tests();
  reset();ready(8);assert(sent[3]<0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]<0); /* updated sample */
@@ -414,7 +425,7 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_INVALID_STATE);stopped(YPWM_REASON_RELEASE);
  reset();uint8_t legacy[8]={2,1};assert(pwm_control_request_mode(legacy,sizeof legacy,42)==YPWM_INVALID_PAYLOAD);
  assert(prepare(123,YPWM_ALL_MASK)==0);assert(pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));armed=true;
- g=goals(YPWM_ALL_MASK);g.motor[0].speed=0;assert(!pwm_control_submit_positions(&g));
+ g=goals(YPWM_ALL_MASK);g.motor[0].speed=0;assert(pwm_control_submit_positions(&g)); /* ignored in PWM backend */
  transaction_tests();
  persistent_boot_tests();
  puts("F103 PID service: two-phase register transaction, rollback interlock, host-only current and remaining guards passed");return 0;

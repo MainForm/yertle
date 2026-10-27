@@ -290,7 +290,6 @@ bool pwm_control_submit_positions(const motor_target_set_t *goal){
     if(!goal||!motor_device_validate_targets(goal)||!host_protocol_is_armed()||host_protocol_is_stop_requested())return false;
     taskENTER_CRITICAL();
     if(p.backend!=YPWM_PID||!p.arm_allowed||p.raw_pending||p.raw_result_pending||(p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)){taskEXIT_CRITICAL();return false;}
-    for(unsigned i=0;i<12;++i)if((p.mask&(1U<<i))&&!goal->motor[i].speed){taskEXIT_CRITICAL();return false;}
     /* New position goals do not reset the integrator or derivative history. */
     if(p.direct)p.pid_restart=true;
     p.direct=false;
@@ -519,7 +518,7 @@ static void service_stop(const control_context *s){
                 if(!(s->mask&(1U<<i))){if(error>16U){returning.off_only=true;returning.outcome=3;}continue;}
                 position_pid_config_t config=position_pid_default_config();
                 config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
-                if(!position_pid_step(&axes[i],&config,2048,200,50,measured,(float)dt_ms*.001f,&out[i])){
+                if(!position_pid_step(&axes[i],&config,2048,measured,(float)dt_ms*.001f,&out[i])){
                     returning.off_only=true;returning.outcome=9;}
             }
             returning.last_sequence=f.sequence;returning.last_stamp=f.uptime_ms;
@@ -582,8 +581,7 @@ static void service_pid(const control_context *s,uint32_t now){
         }
         position_pid_config_t config=position_pid_default_config();
         config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
-        if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,s->goal.motor[i].speed,
-            s->goal.motor[i].acceleration,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
+        if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }
     if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
