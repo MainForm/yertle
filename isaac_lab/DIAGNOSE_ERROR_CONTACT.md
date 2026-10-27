@@ -129,3 +129,41 @@ this algebra. No mapping, action reference or firmware gains were changed.
 `pid_unit_conversion.py` computes the scalar values without Isaac. Numerical
 proof and the current-model matrices are saved under
 `/workspace/yertle-artifacts/pid_gain_conversion_20261027/conversion_verified.json`.
+
+## Inverse conversion of measured raw/PWM PID
+
+`convert_raw_pid()` converts the production P5/I3/D0.10 into motor-encoder-angle
+radians and commanded motor torque: P4.17215134Nm/rad,
+I2.50329080Nm/(rad*s), D0.0834430268Nm*s/rad. Integral output is limited to
+0.128Nm and commanded output to1.024Nm. These depend on the EXISTING assumed
+0.00128Nm/PWMraw motor conversion, not a new physical torque measurement.
+
+`converted-pid` uses an independent rad/Nm controller; `inverse-compare` runs
+it beside the production C raw/PWM controller. Both receive the SAME original
+C Speed/ACC reference trajectory and retain PWM integer output resolution,
+anti-windup, motor polarity, action mapping and plant parameters. Only the
+PID block's coordinate units differ. The motor angle is calibrated encoder
+angle, not an independent anatomical shin angle: existing thigh/shin position
+coupling and the previously selected individual-joint torque ablation remain.
+
+```powershell
+docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/real_sim_tracking_20261027 --out-dir /workspace/yertle-artifacts/inverse_pid_test_20261027 --backend inverse-compare --kp 5 --ki 3 --kd .1 --plant dc --motor-gain 1 --physics-dt .0005 --seconds 12.56 --initial-integral log --sync-start --repeats 3 --label inverse_compare_fixed_0p5ms --headless --device cuda:0
+```
+
+Use a new label on a repeat. The artifact directory includes
+`verify_inverse.py` (628 recorded packets,7536motor samples),
+`inverse_equivalence.json`, `analyze.py` (independent trace validation),
+`analysis.json` and `REPORT.md`. In addition to normal trace fields, new traces
+save the shadow C PWM, angle PID torque/terms and their rounded PWM difference.
+Initial observations are checked and recorded; GPU physics may subsequently
+diverge between cloned environments, so compare ranges rather than requiring
+bit-identical entire closed-loop trajectories. Shadow-controller comparison
+uses the same state/reference inside each environment to isolate unit algebra.
+
+The default policy command is0/0/0, matching the selected real log. The separate
+walking check uses `--backend converted-pid --command -0.1 0 0` with a new label
+`inverse_walk_vx_m0p1` and the same gains, limits, initialization and physics.
+This changes only the requested motion, not model/controller parameters.
+`analyze_walk.py` compares all fixed summary fields with the zero-command run,
+checks the terminal events and reports body-frame velocity, displacement,
+height and tilt. A zero-command support test alone is not a locomotion test.

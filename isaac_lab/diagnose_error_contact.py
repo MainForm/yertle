@@ -7,7 +7,7 @@ plant is identified physical hardware. No hardware or training writes.
 """
 import argparse,ctypes as ct,hashlib,json,sys,traceback
 from pathlib import Path
-from pid_unit_conversion import MOTOR_RESPONSE_GAIN, MODEL_STALL_TORQUE_NM, MODEL_FREE_SPEED_RAD_S
+from pid_unit_conversion import MOTOR_RESPONSE_GAIN, MODEL_STALL_TORQUE_NM, MODEL_FREE_SPEED_RAD_S, convert_raw_pid, AngleTorquePID
 import numpy as np
 import torch
 from rsl_rl.runners import OnPolicyRunner
@@ -16,7 +16,7 @@ from isaaclab.app import AppLauncher
 p=argparse.ArgumentParser()
 p.add_argument('--data-dir',type=Path,required=True)
 p.add_argument('--out-dir',type=Path,required=True)
-p.add_argument('--backend',choices=['implicit-pd','full-pid'],default='full-pid')
+p.add_argument('--backend',choices=['implicit-pd','full-pid','converted-pid','inverse-compare'],default='full-pid')
 p.add_argument('--kp',type=float,nargs='+')
 p.add_argument('--ki',type=float,nargs='+',default=[3.])
 p.add_argument('--kd',type=float,nargs='+')
@@ -30,11 +30,14 @@ p.add_argument('--repeats',type=int,default=1)
 p.add_argument('--seconds',type=float,default=12.56)
 p.add_argument('--physics-dt',type=float,default=.005)
 p.add_argument('--label',default='sweep')
+p.add_argument('--command',type=float,nargs=3,default=[0.,0.,0.],metavar=('VX','VY','YAW'),
+               help='Policy command only; controller and physical parameters are unchanged.')
 AppLauncher.add_app_launcher_args(p)
 args=p.parse_args()
 source_bytes=Path(__file__).read_bytes()
-if args.kp is None:args.kp=[5.] if args.backend=='full-pid' else [25,20,15,10,7.5,5,3,2]
-if args.kd is None:args.kd=[.1] if args.backend=='full-pid' else [.1,.5,1.]
+full_backend=args.backend!='implicit-pd'
+if args.kp is None:args.kp=[5.] if full_backend else [25,20,15,10,7.5,5,3,2]
+if args.kd is None:args.kd=[.1] if full_backend else [.1,.5,1.]
 assert args.repeats>0 and args.seconds>=.02 and args.physics_dt>0
 assert all(k>0 for k in args.kp) and all(k>=0 for k in args.ki+args.kd) and all(k>0 for k in args.motor_gain)
 assert abs(round(.02/args.physics_dt)*args.physics_dt-.02)<1e-9
@@ -56,10 +59,12 @@ B=np.array(m['B_q_per_raw']);J=np.linalg.inv(B);qseat=np.array(m['q_at_raw2048']
 ref=np.radians([0]*4+[34]*4+[-85]*4)
 def raw(q):return (q-qseat)@J.T+2048
 profiles=[False,True] if args.profile=='both' else [args.profile=='on']
-if args.backend=='full-pid':
+if full_backend:
  plants=['ideal','dc'] if args.plant=='both' else [args.plant]
- cases=[dict(kp=kp,ki=ki,kd=kd,profile=True,motor_gain=gain,plant=plant,repeat=r)
-        for kp in args.kp for ki in args.ki for kd in args.kd for gain in args.motor_gain for plant in plants for r in range(args.repeats)]
+ controllers=['raw_pwm','motor_angle_torque'] if args.backend=='inverse-compare' else ['motor_angle_torque'] if args.backend=='converted-pid' else ['raw_pwm']
+ cases=[dict(kp=kp,ki=ki,kd=kd,profile=True,motor_gain=gain,plant=plant,repeat=r,pid_units=controller,
+             converted_gains=convert_raw_pid(kp,ki,kd))
+        for kp in args.kp for ki in args.ki for kd in args.kd for gain in args.motor_gain for plant in plants for controller in controllers for r in range(args.repeats)]
 else:
  cases=[dict(kp=kp,ki=0.,kd=kd,profile=profile,repeat=r) for kp in args.kp for kd in args.kd for profile in profiles for r in range(args.repeats)]
 (out/f'{args.label}_config.json').write_text(json.dumps(dict(arguments=vars(args)|{'data_dir':str(args.data_dir),'out_dir':str(args.out_dir)},cases=cases),indent=2))
@@ -113,18 +118,18 @@ mi=(ct.c_uint8*12)();ms=(ct.c_int8*12)();lib.api_motor_mapping(mi,ms)
 direct=np.zeros((12,12));direct[np.arange(12),np.array(mi)]=np.array(ms)
 assert (abs(direct).sum(axis=0)==1).all() and (abs(direct).sum(axis=1)==1).all()
 for e,k in enumerate(cases):
- if args.backend=='full-pid':
+ if full_backend:
   for j in range(12):configs[e*12+j]=Config(k['kp'],k['ki'],k['kd'],100,800,int(polarity[j]))
 lib.pid_batch.argtypes=[ct.POINTER(State),ct.POINTER(Config)]+[ct.c_void_p]*6+[ct.c_uint]
 lib.api_action_angles.argtypes=[ct.POINTER(ct.c_double),ct.POINTER(ct.c_double)]
 lib.api_raw.argtypes=[ct.POINTER(ct.c_double),ct.POINTER(ct.c_uint16)]
-trace={k:[] for k in ['raw_before','raw_goal','raw_reference','raw_after','base_force_N','base_force_history_N','base_height_m','base_contact','pid_guard','action','pwm_raw','pid_terms','root_state_w']}
+trace={k:[] for k in ['raw_before','raw_goal','raw_reference','raw_after','base_force_N','base_force_history_N','base_height_m','base_contact','pid_guard','action','pwm_raw','pid_terms','root_state_w','raw_C_pwm','angle_pid_Nm','angle_pid_terms','shadow_pwm_difference']}
 first_contact=np.full(n,-1,int);first_guard=np.full(n,-1,int);mapping_checks=0
 previous=np.repeat(np.floor(raw(ref)+.5)[None,:],n,axis=0)
 try:
  with torch.inference_mode():
   env.reset()
-  if args.backend=='full-pid':
+  if full_backend:
    # Start from a supported standing equilibrium. Physics-only warmup keeps
    # policy episode/phase/action history at zero; no initial free-drop artifact.
    robot.set_joint_position_target(robot.data.default_joint_pos)
@@ -142,7 +147,7 @@ try:
   robot.actuators['legs'].stiffness.copy_(kp);robot.actuators['legs'].damping.copy_(kd)
   torch.testing.assert_close(robot.root_physx_view.get_dof_stiffnesses().cpu(),kp.cpu(),rtol=0,atol=1e-6)
   torch.testing.assert_close(robot.root_physx_view.get_dof_dampings().cpu(),kd.cpu(),rtol=0,atol=1e-6)
-  if args.backend=='full-pid' and args.initial_integral=='log':
+  if full_backend and args.initial_integral=='log':
    real=json.loads((args.data_dir/'real_replay.json').read_text())
    initial_pid=real['pid'][0]
    assert initial_pid['target_sequence']<real['protocol'][0]['sequence']
@@ -154,9 +159,13 @@ try:
     for j in range(12):
      lib.position_pid_reset(ct.byref(states[e*12+j]),float(initial_raw[e,j]))
      states[e*12+j].integral=initial_i[j]
+  initial_measured=np.floor(raw(robot.data.joint_pos[:,order].cpu().numpy())+.5)
+  initial_i=np.array([s.integral for s in states]).reshape(n,12)
+  angular=AngleTorquePID([(k['kp'],k['ki'],k['kd']) for k in cases],initial_measured,initial_i)
+  angle_cases=np.array([k.get('pid_units')=='motor_angle_torque' for k in cases])
   for step in range(steps):
    if step%100==0:print('ERROR_CONTACT_PROGRESS',step,'/',steps,flush=True)
-   apply_command(env,torch.zeros((n,3),device=env.device))
+   apply_command(env,torch.tensor(args.command,device=env.device).repeat(n,1))
    obs=w.get_observations();obs=obs[0] if isinstance(obs,tuple) else obs
    obs=obs.clone();obs['policy'][:,:3]=0.
    if step==0:
@@ -176,9 +185,18 @@ try:
    speed=np.ascontiguousarray(np.clip(np.ceil(abs(goal-previous)/.02),200,3000),dtype=np.uint16)
    acc=np.full((n,12),100,np.uint8);duty=np.zeros((n,12),np.int16);valid=np.zeros((n,12),np.uint8)
    lib.pid_batch(states,configs,safe_goal.ctypes.data,speed.ctypes.data,acc.ctypes.data,safe_meas.ctypes.data,duty.ctypes.data,valid.ctypes.data,count)
+   raw_C_pwm=duty.copy()
+   ref_raw=np.array([s.reference for s in states]).reshape(n,12)
+   angle_Nm=angular.step(ref_raw,safe_meas,.02)
+   # Preserve the existing PWM integer resolution in the motor model. The
+   # converted controller itself operates on rad/Nm; this is output resolution.
+   normalized=angle_Nm/angular.k
+   angle_pwm=(np.sign(normalized*polarity)*np.floor(abs(normalized*polarity)+.5)).astype(np.int16)
+   shadow_difference=angle_pwm.astype(int)-raw_C_pwm.astype(int)
+   duty[angle_cases]=angle_pwm[angle_cases]
    guard=bad.copy();guard[profile_ids]|=~valid[profile_ids].all(axis=1)
    newly=guard&(first_guard<0)&(first_contact<0);first_guard[newly]=step
-   for e in profile_ids if args.backend=='implicit-pd' else []:
+   for e in profile_ids if not full_backend else []:
     reference=np.array([states[e*12+j].reference for j in range(12)])
     target[e]=qseat+B@(reference-2048)
     actions[e]=torch.tensor((target[e]-ref)/.25,device=env.device)
@@ -191,7 +209,7 @@ try:
      assert bool(ok)==bool(((goal[e]>=0)&(goal[e]<=4095)).all())
      if ok:np.testing.assert_array_equal(ro,goal[e])
      mapping_checks+=1
-   if args.backend=='implicit-pd':env.step(actions)
+   if not full_backend:env.step(actions)
    else:
     env.action_manager.process_action(actions)
     matrix=torch.tensor(direct,dtype=torch.float32,device=env.device)
@@ -204,6 +222,11 @@ try:
      env.action_manager.apply_action()
      motor_velocity=robot.data.joint_vel[:,order]@matrix.T
      torque=torch.clamp(MODEL_STALL_TORQUE_NM*MOTOR_RESPONSE_GAIN*(drive-torch.where(dc,motor_velocity/MODEL_FREE_SPEED_RAD_S,0.)),-1.024,1.024)
+     # Same motor model, expressed directly in torque for inverse-PID cases.
+     quantized_torque=torch.tensor(angular.k*(duty*polarity),dtype=torch.float32,device=env.device)
+     inverse_torque=torch.clamp(quantized_torque-MODEL_STALL_TORQUE_NM*MOTOR_RESPONSE_GAIN*torch.where(dc,motor_velocity/MODEL_FREE_SPEED_RAD_S,0.),-1.024,1.024)
+     torch.testing.assert_close(inverse_torque,torque,rtol=0,atol=3e-7)
+     torque=torch.where(torch.tensor(angle_cases,device=env.device)[:,None],inverse_torque,torque)
      torque[dead]=0.
      joint_torque=torque@matrix
      robot.set_joint_effort_target(joint_torque[:,np.argsort(order)])
@@ -214,9 +237,9 @@ try:
    newly=contact&(first_contact<0)&(first_guard<0);first_contact[newly]=step
    processed=env.action_manager.get_term('joint_pos').processed_actions[:,order].cpu().numpy()
    np.testing.assert_allclose(processed,target,rtol=0,atol=2e-6)
-   reference=raw(processed) if args.backend=='implicit-pd' else np.array([s.reference for s in states]).reshape(n,12)
+   reference=raw(processed) if not full_backend else ref_raw
    terms=np.array([[s.trace_error,s.trace_p,s.integral,s.trace_d] for s in states]).reshape(n,12,4)
-   values=dict(raw_before=before,raw_goal=goal,raw_reference=reference,raw_after=raw(robot.data.joint_pos[:,order].cpu().numpy()),pwm_raw=duty,pid_terms=terms,root_state_w=robot.data.root_state_w.cpu().numpy(),
+   values=dict(raw_before=before,raw_goal=goal,raw_reference=reference,raw_after=raw(robot.data.joint_pos[:,order].cpu().numpy()),pwm_raw=duty,pid_terms=terms,root_state_w=robot.data.root_state_w.cpu().numpy(),raw_C_pwm=raw_C_pwm,angle_pid_Nm=angle_Nm,angle_pid_terms=angular.terms,shadow_pwm_difference=shadow_difference,
     base_force_N=sensor.data.net_forces_w[:,baseid,:].cpu().numpy(),base_force_history_N=sensor.data.net_forces_w_history[:,:,baseid,:].cpu().numpy(),
     base_height_m=robot.data.root_pos_w[:,2].cpu().numpy(),base_contact=contact,pid_guard=guard,action=actor_actions)
    for k,v in values.items():trace[k].append(v.copy())
@@ -224,7 +247,7 @@ try:
     print('ALL_CASES_TERMINAL',step+1,flush=True);break
  steps=len(trace['raw_before'])
  x={k:np.asarray(v) for k,v in trace.items()};np.savez_compressed(out/f'{args.label}_trace.npz',initial_observation=initial_observation,**x)
- result=dict(physics_dt=args.physics_dt,control_dt=.02,seconds=steps*.02,max_seconds=args.seconds,steps=steps,linear_velocity_input='forced_xyz_zero',sync_start=args.sync_start,motor_response_gain=MOTOR_RESPONSE_GAIN,
+ result=dict(physics_dt=args.physics_dt,control_dt=.02,seconds=steps*.02,max_seconds=args.seconds,steps=steps,linear_velocity_input='forced_xyz_zero',sync_start=args.sync_start,motor_response_gain=MOTOR_RESPONSE_GAIN,command=args.command,
   contact_sensor_update_period_s=c.scene.contact_forces.update_period,contact_history_length=c.scene.contact_forces.history_length,
   limits=dict(integral_output_raw=100,pwm_raw=800,following_error_raw=512,speed_min_raw_s=200,speed_max_raw_s=3000,acc_raw=100,
               physics_effort_Nm=1.024,physics_velocity_rad_s=2.3,plant_nominal_torque_Nm=MODEL_STALL_TORQUE_NM,plant_free_velocity_rad_s=MODEL_FREE_SPEED_RAD_S),
@@ -245,6 +268,7 @@ try:
    mean_final_error_raw=float(err.mean()) if end else None,max_final_error_raw=float(err.max()) if end else None,
    mean_internal_error_raw=float(internal.mean()) if end else None,
    mean_abs_pwm_raw=float(abs(x['pwm_raw'][:end,e]).mean()) if end else None,
+   max_shadow_PWM_difference_raw=int(abs(x['shadow_pwm_difference'][:end,e]).max()) if end else None,
    last1s_final_error_raw=float(err[-50:].mean()) if end else None,
    first_matched_1s_window_end_s=float((matched[0]+50)*.02) if len(matched) else None,
    peak_base_force_N=float(np.linalg.norm(x['base_force_history_N'][:max(1,end),e],axis=-1).max()),
