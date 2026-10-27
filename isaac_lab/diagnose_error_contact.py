@@ -25,7 +25,6 @@ p.add_argument('--motor-gain',type=float,nargs='+',choices=[MOTOR_RESPONSE_GAIN]
 p.add_argument('--plant',choices=['ideal','dc','both'],default='both')
 p.add_argument('--initial-integral',choices=['zero','log'],default='zero')
 p.add_argument('--sync-start',action='store_true',help='Copy env0 standing state after warmup, adjusted for environment origins.')
-p.add_argument('--profile',choices=['off','on','both'],default='both')
 p.add_argument('--repeats',type=int,default=1)
 p.add_argument('--seconds',type=float,default=12.56)
 p.add_argument('--physics-dt',type=float,default=.005)
@@ -58,15 +57,14 @@ m=json.loads((args.data_dir/'mapping.json').read_text())
 B=np.array(m['B_q_per_raw']);J=np.linalg.inv(B);qseat=np.array(m['q_at_raw2048']);names=m['joint_names']
 ref=np.radians([0]*4+[34]*4+[-85]*4)
 def raw(q):return (q-qseat)@J.T+2048
-profiles=[False,True] if args.profile=='both' else [args.profile=='on']
 if full_backend:
  plants=['ideal','dc'] if args.plant=='both' else [args.plant]
  controllers=['raw_pwm','motor_angle_torque'] if args.backend=='inverse-compare' else ['motor_angle_torque'] if args.backend=='converted-pid' else ['raw_pwm']
- cases=[dict(kp=kp,ki=ki,kd=kd,profile=True,motor_gain=gain,plant=plant,repeat=r,pid_units=controller,
+ cases=[dict(kp=kp,ki=ki,kd=kd,profile=False,motor_gain=gain,plant=plant,repeat=r,pid_units=controller,
              converted_gains=convert_raw_pid(kp,ki,kd))
         for kp in args.kp for ki in args.ki for kd in args.kd for gain in args.motor_gain for plant in plants for controller in controllers for r in range(args.repeats)]
 else:
- cases=[dict(kp=kp,ki=0.,kd=kd,profile=profile,repeat=r) for kp in args.kp for kd in args.kd for profile in profiles for r in range(args.repeats)]
+ cases=[dict(kp=kp,ki=0.,kd=kd,profile=False,repeat=r) for kp in args.kp for kd in args.kd for r in range(args.repeats)]
 (out/f'{args.label}_config.json').write_text(json.dumps(dict(arguments=vars(args)|{'data_dir':str(args.data_dir),'out_dir':str(args.out_dir)},cases=cases),indent=2))
 (out/f'{args.label}_script.py').write_bytes(source_bytes)
 (out/'pid_unit_conversion.py').write_bytes(Path(__file__).with_name('pid_unit_conversion.py').read_bytes())
@@ -100,10 +98,11 @@ robot=env.scene['robot'];order=[robot.joint_names.index(k) for k in names]
 sensor=env.scene.sensors['contact_forces'];baseid=sensor.body_names.index('base_link')
 kp=torch.tensor([k['kp'] for k in cases],device=env.device)[:,None].repeat(1,12)
 kd=torch.tensor([k['kd'] for k in cases],device=env.device)[:,None].repeat(1,12)
-profile_ids=np.array([i for i,k in enumerate(cases) if k['profile']],dtype=int)
 lib=ct.CDLL(str(args.data_dir/'libpid.so'))
+if not hasattr(lib,'pid_direct_goal') or lib.pid_direct_goal()!=1:
+ raise RuntimeError('Current PWM diagnostic requires a rebuilt direct-goal bridge; historical profiled libraries are not compatible.')
 class State(ct.Structure):
- _fields_=[(s,ct.c_float) for s in ['reference','reference_velocity','previous_position','velocity','integral','output','trace_error','trace_p','trace_d']]+[('trace_flags',ct.c_uint8),('initialized',ct.c_bool)]
+ _fields_=[(s,ct.c_float) for s in ['reference','previous_position','velocity','integral','output','trace_error','trace_p','trace_d']]+[('trace_flags',ct.c_uint8),('initialized',ct.c_bool)]
 class Config(ct.Structure):
  _fields_=[(s,ct.c_float) for s in ['kp','ki','kd','integral_limit','duty_limit']]+[('polarity',ct.c_int8)]
 lib.pid_defaults.argtypes=[ct.POINTER(Config)];fc=Config();lib.pid_defaults(ct.byref(fc))
@@ -187,6 +186,7 @@ try:
    lib.pid_batch(states,configs,safe_goal.ctypes.data,speed.ctypes.data,acc.ctypes.data,safe_meas.ctypes.data,duty.ctypes.data,valid.ctypes.data,count)
    raw_C_pwm=duty.copy()
    ref_raw=np.array([s.reference for s in states]).reshape(n,12)
+   np.testing.assert_array_equal(ref_raw[valid>0],safe_goal[valid>0])
    angle_Nm=angular.step(ref_raw,safe_meas,.02)
    # Preserve the existing PWM integer resolution in the motor model. The
    # converted controller itself operates on rad/Nm; this is output resolution.
@@ -194,12 +194,9 @@ try:
    angle_pwm=(np.sign(normalized*polarity)*np.floor(abs(normalized*polarity)+.5)).astype(np.int16)
    shadow_difference=angle_pwm.astype(int)-raw_C_pwm.astype(int)
    duty[angle_cases]=angle_pwm[angle_cases]
-   guard=bad.copy();guard[profile_ids]|=~valid[profile_ids].all(axis=1)
+   guard=bad.copy()
+   if full_backend:guard|=~valid.all(axis=1)
    newly=guard&(first_guard<0)&(first_contact<0);first_guard[newly]=step
-   for e in profile_ids if not full_backend else []:
-    reference=np.array([states[e*12+j].reference for j in range(12)])
-    target[e]=qseat+B@(reference-2048)
-    actions[e]=torch.tensor((target[e]-ref)/.25,device=env.device)
    previous=goal.copy()
    if step%100==0:
     for e in range(n):
@@ -256,7 +253,7 @@ try:
   checkpoint_sha256=hashlib.sha256((args.data_dir/'model_6999.pt').read_bytes()).hexdigest(),
   script_sha256=hashlib.sha256(source_bytes).hexdigest(),bridge_sha256=hashlib.sha256((args.data_dir/'libpid.so').read_bytes()).hexdigest(),
   termination='original mdp.illegal_contact: base_link force history >1N; auto-reset suppressed, first hit is terminal',
-  controller=args.backend,initial_integral=args.initial_integral,plant_note='Full PID uses production C, actual motor polarity and existing signed individual-joint torque ablation; PWM plant is assumed, not hardware identified.',cases=[])
+  controller=args.backend,initial_integral=args.initial_integral,reference_generator='direct_received_goal_no_speed_acc',plant_note='Full PID uses production C, actual motor polarity and existing signed individual-joint torque ablation; PWM plant is assumed, not hardware identified.',cases=[])
  for e,k in enumerate(cases):
   contact=first_contact[e];guard=first_guard[e];end=int(min([steps]+[i+1 for i in [contact] if i>=0]+[i for i in [guard] if i>=0]))
   err=abs(x['raw_goal'][:end,e]-x['raw_before'][:end,e]);internal=abs(x['raw_reference'][:end,e]-x['raw_before'][:end,e])

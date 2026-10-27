@@ -1,169 +1,79 @@
-# Production PID / real-error-level contact experiment
+# Current PWM diagnostic: direct received goal
 
-`diagnose_error_contact.py` is an isolated simulation experiment. Its default
-`full-pid` backend runs the production `position_pid.c` through the prepared C
-bridge, including the real P5/I3/D0.10, I-output limit100, PWM limit800,
-20ms controller update, Speed200..3000 and ACC100. There is no D filter or
-PWM slew limiter. The twelve physical PWM polarities are read from that C
-controller; angle/raw calibration and motor IDs are preserved.
+The production PWM C PID now directly compares received absolute raw goal
+with calibrated measured position. It accepts NO Speed/ACC, stores no reference
+velocity, and has no intermediate target, PWM slew limiter or D filter.
+Speed/ACC remain in0x06 packets for native position mode only.
 
-Response scaling is now FIXED at1.0 in `pid_unit_conversion.py`. The actual
-torque formula uses this constant; `--motor-gain` rejects every other value.
-The old0.320/0.318 response experiments are historical motor-model variants,
-not valid evidence from a PID-only tuning experiment. They are preserved in
-the artifact directory and old source snapshots, not silently relabeled.
+## Current reproduction
 
-## Reproduce
-
-The prepared data/model/API/C bridge live in
-`/workspace/yertle-artifacts/real_sim_tracking_20261027`.
-Results for this experiment are under
-`/workspace/yertle-artifacts/error_contact_sweep_20261027`.
+Use the rebuilt library under `/workspace/yertle-artifacts/pwm_direct_goal_20261027`.
+The diagnostic rejects historical profiled libraries (`pid_direct_goal()==1`
+and C state-size checks) and asserts every valid PID reference equals the goal.
 
 ```powershell
-docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/real_sim_tracking_20261027 --out-dir /workspace/yertle-artifacts/error_contact_sweep_20261027 --backend full-pid --kp 5 --ki 3 --kd .1 --plant dc --motor-gain 1.0 --physics-dt .0005 --seconds 3 --initial-integral log --sync-start --repeats 3 --label fixed_motor_baseline --headless --device cuda:0
+docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/pwm_direct_goal_20261027 --out-dir /workspace/yertle-artifacts/pwm_direct_goal_20261027 --backend inverse-compare --kp 5 --ki 3 --kd .1 --plant dc --motor-gain 1 --physics-dt .0005 --seconds 1 --initial-integral log --sync-start --repeats 1 --command -0.1 0 0 --label NEW_LABEL --headless --device cuda:0
 ```
 
-Use a new label to preserve the original traces. New runs write `_SUCCESS`
-only after the summary and traces have been saved. Isaac's app shutdown can
-mask an exception in the process exit status; check the marker and summary,
-not only exit0. Exceptions are also printed before app shutdown.
+Use a new label. Require `_SUCCESS`, valid JSON/NPZ and assertions: Isaac shutdown
+can mask Python failures behind exit0. Headless computation, not GUI, is tested.
 
-Outputs per label:
+## Backends
 
-- `_config.json`, `_script.py`: exact arguments/cases and source snapshot.
-- `_trace.npz`: calibrated raw goal/reference/measured positions, original
-  actor actions, P/I/D terms, sent PWM, base forces/history and root state.
-- `_summary.json`: first-contact/first-PID-guard times and censored errors,
-  gain/limit metadata, code/model/bridge hashes and source checks.
-- `_SUCCESS`: all output and runtime checks completed.
+- `full-pid`: production raw/PWM P5/I3/D0.10, I cap100/PWM cap800.
+- `converted-pid`: independent motor-angle-radians / commanded-Nm PID.
+- `inverse-compare`: both with the same direct goal and motor plant.
+- `implicit-pd`: separate native joint-PD reference, not physical F103 PID.
 
-For numerical sensitivity use `.001`, `.0005` and `.00025` physics intervals.
-The policy/PID interval remains20ms; contact sensor interval remains5ms with
-history3, matching the checkpoint configuration.
+`convert_raw_pid()` gives P4.17215134Nm/rad, I2.50329080Nm/(rad*s),
+D0.0834430268Nm*s/rad, I cap0.128Nm/output cap1.024Nm. This uses the EXISTING
+ASSUMED0.00128Nm/PWMraw, not measured torque calibration. The coordinate is
+motor encoder angle. Thigh/shin position coupling, motor polarity and existing
+individual-joint torque mapping stay unchanged. This triplet is not silently
+substituted on twelve independent anatomical joints. Save shadow C/angle outputs.
 
-## Experimental definition
+## Fixed setup and explicit assumptions
 
-Model: v6.22.2/model_6999.pt,55D input/12D output, fixed trot1.7Hz/duty0.6,
-reference0/+34/-85deg, scale0.25, command vx=vy=yaw=0. Observed linear XYZ
-velocity is forced to zero, as in the real CLI test; body angular velocity,
-gravity, joints and original last actor action remain available. There are
-no added pushes/reset noise. Saved checkpoint physics limits are1.024Nm and
-2.3rad/s; these are checkpoint settings, not newly measured physical specs.
+Response gain is locked1.0. Same v6.22.2/model_6999.pt,55D/12D,
+reference0/+34/-85deg/scale0.25, trot1.7Hz/duty0.6, PhysX1.024Nm/2.3rad/s,
+20ms control and contact sensor5ms/history3. Default command0/0/0;
+`--command` changes requested motion only. Linear XYZ observation stays0,
+matching the real CLI ablation; IMU/gravity/joints/last actor action remain.
 
-Before the full-PID test, a1s physics-only native standing warmup establishes
-ground support without advancing the policy phase/action history. `--sync-start`
-copies env0's root/joint state to the clones, adjusted for environment origins.
-`--initial-integral log` primes integrals from the last logged pre-policy
-target sequence. It does not copy the real robot's unknown hand-support force.
-
-The unchanged signed individual-joint torque ablation from the previous tests
-is used; calibrated position conversion still retains thigh/shin coupling.
-The plant is an ASSUMPTION:
+Existing ASSUMED motor model, not identified real hardware:
 
 ```text
-drive = sent_PWM * physical_PWM_polarity /1000
-ideal: tau_motor = clamp(1.28 * motor_gain * drive, +/-1.024 Nm)
-dc:    tau_motor = clamp(1.28 * motor_gain * (drive - motor_velocity/2.3), +/-1.024 Nm)
+drive = PWM * physical_PWM_polarity /1000
+ideal: tau = clamp(1.28 * drive, +/-1.024 Nm)
+dc: tau = clamp(1.28 * (drive - motor_velocity/2.3), +/-1.024 Nm)
 ```
 
-The motor velocity and torque are mapped with the existing signed individual
-joint permutation. `motor_gain` is fixed at1.0. The plant has not been identified from real PWM/current/
-torque measurements and is not an exact electrical or linkage model.
-The optional `implicit-pd` backend has I=0 and joint-unit P/D, so it is only
-a separate reference and must not be described as the real raw/PWM PID.
+The1.28 constant and DC damping term were not measured from PWM/current/torque.
+A1s native25/0.5 standing warmup, optional clone synchronization and optional
+logged initial I are experimental choices. They do not reproduce unknown real
+hand-support forces/initial conditions. This removal does not tune those choices,
+mapping, checkpoint, training defaults or physical hardware.
 
-## Termination and statistics
+## Guards and interpretation
 
-Use the checkpoint's original `mdp.illegal_contact` predicate: base_link force
-history >1N. Automatic reset is suppressed to preserve the trajectory, but
-first true is the case's terminal event. PID512raw/raw-range guards are
-separate competing events. Post-terminal samples never enter the statistics.
+The existing512raw following-error guard remains and NOW checks the DIRECT goal.
+Raw0..4095 and I/PWM caps remain. Communication/voltage/temperature stop logic
+is not fully emulated. No-contact does not validate every firmware safety path.
+Evaluate the original base_link force-history>1N termination predicate. Suppress
+only auto-reset; first contact/PID guard is terminal for statistics. Exclude
+later samples. Contact timing resolution20ms; error uses pre-output measurement.
+Measure actual velocity/displacement before calling a test successful walking.
 
-The real target is mean absolute FINAL GOAL minus measured position132.890raw,
-averaged across twelve motors. Internal REFERENCE minus measured position is
-reported independently; the real mean is42.426raw. A10% final-error band is
-declared in advance. Error is measured before each20ms output interval. A
-one-second rolling-error window is also recorded where enough samples exist.
-Contact is localized to a20ms interval, not an exact substep timestamp.
+Record exact script/config, hashes, gains, mapping checks, raw goals/reference/
+measurements/PWM, angular PID terms, force history and root state. Require the
+completion marker. `AUDIT.md` in the new artifact folder lists other separate
+implementation choices and request provenance; this change does not remove them.
 
-Matching an overall error averaged over a short failing run is not equivalent
-to matching the real12.58s trajectory. In particular, the pre-contact mean,
-last1s mean, per-motor errors, internal error and profile gap can differ.
+## Historical results
 
-## Validation / interpretation
-
-Runtime checks verify actual PhysX gain readback, C state/config sizes,
-action-to-angle and absolute-angle-to-raw independently, and fixed model
-configuration. The artifact's `analyze.py` independently recomputes censored
-means, verifies force >1N at first contact, checks P=Kp*error, I/PWM caps and
-the signed P+I+D output against recorded PWM.
-
-The near-real gain grid was P4.5/5/5.5, I2.5/3/3.5, D0.08/0.10/0.12. Final
-response searches retain EXACT P5/I3/D0.10. Read `REPORT.md` and `analysis.json`
-in the result directory for outcomes, including conflicting physics-interval
-results; do not select only the runs that fall. These are mechanical contact
-experiments, not predictions of firmware current/temperature/UART shutdowns.
-
-No firmware, physical motor registers, deployment mapping or training defaults
-are modified. Headless computation is tested; container Vulkan GUI/probe errors
-remain outside this experiment's validation scope.
-
-## Original joint-PD gain conversion (fixed response1.0)
-
-For4096steps/revolution,1step=2*pi/4096rad. Model torque conversion is
-1.28Nm/1000PWMraw=0.00128Nm/PWMraw. Original joint-PD P25,D0.5 therefore
-converts to P0.03834952Nm/position_raw, D0.0007669904Nm/(velocity_raw/s),
-or P29.9605623,I0,D0.59921125 in PWMraw output units on a1:1 axis.
-
-This is a controller-block unit conversion, not a verified full-model gain
-replacement: the current DC model adds damping1.28/2.3=0.55652174Nm*s/rad.
-Keeping D0.59921125 adds another0.5, giving total1.05652174. Matching total
-0.5 would require controller D_raw=-0.06773692, rejected by production C.
-Also, the calibrated shin raw contains thigh motion. Under the current
-individual-joint torque ablation, a scalar triplet leaves shin/thigh cross
-terms. A full coordinate transformation is a matrix, not one gain per axis.
-The Speed/ACC intermediate reference and20ms sampling remain separate from
-this algebra. No mapping, action reference or firmware gains were changed.
-
-`pid_unit_conversion.py` computes the scalar values without Isaac. Numerical
-proof and the current-model matrices are saved under
-`/workspace/yertle-artifacts/pid_gain_conversion_20261027/conversion_verified.json`.
-
-## Inverse conversion of measured raw/PWM PID
-
-`convert_raw_pid()` converts the production P5/I3/D0.10 into motor-encoder-angle
-radians and commanded motor torque: P4.17215134Nm/rad,
-I2.50329080Nm/(rad*s), D0.0834430268Nm*s/rad. Integral output is limited to
-0.128Nm and commanded output to1.024Nm. These depend on the EXISTING assumed
-0.00128Nm/PWMraw motor conversion, not a new physical torque measurement.
-
-`converted-pid` uses an independent rad/Nm controller; `inverse-compare` runs
-it beside the production C raw/PWM controller. Both receive the SAME original
-C Speed/ACC reference trajectory and retain PWM integer output resolution,
-anti-windup, motor polarity, action mapping and plant parameters. Only the
-PID block's coordinate units differ. The motor angle is calibrated encoder
-angle, not an independent anatomical shin angle: existing thigh/shin position
-coupling and the previously selected individual-joint torque ablation remain.
-
-```powershell
-docker exec yertle-isaaclab-container-1 /isaac-sim/python.sh -u /workspace/yertle/isaac_lab/diagnose_error_contact.py --data-dir /workspace/yertle-artifacts/real_sim_tracking_20261027 --out-dir /workspace/yertle-artifacts/inverse_pid_test_20261027 --backend inverse-compare --kp 5 --ki 3 --kd .1 --plant dc --motor-gain 1 --physics-dt .0005 --seconds 12.56 --initial-integral log --sync-start --repeats 3 --label inverse_compare_fixed_0p5ms --headless --device cuda:0
-```
-
-Use a new label on a repeat. The artifact directory includes
-`verify_inverse.py` (628 recorded packets,7536motor samples),
-`inverse_equivalence.json`, `analyze.py` (independent trace validation),
-`analysis.json` and `REPORT.md`. In addition to normal trace fields, new traces
-save the shadow C PWM, angle PID torque/terms and their rounded PWM difference.
-Initial observations are checked and recorded; GPU physics may subsequently
-diverge between cloned environments, so compare ranges rather than requiring
-bit-identical entire closed-loop trajectories. Shadow-controller comparison
-uses the same state/reference inside each environment to isolate unit algebra.
-
-The default policy command is0/0/0, matching the selected real log. The separate
-walking check uses `--backend converted-pid --command -0.1 0 0` with a new label
-`inverse_walk_vx_m0p1` and the same gains, limits, initialization and physics.
-This changes only the requested motion, not model/controller parameters.
-`analyze_walk.py` compares all fixed summary fields with the zero-command run,
-checks the terminal events and reports body-frame velocity, displacement,
-height and tilt. A zero-command support test alone is not a locomotion test.
+`real_sim_tracking_20261027`, `error_contact_sweep_20261027` and
+`inverse_pid_test_20261027` preserve old Speed/ACC-profile data/libraries/source.
+Their results are not current direct-goal PID results. Use saved old scripts to
+reproduce history. `diagnose_real_tracking.py` is also a historical profile/native
+PD comparison, not the current PWM controller. Response0.320/0.318 runs additionally
+changed the motor model and are not PID-only evidence.

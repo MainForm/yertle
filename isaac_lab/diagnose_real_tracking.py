@@ -1,5 +1,10 @@
 """play.py setup + real action replay. No serial/hardware or training writes.
 
+HISTORICAL: reproduces the removed Speed/ACC profile with its preserved old C
+bridge. For current direct-goal PWM PID use diagnose_error_contact.py and the
+rebuilt library in pwm_direct_goal_20261027. Historical results are not current
+controller validation.
+
 Native implicit actuators test simulated ability to follow the SAME real goals.
 This does not identify a physical PWM/current/torque plant or prove hardware PID
 is the unique cause. The real trial was hand-supported then grounded, whereas
