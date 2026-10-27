@@ -35,10 +35,16 @@ Mode ACK is preparation completion, not arming or physical arrival.
 PWM0 can enable servo torque. Stop/preparation must separately send explicit
 torqueOFF and read it back; PWM0 alone is never treated as OFF proof.
 
-## Existing independent stop conditions — not changed by this removal
+## Current independent stop conditions
 
-- Target TTL500ms; motor feedback age50ms; actuator service gap>30ms;
-  actual derivative dt must be positive and no more than50ms.
+- Target TTL500ms remains. Every accepted0x06 or armed direct0x0F command
+  refreshes it, even if the target value is unchanged. Motor position feedback
+  and sensor queries do NOT refresh target time.
+- The user removed the30ms actuator-service deadline and50ms motor-feedback
+  age/PID-interval cutoffs in active PID, direct PWM and2048 return paths.
+  No larger replacement ceiling, dt clamp or fixed-dt substitution is used.
+  Actual positive forward MCU time deltas are used; duplicate samples do not
+  integrate. Zero/backward time and nonfinite/invalid data are still rejected.
 - Goal/current raw must remain0..4095; absolute PID goal error>512raw rejects
   the step. **This now compares the direct received goal**, including2048 return.
 - All12 feedback valid, no servo error, voltage5.0..7.4V.
@@ -68,3 +74,20 @@ synthetic convergence, host/actuator integration and native wire contract.
 Old reports/artifact snapshots describe historical profiled controllers.
 They remain reproducible history and do not describe this current binary.
 No board flashing or real motor run is performed by this build/test workflow.
+
+## PID detail timing after removing the interval ceiling
+
+EVENT7 detail schema2 still uses SIX64-byte ID-pair payloads per12-axis set:
+18-byte header with actual dt as u32 milliseconds, followed by TWO23-byte
+axis records (five floats, signedPWM,flags). Removing the former per-axis
+reserved bytes keeps traffic length unchanged. EVENT8 statistics stays v1.
+PC accepts both old schema1 and new schema2, including dt>255/65535ms;
+the numerical PID uses the actual interval, not a byte-truncated value.
+The status field feedback_age is diagnostic u16, saturated at65535 (not a
+control cutoff). Thermal debounce still requires3successive fresh sequences,
+but no longer resets solely because their time gap exceeded50ms.
+
+Scope: these changes remove F103 PWM timing cutoffs. PC sensor-request timeout,
+50ms host/input age checks, heartbeat/target watchdogs, invalid-data checks,
+temperature/voltage/current rules and return progress/total timeout remain.
+Native position-mode150ms return feedback rule is also unchanged.

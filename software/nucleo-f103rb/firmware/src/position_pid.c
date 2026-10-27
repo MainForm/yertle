@@ -23,7 +23,7 @@ void position_pid_reset(position_pid_t *pid,float measured){
 bool position_pid_step(position_pid_t *pid,const position_pid_config_t *c,uint16_t goal,
     int16_t measured,float dt,int16_t *duty){
     if(!pid||!c||!duty||goal>4095||measured<0||measured>4095||
-       !isfinite(dt)||dt<=0||dt>0.050001f||!isfinite(c->kp)||!isfinite(c->ki)||!isfinite(c->kd)||
+       !isfinite(dt)||dt<=0||!isfinite(c->kp)||!isfinite(c->ki)||!isfinite(c->kd)||
        c->kp<0||c->ki<0||c->kd<0||!isfinite(c->integral_limit)||c->integral_limit<0||
        !isfinite(c->duty_limit)||c->duty_limit<=0||c->duty_limit>YPWM_DUTY_LIMIT||
        (c->polarity!=1&&c->polarity!=-1))return false;

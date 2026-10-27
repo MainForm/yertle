@@ -14,19 +14,19 @@
 #define YPWM_IDLE_MONITOR_CAPABILITY 0x00000010UL
 #define YPWM_HOST_MODE_RETRY_CAPABILITY 0x00000040UL
 #define YPWM_LONG_PREPARATION_CAPABILITY 0x00000080UL
-/* EVENT telemetry v1: six 64-byte payloads, ID pairs 1/2..11/12.
- * header: event7,version1,sensor_sequence u32,output_uptime_ms u32,
- * target_sequence u16,first_id u8,count2 u8,PID_dt_ms u8,reserved0.
- * Per motor24B: reference,error,P,I,D float32 LE; sentPWM i16 LE;
- * flags u8,reserved0. Contributions precede polarity; bit5 marks negative.
- * Flags: valid1, duty-clipped2, reserved4(always0), I-clamped8, antiwindup16,
- * negative-polarity32, reset64. Invalid/unselected records are all zero.
- * EVENT8/version1/length28: uptime,published,coalesced,completed,TXfailures,
- * last_sensor_sequence (all u32 LE). Counters reset only on MCU boot/init.
- * These are cached software commands, NOT measured torque/current/PWM. */
+/* EVENT7 detail v2 keeps six64-byte ID-pair payloads. Header18B:
+ * event7,version2,sensor_sequence u32,output_uptime_ms u32,target_sequence u16,
+ * first_id u8,count2 u8,actual_PID_dt_ms u32. Two23B axis records:
+ * reference,error,P,I,D float32 LE; PWM i16 LE; flags u8, no padding.
+ * Legacy v1 used16B header (dt u8+reserved) and two24B axis records.
+ * Contributions precede polarity. Flags: valid1, duty-clipped2, reserved4,
+ * I-clamped8, antiwindup16, negative-polarity32, reset64. Invalid axes zero.
+ * EVENT8 stats remains version1/length28: uptime,published,coalesced,
+ * completed,TXfailures,last_sensor_sequence u32 LE. These are software
+ * commands, not measured motor torque/current/PWM. No extra traffic length. */
 #define YPWM_PID_DETAIL_EVENT 7U
 #define YPWM_PID_STATS_EVENT 8U
-#define YPWM_PID_DETAIL_SCHEMA 1U
+#define YPWM_PID_DETAIL_SCHEMA 2U
 #define YPWM_PID_DETAIL_LENGTH 64U
 #define YPWM_PID_STATS_LENGTH 28U
 #define YPWM_PID_DETAIL_CAPABILITY 0x00000800UL
@@ -46,7 +46,6 @@
 /* Untuned controller output ceiling, not calibrated torque/current. */
 #define YPWM_DUTY_LIMIT 800
 #define YPWM_TARGET_TIMEOUT_MS 500U
-#define YPWM_FEEDBACK_MAX_MS 50U
 #define YPWM_FOLLOWING_ERROR_LIMIT 512U
 #define YPWM_STATUS_PERIOD_MS 100U
 /* FAILED (wire value 6): backend unavailable after failure/protective stop;

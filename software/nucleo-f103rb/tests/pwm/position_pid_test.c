@@ -43,8 +43,15 @@ int main(void){
  assert(p.reference==3000);
  assert(!position_pid_step(&p,&c,4096,2048,.02f,&out));
  assert(!position_pid_step(&p,&c,2048,2048,NAN,&out));
- assert(!position_pid_step(&p,&c,2048,2048,.051f,&out));
+ assert(position_pid_step(&p,&c,2048,2048,.051f,&out));
  assert(position_pid_step(&p,&c,2048,2048,50*.001f,&out));
+ for(unsigned j=1;j<=10;++j)assert(position_pid_step(&p,&c,2048,2048,(float)j,&out));
+ assert(!position_pid_step(&p,&c,2048,2048,0,&out));
+ assert(!position_pid_step(&p,&c,2048,2048,-.01f,&out));
+ assert(!position_pid_step(&p,&c,2048,2048,INFINITY,&out));
+ c=position_pid_default_config();c.kp=c.kd=0;p=(position_pid_t){0};
+ assert(position_pid_step(&p,&c,2058,2048,.2f,&out)&&fabsf(p.integral-6)<1e-5f);
+
  c.polarity=-1;p=(position_pid_t){0};assert(position_pid_step(&p,&c,2148,2048,.02f,&out)&&out<0);
  /* D follows the current measured derivative immediately, with no filter tail. */
  c=position_pid_default_config();c.kp=c.ki=0;p=(position_pid_t){0};

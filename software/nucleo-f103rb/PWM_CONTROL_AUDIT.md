@@ -1,5 +1,10 @@
 # PWM 경로 전체 소스 감사 — 2026-10-27
 
+> Update after the audit: user explicitly removed F10330ms service and50ms
+> feedback-age/PID-interval cutoffs.500ms target-command TTL is retained.
+> The table below is the earlier audit snapshot, not a claim those timing
+> guards remain active. Current behavior is in F103_POSITION_PID.md.
+
 **Speed/ACC 중간 목표 생성은 사용자가 지정하지 않았는데 제가0510c6a에서 추가한 로직이었다. 이번에 제거했다.**
 이 문서는 제공된 대화의 사용자 지시와 현재 코드/Git 이력을 대조한 결과다. “직접 요청 못 찾음”은
 제공된 지시에 구체적 동작/수치가 없다는 뜻이며, 모든 입력 검증/구현 선택이 불필요하다는 뜻은 아니다.

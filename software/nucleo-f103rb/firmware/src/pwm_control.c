@@ -11,7 +11,7 @@
 typedef struct {
     uint8_t backend,phase,reason,result,operation,mode_write_id;
     uint16_t mask,verified,unknown,torque,request,feedback_age;
-    uint32_t epoch,retired_epoch,command_count,accepted_ms,last_service,status_ms,started_ms;
+    uint32_t epoch,retired_epoch,command_count,accepted_ms,status_ms,started_ms;
     motor_target_set_t goal;
     int16_t sent[12];
     int16_t raw[12];uint16_t raw_request;uint8_t raw_result;
@@ -29,7 +29,7 @@ static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write,rollback
 static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
 /* Actuator-owned: one snapshot cannot count as several hot samples. */
-static uint32_t thermal_sequence,thermal_stamp;
+static uint32_t thermal_sequence;
 static uint8_t hot_samples[12];
 /* Actuator-owned shutdown. Repeated host/fault requests must not restart it. */
 static struct {
@@ -60,9 +60,8 @@ bool pwm_control_stop_detail(uint8_t b[20]){
 }
 static bool temperature_trip(const motor_feedback_set_t *f){
     if(f->sequence==thermal_sequence)return false;
-    if(!thermal_sequence||f->sequence-thermal_sequence!=1U||
-       f->uptime_ms-thermal_stamp>YPWM_FEEDBACK_MAX_MS)memset(hot_samples,0,sizeof hot_samples);
-    thermal_sequence=f->sequence;thermal_stamp=f->uptime_ms;
+    if(!thermal_sequence||f->sequence-thermal_sequence!=1U)memset(hot_samples,0,sizeof hot_samples);
+    thermal_sequence=f->sequence;
     bool trip=false;
     for(unsigned i=0;i<12;++i){
         if(f->motor[i].temperature<60U)hot_samples[i]=0;
@@ -82,14 +81,14 @@ static uint8_t trace_chunk;
 static uint32_t trace_published,trace_coalesced,trace_completed,trace_tx_failed,trace_stats_ms;
 static void trace_float(uint8_t *b,float value){uint32_t word;memcpy(&word,&value,4);ypwm_put32(b,word);}
 /* Called under the existing successful-output commit critical section. */
-static void publish_pid_trace(const control_context *s,const motor_feedback_set_t *f,uint32_t now,uint8_t dt){
+static void publish_pid_trace(const control_context *s,const motor_feedback_set_t *f,uint32_t now,uint32_t dt){
     if(trace_pending)++trace_coalesced;
     for(unsigned pair=0;pair<6;++pair){uint8_t *b=trace_latest.frame[pair];memset(b,0,64);
         b[0]=YPWM_PID_DETAIL_EVENT;b[1]=YPWM_PID_DETAIL_SCHEMA;ypwm_put32(b+2,f->sequence);
         ypwm_put32(b+6,now);ypwm_put16(b+10,(uint16_t)s->goal.sequence);
-        b[12]=(uint8_t)(pair*2U+1U);b[13]=2;b[14]=dt;
+        b[12]=(uint8_t)(pair*2U+1U);b[13]=2;ypwm_put32(b+14,dt);
         for(unsigned j=0;j<2;++j){const unsigned i=pair*2U+j;if(!(s->mask&(1U<<i)))continue;
-            uint8_t *r=b+16+j*24;const position_pid_t *a=&axes[i];
+            uint8_t *r=b+18+j*23;const position_pid_t *a=&axes[i];
             trace_float(r,a->reference);trace_float(r+4,a->trace_error);trace_float(r+8,a->trace_p);
             trace_float(r+12,a->integral);trace_float(r+16,a->trace_d);
             ypwm_put16(r+20,(uint16_t)p.sent[i]);r[22]=a->trace_flags;
@@ -113,7 +112,7 @@ void pwm_control_pid_detail_result(bool sent){
 bool pwm_control_pid_stats(uint8_t b[YPWM_PID_STATS_LENGTH]){
     const uint32_t now=milliseconds();taskENTER_CRITICAL();
     if(!trace_published||now-trace_stats_ms<1000U){taskEXIT_CRITICAL();return false;}
-    trace_stats_ms=now;b[0]=YPWM_PID_STATS_EVENT;b[1]=YPWM_PID_DETAIL_SCHEMA;b[2]=b[3]=0;
+    trace_stats_ms=now;b[0]=YPWM_PID_STATS_EVENT;b[1]=1;b[2]=b[3]=0; /* stats layout remains version1 */
     ypwm_put32(b+4,now);ypwm_put32(b+8,trace_published);ypwm_put32(b+12,trace_coalesced);
     ypwm_put32(b+16,trace_completed);ypwm_put32(b+20,trace_tx_failed);ypwm_put32(b+24,last_sample);
     taskEXIT_CRITICAL();return true;
@@ -133,7 +132,7 @@ static bool phase_current(uint8_t phase){
 void pwm_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
-    thermal_sequence=thermal_stamp=0;memset(hot_samples,0,sizeof hot_samples);
+    thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     memset(&returning,0,sizeof returning);stop_detail_pending=false;stop_detail_ms=0;
     trace_pending=trace_draining=false;trace_chunk=0;
     trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
@@ -417,7 +416,7 @@ static void prepare_mode(const control_context *s){
     ypwm_put16(detail+16,verified);ypwm_put16(detail+40,motor_device_register_lock_uncertain_mask());
     ypwm_put32(detail+20,milliseconds()-started);ypwm_put32(detail+56,milliseconds());detail[6]=error;
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
-    thermal_sequence=thermal_stamp=0;memset(hot_samples,0,sizeof hot_samples);
+    thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     taskENTER_CRITICAL();
     if(p.phase==YPWM_PREPARING&&p.epoch==s->epoch){
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.dirty=true;
@@ -488,18 +487,18 @@ static void service_stop(const control_context *s){
         returning.outcome=returning.off_only?3U:1U;
         publish_stop(s,now,true);
         memset(axes,0,sizeof axes);
-        thermal_sequence=thermal_stamp=0;memset(hot_samples,0,sizeof hot_samples);
+        thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
         for(unsigned i=0;i<12;++i){returning.best_error[i]=UINT16_MAX;returning.last_progress[i]=now;}
     }
     if(!returning.off_only){
         motor_feedback_set_t f;imu_feedback_t imu;
         bool valid=sensor_get_feedback_snapshot(&f,&imu)&&f.sequence&&
-            f.valid_mask==YPWM_ALL_MASK&&now-f.uptime_ms<=YPWM_FEEDBACK_MAX_MS;
+            f.valid_mask==YPWM_ALL_MASK;
         if(now-returning.started>=15000U||!valid){returning.off_only=true;returning.outcome=valid?8U:4U;}
         else if(f.sequence!=returning.last_sequence){
             const uint32_t dt_ms=returning.last_sequence?f.uptime_ms-returning.last_stamp:20U;
             int16_t out[12]={0};bool centered=true;
-            if(!dt_ms||dt_ms>50U){returning.off_only=true;returning.outcome=4;}
+            if(!dt_ms||(dt_ms&0x80000000UL)){returning.off_only=true;returning.outcome=4;}
             returning.max_error=0;
             for(unsigned i=0;i<12&&!returning.off_only;++i){
                 const motor_feedback_t *m=&f.motor[i];int16_t measured=m->position;
@@ -533,7 +532,7 @@ static void service_stop(const control_context *s){
                 }
                 returning.off_only=true;returning.outcome=10;
             }
-        }else return; /* No duplicate integration, still bounded by age/timeout. */
+        }else return; /* No duplicate integration; return timeout/progress bounds remain. */
     }
     const int16_t zero[12]={0};bool zero_sent=false;
     /* PWM0 and torqueOFF are separate writes; PWM0 alone can enable torque. */
@@ -548,8 +547,8 @@ static void service_stop(const control_context *s){
     taskEXIT_CRITICAL();const control_context status=snapshot();publish_stop(&status,now,true);
     if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
 }
-static bool feedback_safe(const motor_feedback_set_t *f,uint32_t now){
-    if(f->valid_mask!=YPWM_ALL_MASK||!f->sequence||now-f->uptime_ms>YPWM_FEEDBACK_MAX_MS){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
+static bool feedback_safe(const motor_feedback_set_t *f){
+    if(f->valid_mask!=YPWM_ALL_MASK||!f->sequence){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
     /* Current thresholds belong to the PC CLI. Preserve current telemetry and
        servo-reported fault checks, but do not latch a local current trip. */
     for(unsigned i=0;i<12;++i){const motor_feedback_t *m=&f->motor[i];
@@ -562,16 +561,14 @@ static bool feedback_safe(const motor_feedback_set_t *f,uint32_t now){
 static void service_pid(const control_context *s,uint32_t now){
     if(!s->ever_command)return;
     if(now-s->accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
-    if(s->phase==YPWM_ACTIVE&&now-s->last_service>30U){pwm_control_stop(YPWM_REASON_DEADLINE);return;}
-    taskENTER_CRITICAL();p.last_service=now;taskEXIT_CRITICAL();
     motor_feedback_set_t f;imu_feedback_t imu;
     if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
-    if(!feedback_safe(&f,now))return;
+    if(!feedback_safe(&f))return;
     /* Never integrate/differentiate the same measurement more than once. */
     if(!s->pid_restart&&s->phase==YPWM_ACTIVE&&f.sequence==last_sample)return;
     if(s->pid_restart){memset(axes,0,sizeof axes);taskENTER_CRITICAL();p.pid_restart=false;taskEXIT_CRITICAL();}
     const uint32_t dt_ms=s->phase==YPWM_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
-    if(!dt_ms||dt_ms>50U){pwm_control_stop(YPWM_REASON_SENSOR);return;}
+    if(!dt_ms||(dt_ms&0x80000000UL)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     const float dt=(float)dt_ms*0.001f;
     int16_t out[12]={0};
     for(unsigned i=0;i<12;++i)if(s->mask&(1U<<i)){
@@ -596,18 +593,16 @@ static void service_pid(const control_context *s,uint32_t now){
     }
     last_sample=f.sequence;last_feedback_ms=f.uptime_ms;
     taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=YPWM_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
-        p.feedback_age=(uint16_t)(now-f.uptime_ms);memcpy(p.sent,out,sizeof out);p.dirty=true;
-        publish_pid_trace(s,&f,milliseconds(),(uint8_t)dt_ms);}taskEXIT_CRITICAL();
+        p.feedback_age=(uint16_t)((now-f.uptime_ms)>UINT16_MAX?UINT16_MAX:(now-f.uptime_ms));memcpy(p.sent,out,sizeof out);p.dirty=true;
+        publish_pid_trace(s,&f,milliseconds(),dt_ms);}taskEXIT_CRITICAL();
 }
 static void service_raw(const control_context *s,uint32_t now){
     if(!s->raw_preview){
         if(!host_protocol_is_armed()||host_protocol_is_stop_requested()){pwm_control_stop(YPWM_REASON_LINK);return;}
         if(now-s->accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
-        if(s->phase==YPWM_ACTIVE&&now-s->last_service>30U){pwm_control_stop(YPWM_REASON_DEADLINE);return;}
-        taskENTER_CRITICAL();p.last_service=now;taskEXIT_CRITICAL();
         motor_feedback_set_t f;imu_feedback_t imu;
         if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
-        if(!feedback_safe(&f,now))return;
+        if(!feedback_safe(&f))return;
     }
     if(!s->raw_pending)return;
     uint8_t result=YPWM_OK;
