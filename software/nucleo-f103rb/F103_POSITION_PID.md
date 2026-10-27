@@ -10,7 +10,7 @@ compatibility. PID telemetry's reference field now means the received goal.
 
 ## Controller
 
-- P5, I3, D0.10; I-output cap100 PWMraw, output cap800/1000.
+- P5, I3, D0.10; I-output cap100 PWMraw, output cap900/1000.
 - Signed error; calibrated encoder raw0..4095; no modulo/absolute-error control.
 - D is negative measured-position derivative. Fresh-sample MCU dt is used;
   repeat samples do not integrate again. New goals retain I/D history.

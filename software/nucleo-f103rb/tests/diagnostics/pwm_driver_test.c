@@ -64,13 +64,13 @@ int main(void){
  assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_OK);
  assert(last[2]==254&&last[4]==0x83&&last[5]==0x2c&&last[6]==2&&last[7]==4);
  assert(memory[3][0x2c]==100&&memory[3][0x2d]==4&&last_length==11);
- pwm[3]=800;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_OK);
- assert(memory[3][0x2c]==0x20&&memory[3][0x2d]==0x03);
- pwm[3]=-800;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_OK);
- assert(memory[3][0x2c]==0x20&&memory[3][0x2d]==0x07); /* magnitude800 + BIT10 */
- const unsigned before=tx_count;pwm[3]=-801;
+ pwm[3]=900;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_OK);
+ assert(memory[3][0x2c]==0x84&&memory[3][0x2d]==0x03);
+ pwm[3]=-900;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_OK);
+ assert(memory[3][0x2c]==0x84&&memory[3][0x2d]==0x07); /* magnitude900 + BIT10 */
+ const unsigned before=tx_count;pwm[3]=-901;
  assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_INVALID_ARGUMENT&&tx_count==before);
- pwm[3]=801;
+ pwm[3]=901;
  assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_INVALID_ARGUMENT&&tx_count==before);
  pwm[3]=0;pwm[0]=1;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_INVALID_ARGUMENT&&tx_count==before);
  assert(motor_device_torque_mask(1U<<3,true)==MOTOR_DEVICE_OK&&memory[3][0x28]==1&&memory[0][0x28]==0);

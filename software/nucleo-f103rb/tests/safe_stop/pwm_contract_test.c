@@ -11,7 +11,7 @@ int main(void){ypwm_mode_request r;uint8_t b[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_P
  ypwm_put16(b+3,0);assert(!ypwm_decode_mode(b,9,&r));ypwm_put16(b+3,0x1000);assert(!ypwm_decode_mode(b,9,&r));
  ypwm_put16(b+3,3);assert(ypwm_decode_mode(b,9,&r));b[2]=YPWM_POSITION;assert(!ypwm_decode_mode(b,9,&r));
  ypwm_put16(b+3,YPWM_ALL_MASK);assert(ypwm_decode_mode(b,9,&r));assert(!ypwm_decode_mode(b,8,&r));
- assert(YPWM_DUTY_LIMIT==800&&ypwm_servo_word(-800)==0x0720&&ypwm_servo_word(800)==0x0320);
+ assert(YPWM_DUTY_LIMIT==900&&ypwm_servo_word(-900)==0x0784&&ypwm_servo_word(900)==0x0384);
  assert(ypwm_servo_word(-100)==0x0464&&ypwm_servo_word(100)==100);
  puts("schema3 PREPARE/COMMIT/CANCEL masks; retired operation3 rejected, old peer rejection, PWM encoding passed");return 0;
 }

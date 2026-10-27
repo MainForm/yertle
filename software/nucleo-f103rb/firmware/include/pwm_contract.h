@@ -44,7 +44,7 @@
 #define YPWM_POSITION 0U
 #define YPWM_PID 1U
 /* Untuned controller output ceiling, not calibrated torque/current. */
-#define YPWM_DUTY_LIMIT 800
+#define YPWM_DUTY_LIMIT 900
 #define YPWM_TARGET_TIMEOUT_MS 500U
 #define YPWM_FOLLOWING_ERROR_LIMIT 512U
 #define YPWM_STATUS_PERIOD_MS 100U

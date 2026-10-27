@@ -178,12 +178,12 @@ int main(void){
  assert(last_result==MESSAGE_NACK&&last_error==ERROR_INVALID_LENGTH);
  mode_fail_id=0;configure(&c,YPWM_PID,789);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);
  assert(c.state==HOST_FSM_ARMED);
- ypwm_put16(raw_pwm,(uint16_t)(int16_t)-800);ypwm_put16(raw_pwm+2,713);
+ ypwm_put16(raw_pwm,(uint16_t)(int16_t)-900);ypwm_put16(raw_pwm+2,713);
  receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
  assert(pwm_control_service());service_pwm(&c);
- assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-800&&duty[1]==713);
+ assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-900&&duty[1]==713);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
- assert(duty[0]!=-800); /* existing position->PID route resumes */
+ assert(duty[0]!=-900); /* existing position->PID route resumes */
  /* Host pressure delays diagnostics; never pop a partial set before ACKs. */
  unsigned before_detail=detail_frames;c.result_count=1;service_pid_detail(&c);assert(detail_frames==before_detail);c.result_count=0;
  c.host_connected=false;service_pid_detail(&c);assert(detail_frames==before_detail);c.host_connected=true;
