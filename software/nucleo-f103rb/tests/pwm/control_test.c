@@ -346,7 +346,21 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  reset();ready(8);feedback.valid_mask=0;advance();assert(pwm_control_service());stopped(YPWM_REASON_SENSOR);
  reset();ready(8);feedback.motor[3].current=308;feedback.motor[3].servo_error=1;advance();assert(pwm_control_service());stopped(YPWM_REASON_SENSOR);
  reset();ready(8);advance();feedback.uptime_ms=tick-51U;assert(pwm_control_service());stopped(YPWM_REASON_SENSOR);
- reset();ready(8);feedback.motor[3].temperature=60;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
+ /* Same ID, three consecutive fresh complete snapshots. Duplicates do not count. */
+ reset();ready(8);feedback.motor[3].temperature=60;
+ advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
+ /* A cold sample, missing sequence, or another motor breaks the streak. */
+ reset();ready(8);feedback.motor[3].temperature=60;advance();assert(pwm_control_service());
+ feedback.motor[3].temperature=59;advance();assert(pwm_control_service());
+ feedback.motor[3].temperature=60;advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ advance();++feedback.sequence;assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ feedback.motor[3].temperature=20;feedback.motor[4].temperature=60;
+ advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
  reset();ready(8);feedback.motor[3].voltage=49;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
  reset();ready(8);feedback.motor[3].voltage=75;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
  reset();ready(8);tick+=31;assert(pwm_control_service());stopped(YPWM_REASON_DEADLINE);

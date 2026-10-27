@@ -28,6 +28,22 @@ static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write,rollback
 /* These numerical states belong exclusively to the actuator task. */
 static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
+/* Actuator-owned: one snapshot cannot count as several hot samples. */
+static uint32_t thermal_sequence,thermal_stamp;
+static uint8_t hot_samples[12];
+static bool temperature_trip(const motor_feedback_set_t *f){
+    if(f->sequence==thermal_sequence)return false;
+    if(!thermal_sequence||f->sequence-thermal_sequence!=1U||
+       f->uptime_ms-thermal_stamp>YPWM_FEEDBACK_MAX_MS)memset(hot_samples,0,sizeof hot_samples);
+    thermal_sequence=f->sequence;thermal_stamp=f->uptime_ms;
+    bool trip=false;
+    for(unsigned i=0;i<12;++i){
+        if(f->motor[i].temperature<60U)hot_samples[i]=0;
+        else if(hot_samples[i]<3U)++hot_samples[i];
+        if(hot_samples[i]>=3U)trip=true;
+    }
+    return trip;
+}
 static uint32_t milliseconds(void){return (uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS);}
 /* Two bounded snapshots: actuator publishes latest, host drains a frozen set.
  * No allocation, motor queries, queue wait or host UART from the actuator.
@@ -90,6 +106,7 @@ static bool phase_current(uint8_t phase){
 void pwm_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
+    thermal_sequence=thermal_stamp=0;memset(hot_samples,0,sizeof hot_samples);
     trace_pending=trace_draining=false;trace_chunk=0;
     trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
@@ -373,6 +390,7 @@ static void prepare_mode(const control_context *s){
     ypwm_put16(detail+16,verified);ypwm_put16(detail+40,motor_device_register_lock_uncertain_mask());
     ypwm_put32(detail+20,milliseconds()-started);ypwm_put32(detail+56,milliseconds());detail[6]=error;
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
+    thermal_sequence=thermal_stamp=0;memset(hot_samples,0,sizeof hot_samples);
     taskENTER_CRITICAL();
     if(p.phase==YPWM_PREPARING&&p.epoch==s->epoch){
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.dirty=true;
@@ -448,8 +466,9 @@ static bool feedback_safe(const motor_feedback_set_t *f,uint32_t now){
        servo-reported fault checks, but do not latch a local current trip. */
     for(unsigned i=0;i<12;++i){const motor_feedback_t *m=&f->motor[i];
         if(!m->valid||m->servo_error||m->position<0||m->position>4095){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-        if(m->temperature>=60||m->voltage<50||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
+        if(m->voltage<50||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
     }
+    if(temperature_trip(f)){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
     return true;
 }
 static void service_pid(const control_context *s,uint32_t now){
