@@ -19,15 +19,15 @@ try:
     from isaac_lab.flat_env_cfg import YertleFlatEnvCfg
     from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy, feet_slide_sole, ActionSecondDifferencePenalty
     cfg=YertleFlatEnvCfg()
-    assert cfg.rewards.body_height_barrier.weight == -.08
-    assert cfg.rewards.body_height_barrier.params['lower_m'] == .10
-    assert cfg.rewards.body_height_barrier.params['upper_m'] == .15
+    assert cfg.rewards.body_height_barrier.weight == -.10
+    assert cfg.rewards.body_height_barrier.params['lower_m'] == .08
+    assert cfg.rewards.body_height_barrier.params['upper_m'] == .12
     assert cfg.rewards.body_height_barrier.params['transition_m'] == .02
     old=yaml.load((root/'isaac_lab/runs/yertle_flat/2026-10-11_07-22-13/params/env.yaml').read_text(),Loader=yaml.BaseLoader)['rewards']
     changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','phase_swing_clearance','action_second_difference_l2','nonsole_foot_contact_penalty','motor_operating_range_penalty','flat_orientation_l2','shoulder_posture_barrier'}
     unchanged=0
     for name,term in vars(cfg.rewards).items():
-        if not hasattr(term,'weight') or name in changed or name in ('fall_termination_penalty','body_height_barrier'):
+        if not hasattr(term,'weight') or name in changed or name in ('fall_termination_penalty','body_height_barrier','estimated_total_current_excess'):
             continue
         assert term.weight==float(old[name]['weight']),(name,term.weight,old[name]['weight'])
         unchanged+=1

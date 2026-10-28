@@ -18,6 +18,7 @@ from . import phase_generator
 from .foot_geometry import foot_sole_contact_velocities
 from .ground_contact import GroundContactPenalty
 from .motor_operating_range import MotorRawTransform, OperatingRangeCost
+from .estimated_current_reward import estimated_total_current_excess
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
 SHOULDER_NAMES = ("lf_shoulder", "rf_shoulder", "lb_shoulder", "rb_shoulder")
@@ -107,10 +108,15 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES), "lower": -0.17453292519943295, "upper": 0.17453292519943295})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.body_height_barrier = RewTerm(
-        func=body_height_barrier, weight=-0.08,
-        params={"asset_cfg": SceneEntityCfg("robot"), "lower_m": 0.10, "upper_m": 0.15, "transition_m": 0.02})
+        func=body_height_barrier, weight=-0.10,
+        params={"asset_cfg": SceneEntityCfg("robot"), "lower_m": 0.08, "upper_m": 0.12, "transition_m": 0.02})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
     rewards.energy = RewTerm(func=joint_energy_l1, weight=-2.0e-5, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
+    # Provisional 7.4-V locked-rotor ratio: not measured battery current.
+    rewards.estimated_total_current_excess = RewTerm(
+        func=estimated_total_current_excess, weight=-0.10,
+        params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 7.0,
+                "scale_a": 1.0, "asset_cfg": SceneEntityCfg("robot")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.feet_contact_forces = RewTerm(func=mdp.contact_forces, weight=-0.01, params={"threshold": 5.0, "sensor_cfg": CONTACT_SENSOR})
     rewards.diagonal_trot_gait = RewTerm(func=GaitReward, weight=0.25, params={"std": 0.1, "max_err": 0.2, "velocity_threshold": 0.05, "synced_feet_pair_names": (("lf_shin", "rb_shin"), ("rf_shin", "lb_shin")), "asset_cfg": SceneEntityCfg("robot"), "sensor_cfg": SceneEntityCfg("contact_forces")})
@@ -384,7 +390,7 @@ def stance_width_barrier(env, sensor_cfg: SceneEntityCfg, lower_m: float = 0.12,
     return _interval_barrier(torch.abs(left_y - right_y), lower_m, upper_m, transition_m) * valid
 
 
-def body_height_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower_m: float = 0.10, upper_m: float = 0.15, transition_m: float = 0.02):
+def body_height_barrier(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), lower_m: float = 0.08, upper_m: float = 0.12, transition_m: float = 0.02):
     """Low-body height interval cost, measured at the base origin above z=0.
 
     Flat-ground task only: this is not ground-relative height on rough terrain.
