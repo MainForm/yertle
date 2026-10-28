@@ -10,10 +10,12 @@ compatibility. PID telemetry's reference field now means the received goal.
 
 ## Controller
 
-- P5, I3, D0.10; I-output cap100 PWMraw, output cap900/1000.
+- P5, I0, D0.10; I-output cap100 PWMraw (inactive with Ki=0), output cap900/1000.
+- Both ordinary PWM position control and return-to-2048 use these defaults.
 - Signed error; calibrated encoder raw0..4095; no modulo/absolute-error control.
 - D is negative measured-position derivative. Fresh-sample MCU dt is used;
-  repeat samples do not integrate again. New goals retain I/D history.
+  repeat samples do not integrate again. New goals retain controller history;
+  Ki=0 means the integral contribution stays zero from a reset state.
 - Conditional integral anti-windup at output saturation remains.
 - All12 physical PWM polarity values are-1, independently of joint/raw signs.
 - The measured position uses cached position-mode calibration in PWM mode.
