@@ -22,7 +22,7 @@ int main(void){
  motor_polarity_tests();
  position_pid_config_t c=position_pid_default_config();position_pid_t p={0};int16_t out;
  assert(YPWM_DUTY_LIMIT==900&&c.duty_limit==900);
- assert(c.kp==10.0f&&c.ki==3.0f&&fabsf(c.kd-.12f)<1e-7f&&c.integral_limit==100.0f);
+ assert(c.kp==10.0f&&c.ki==3.0f&&fabsf(c.kd-.13f)<1e-7f&&c.integral_limit==100.0f);
  assert(position_pid_step(&p,&c,2098,2048,.02f,&out));assert(out==503&&p.velocity==0&&p.reference==2098&&fabsf(p.integral-3.0f)<0.001f); /* direct goal on FIRST tick */
  const float previous=p.reference;assert(position_pid_step(&p,&c,1998,2048,.02f,&out));assert(p.reference==1998&&p.reference<previous&&p.velocity==0&&out==-500);
  /* Default Ki=3 accumulates in both directions and respects the cap. */
@@ -62,10 +62,10 @@ int main(void){
  /* D follows the current measured derivative immediately, with no filter tail. */
  c=position_pid_default_config();c.kp=c.ki=0;p=(position_pid_t){0};
  assert(position_pid_step(&p,&c,2048,2048,.02f,&out)&&out==0);
- assert(position_pid_step(&p,&c,2048,2049,.02f,&out));
- assert(p.velocity==50&&fabsf(p.trace_d+6.0f)<1e-5f&&out==-6);
+ assert(position_pid_step(&p,&c,2048,2049,.01f,&out));
+ assert(p.velocity==100&&fabsf(p.trace_d+13.0f)<1e-5f&&out==-13);
  assert(position_pid_step(&p,&c,2048,2049,.02f,&out)&&p.velocity==0&&out==0);
- assert(position_pid_step(&p,&c,2048,2048,.01f,&out)&&p.velocity==-100&&fabsf(p.trace_d-12.0f)<1e-5f&&out==12);
+ assert(position_pid_step(&p,&c,2048,2048,.01f,&out)&&p.velocity==-100&&fabsf(p.trace_d-13.0f)<1e-5f&&out==13);
  c=position_pid_default_config();c.kp=5;c.kd=.1f;p=(position_pid_t){0};float q=2048,v=0;
  for(unsigned i=0;i<1000;++i){assert(position_pid_step(&p,&c,2148,(int16_t)lroundf(q),.02f,&out));
   v+=(20.0f*out-10.0f*v)*.02f;q+=v*.02f;assert(q>1900&&q<2300);}
