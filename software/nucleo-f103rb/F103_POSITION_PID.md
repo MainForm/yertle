@@ -10,7 +10,7 @@ compatibility. PID telemetry's reference field now means the received goal.
 
 ## Controller
 
-- P5, I3, D0.10; I-output cap100 PWMraw, output cap900/1000.
+- P10, I3, D1.0; I-output cap100 PWMraw, output cap900/1000.
 - Both ordinary PWM position control and return-to-2048 use these defaults.
 - Signed error; calibrated encoder raw0..4095; no modulo/absolute-error control.
 - D is negative measured-position derivative. Fresh-sample MCU dt is used;

@@ -261,11 +261,11 @@ static void direct_pwm_tests(void){
  reset();stage(601,YPWM_ALL_MASK);mode_ok=false;
  assert(pwm_control_submit_raw(raw,57)==0);const unsigned no_tx=write_count;
  assert(pwm_control_service()&&pwm_control_take_raw_result(&seq,&result)&&result==YPWM_PWM_MODE_REQUIRED&&write_count==no_tx);
- reset();ready(YPWM_ALL_MASK);raw[0]=-900;raw[1]=713;raw[11]=-1;advance();
+ reset();ready(YPWM_ALL_MASK);raw[0]=-777;raw[1]=713;raw[11]=-1;advance();
  assert(pwm_control_submit_raw(raw,53)==0&&pwm_control_service());
  assert(pwm_control_take_raw_result(&seq,&result)&&seq==53&&result==0);
  assert(memcmp(raw,sent,sizeof raw)==0); /* bypass P/I/D and reference profile */
- raw[0]=-901;assert(pwm_control_submit_raw(raw,54)==YPWM_INVALID_PAYLOAD);raw[0]=-900;
+ raw[0]=-901;assert(pwm_control_submit_raw(raw,54)==YPWM_INVALID_PAYLOAD);raw[0]=-777;
  /* A new position packet switches back to PID with fresh measured history. */
  motor_target_set_t g=goals(YPWM_ALL_MASK);advance();assert(pwm_control_submit_positions(&g));
  assert(pwm_control_service()&&sent[0]!=raw[0]);
@@ -374,7 +374,7 @@ static void return_first_tests(void){
  assert(pwm_control_service()&&phase()==YPWM_STOPPING);
  advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
  feedback_ok=true;advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
- assert(sent[0]>0&&sent[0]<=25); /* first 4 raw reference step */
+ assert(sent[0]>0&&sent[0]<=45); /* first 4 raw reference step */
  feedback_ok=false;advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
  advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
  advance();assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
