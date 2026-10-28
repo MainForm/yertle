@@ -3,7 +3,7 @@
 User-selected behavior: every exit/protection attempts calibrated raw2048
 before OFF; if recovery cannot execute or fails, fall back to OFF. Arrival
 is not guaranteed. No changes to joint/motor mapping, calibration, policy
-reference or scale, current thresholds, PWM polarity or P10/I3/D1.0 gains.
+reference or scale, current thresholds, PWM polarity or P10/I3/D0.2 gains.
 
 ## PWM / F103 PID
 
@@ -15,7 +15,7 @@ No extra torque-ON, mode/register writes, host targets, or heartbeat is needed.
 Direct PWM control enters the same calibrated position-return path.
 
 Reset reference, integral and derivative history at current measured position.
-Use existing physical motor polarity, P10/I3/D1.0, I output cap100 and PWM900;
+Use existing physical motor polarity, P10/I3/D0.2, I output cap100 and PWM900;
 center2048. Each fresh feedback sample advances the reference by up to 4 raw
 toward 2048, sampled no faster than 20ms (nominal 200 raw/s), and the reference
 lead is limited to 8 raw from the measurement. This limits the target, not actual
