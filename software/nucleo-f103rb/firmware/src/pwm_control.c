@@ -18,6 +18,7 @@ typedef struct {
     bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart,return_eligible;
     bool result_pending,arm_allowed,dirty,ever_command,mode_busy,transaction_pending,snapshot_valid,rollback_failed;
     bool preference_touched,boot_restored,flash_read_failed;
+    bool reconnect_stop_recoverable,reconnect_recovery_requested;
 } control_context;
 static control_context p;
 static motor_mode_snapshot_t previous_modes;
@@ -168,12 +169,23 @@ void pwm_control_stop(uint8_t reason){
     }else if(transitioning(p.phase)){
         p.phase=YPWM_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
     }else if(p.phase!=YPWM_STOPPING){
+        p.reconnect_stop_recoverable=p.backend==YPWM_PID&&
+            (p.phase==YPWM_READY||p.phase==YPWM_ACTIVE)&&
+            (p.verified&p.mask)==p.mask&&ypwm_mask(p.mask);
+        p.reconnect_recovery_requested=false;
         p.phase=YPWM_STOPPING;p.reason=reason;p.arm_allowed=false;
         if(p.epoch)p.retired_epoch=p.epoch;
         p.epoch=0;p.dirty=true;
         if(p.result_pending){p.result=YPWM_INVALID_STATE;}
     }
     taskEXIT_CRITICAL();host_protocol_request_pwm_stop();
+}
+void pwm_control_reconnect_recover(void){
+    taskENTER_CRITICAL();
+    if((p.phase==YPWM_STOPPING||p.phase==YPWM_FAILED)&&
+       p.reconnect_stop_recoverable&&!p.rollback_failed&&!p.flash_read_failed)
+        p.reconnect_recovery_requested=true;
+    taskEXIT_CRITICAL();
 }
 void pwm_control_connection_reset(void){const control_context s=snapshot();
     /* A restored preference is NOT a restored lease. An initial HELLO may
@@ -641,7 +653,30 @@ bool pwm_control_service(void){
         taskENTER_CRITICAL();p.snapshot_valid=false;taskEXIT_CRITICAL();
     }
     if(s.phase==YPWM_NATIVE_READY)return false;
+    /* A fresh HELLO after a completed operational stop may request a new
+     * validation. Keep rollback/flash failures latched and never arm or
+     * command motion here. A HELLO during STOPPING waits for confirmed OFF. */
+    if(s.phase==YPWM_FAILED&&s.reconnect_recovery_requested&&s.reconnect_stop_recoverable&&
+       !s.rollback_failed&&!s.flash_read_failed&&!s.unknown&&
+       host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested()){
+        taskENTER_CRITICAL();
+        if(p.phase==YPWM_FAILED&&p.reconnect_recovery_requested){
+            p.phase=YPWM_UNVERIFIED;p.boot_restored=true;p.arm_allowed=false;
+            p.reconnect_recovery_requested=false;p.reconnect_stop_recoverable=false;p.dirty=true;
+        }
+        taskEXIT_CRITICAL();return true;
+    }
     if(s.phase==YPWM_UNVERIFIED){
+        /* The actuator can run before host init. Complete the boot torque-OFF
+         * request first, then verify the persisted backend on a later pass. */
+        if(host_protocol_get_state()==HOST_FSM_BOOT)return true;
+        if(host_protocol_is_stop_requested()){
+            uint16_t unknown=YPWM_ALL_MASK;
+            const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
+            taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.dirty=true;}taskEXIT_CRITICAL();
+            if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
+            return true;
+        }
         uint16_t unknown=YPWM_ALL_MASK,verified=0;
         const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
         bool ready=off&&motor_device_verify_modes(s.backend,s.mask,&verified);
@@ -655,6 +690,7 @@ bool pwm_control_service(void){
         }
         taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.verified=verified;
             p.phase=ready?(s.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY):YPWM_FAILED;
+            if(ready){p.reason=YPWM_REASON_NONE;p.result=YPWM_OK;}
             p.arm_allowed=ready&&s.backend==YPWM_PID;p.dirty=true;}taskEXIT_CRITICAL();return true;
     }
     if(transitioning(s.phase)&&now-s.started_ms>=YPWM_PREPARATION_TIMEOUT_MS&&s.phase!=YPWM_ROLLING_BACK){

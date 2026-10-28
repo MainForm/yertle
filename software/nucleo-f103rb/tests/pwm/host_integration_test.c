@@ -11,7 +11,7 @@ static void seed_calibration(void){calibration_memory_reset();calibration_cache_
 #include "../../firmware/src/host_protocol.c"
 static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
 static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
-static unsigned detail_frames,stats_frames;
+static unsigned detail_frames,stats_frames;static bool boot_off_ok=true;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
 static motor_register_write_result_t pending_write;static bool write_ready;
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
@@ -49,7 +49,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){a
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){(void)g;++native_writes;return MOTOR_DEVICE_OK;}
-motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);torque_mask=0;return MOTOR_DEVICE_OK;}
+motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);if(!boot_off_ok)return MOTOR_DEVICE_UART_ERROR;torque_mask=0;return MOTOR_DEVICE_OK;}
 motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask|=mask;}else torque_mask&=(uint16_t)~mask;return MOTOR_DEVICE_OK;}
 bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=torque_mask;return !torque_mask;}
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){
@@ -127,6 +127,33 @@ int main(void){
  for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
  assert(!host_protocol_is_stop_requested());
  for(unsigned i=0;i<12;++i)assert(duty[i]==0);
+ /* A new connection after a completed runtime stop must revalidate the
+    persisted selection without EEPROM writes or energizing the motor. */
+ assert(!pwm_control_can_arm());
+ const unsigned recover_programs=mode_memory_programs,recover_on=on_count;
+ set_host_connected(&c,false);receive(&c,MESSAGE_HELLO,NULL,0);
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
+ assert(pwm_control_service()&&!pwm_control_can_arm()); /* request -> unverified */
+ assert(pwm_control_service()&&pwm_control_can_arm()); /* OFF/mode/PWM0/OFF */
+ uint8_t resumed[YPWM_STATUS_LENGTH];assert(pwm_control_status(resumed,true));
+ assert(resumed[7]==YPWM_REASON_NONE); /* PC beginConfiguredControl requires this */
+ assert(!torque_mask&&on_count==recover_on&&mode_memory_programs==recover_programs);
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED); /* no stale lease */
+ receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED);
+ assert(on_count==recover_on); /* no torque until an explicit new target */
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(pwm_control_service());
+ assert(on_count==recover_on+1);
+ tick+=501;assert(pwm_control_service());service_safety_state(&c);
+ /* HELLO during STOPPING is remembered, but cannot ARM or skip OFF. */
+ set_host_connected(&c,false);receive(&c,MESSAGE_HELLO,NULL,0);
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
+ for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
+ assert(!host_protocol_is_stop_requested());
+ /* Physical mode mismatch on reconnect must stay FAILED and torque OFF. */
+ servo_modes[3]=0;
+ assert(pwm_control_service()&&pwm_control_service());
+ assert(!pwm_control_can_arm()&&!torque_mask&&on_count==recover_on+1);
+ servo_modes[3]=2;
  transition(&c,YPWM_POSITION,124);assert(pwm_control_native_ready());
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==1);
  published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;mode_fail_id=2;
@@ -150,6 +177,18 @@ int main(void){
  const mode_setting_t saved={YPWM_PID,YPWM_ALL_MASK};assert(mode_store_save(&saved));
  for(unsigned i=0;i<12;++i)servo_modes[i]=2;
  const unsigned before_program=mode_memory_programs,before_on=on_count;
+ /* Boot ordering: actuator can run before host init; boot OFF must finish
+    before verification grants READY and HELLO + heartbeat can arm. */
+ memset(&c,0,sizeof c);c.state=HOST_FSM_BOOT;published_state=HOST_FSM_BOOT;
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
+ pwm_control_init();assert(pwm_control_service()&&!pwm_control_can_arm());
+ request_safe_stop();transition_state(&c,HOST_FSM_DISARMED,STATE_CAUSE_BOOT_COMPLETE,false);
+ boot_off_ok=false;assert(pwm_control_service()&&!pwm_control_can_arm());service_safety_state(&c);
+ assert(host_protocol_is_stop_requested()); /* no readiness on failed OFF */
+ boot_off_ok=true;assert(pwm_control_service()&&!pwm_control_can_arm());service_safety_state(&c);
+ assert(!host_protocol_is_stop_requested());assert(pwm_control_service()&&pwm_control_can_arm());
+ receive(&c,MESSAGE_HELLO,NULL,0);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);
+ assert(c.state==HOST_FSM_ARMED); /* no F5 and no auto torque */
  memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
  pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
  pwm_control_init();receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED);

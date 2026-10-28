@@ -866,8 +866,9 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         if(pwm_control_status(status,true))send_frame(context,MESSAGE_EVENT,status,sizeof status);
         break;
     }
-    case MESSAGE_HELLO:
+    case MESSAGE_HELLO: {
         pwm_control_connection_reset();
+        pwm_control_reconnect_recover();
         /* New connection gets a first-heartbeat grace period. Repeated HELLO
          * on an established link must not refresh the heartbeat watchdog. */
         if (!context->host_connected) context->last_host_heartbeat_tick = xTaskGetTickCount();
@@ -875,6 +876,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         send_hello_ack(context);
         send_result(context, MESSAGE_ACK, type, sequence, 0U);
         break;
+    }
     case MESSAGE_HEARTBEAT:
         if (!context->host_connected) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_NOT_CONNECTED);
@@ -961,8 +963,10 @@ void host_protocol_task(void *argument)
     (void) argument;
     context.last_host_heartbeat_tick = xTaskGetTickCount();
     context.last_f103_heartbeat_tick = context.last_host_heartbeat_tick;
-    transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_BOOT_COMPLETE, false);
+    /* Publish the boot stop before DISARMED: the higher-priority actuator
+     * must not verify a persisted mode in the gap between these operations. */
     request_safe_stop();
+    transition_state(&context, HOST_FSM_DISARMED, STATE_CAUSE_BOOT_COMPLETE, false);
 
     for (;;) {
         service_safety_state(&context);

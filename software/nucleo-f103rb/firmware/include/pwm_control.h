@@ -12,6 +12,8 @@ bool pwm_control_accepts_positions(void);
 bool pwm_control_can_arm(void);
 void pwm_control_on_armed(void);
 void pwm_control_connection_reset(void);
+/* Request re-verification only for a new host connection, never motor motion. */
+void pwm_control_reconnect_recover(void);
 void pwm_control_stop(uint8_t reason);
 uint8_t pwm_control_request_mode(const uint8_t *p,size_t n,uint16_t sequence);
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode);
