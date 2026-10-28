@@ -10,12 +10,12 @@ compatibility. PID telemetry's reference field now means the received goal.
 
 ## Controller
 
-- P5, I0, D0.10; I-output cap100 PWMraw (inactive with Ki=0), output cap900/1000.
+- P5, I3, D0.10; I-output cap100 PWMraw, output cap900/1000.
 - Both ordinary PWM position control and return-to-2048 use these defaults.
 - Signed error; calibrated encoder raw0..4095; no modulo/absolute-error control.
 - D is negative measured-position derivative. Fresh-sample MCU dt is used;
   repeat samples do not integrate again. New goals retain controller history;
-  Ki=0 means the integral contribution stays zero from a reset state.
+  Ki=3 accumulates error subject to the I-output cap and anti-windup.
 - Conditional integral anti-windup at output saturation remains.
 - All12 physical PWM polarity values are-1, independently of joint/raw signs.
 - The measured position uses cached position-mode calibration in PWM mode.
@@ -48,8 +48,9 @@ torqueOFF and read it back; PWM0 alone is never treated as OFF proof.
   Actual positive forward MCU time deltas are used; duplicate samples do not
   integrate. Zero/backward time and nonfinite/invalid data are still rejected.
 - Goal/current raw must remain0..4095; absolute PID goal error>512raw rejects
-  the step. **This now compares the direct received goal**, including2048 return.
-- All12 feedback valid, no servo error, voltage5.0..7.4V.
+  the step. Normal control uses the direct received goal; return-to-2048 uses
+  a feedback-limited reference advanced toward center.
+- All12 feedback valid, no servo error, voltage greater than 4.0V and at most 7.4V.
 - Same motor>=60C on three successive fresh feedback sets triggers stop.
 - Current limits are PC-only: any motor>=2A or sum of absolute feedback>6A.
   F103 has no duplicate per-motor/summed current cutoff.

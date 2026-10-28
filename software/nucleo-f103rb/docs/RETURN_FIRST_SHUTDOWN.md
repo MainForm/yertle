@@ -15,12 +15,18 @@ No extra torque-ON, mode/register writes, host targets, or heartbeat is needed.
 Direct PWM control enters the same calibrated position-return path.
 
 Reset reference, integral and derivative history at current measured position.
-Use existing physical motor polarity, P5/I3/D0.10, I output cap100 and PWM800;
-center2048, speed200encoder steps/s, ACC50. All12 motors must be within16raw
+Use existing physical motor polarity, P5/I3/D0.10, I output cap100 and PWM900;
+center2048. Each fresh feedback sample advances the reference by up to 4 raw
+toward 2048, sampled no faster than 20ms (nominal 200 raw/s), and the reference
+lead is limited to 8 raw from the measurement. This limits the target, not actual
+physical speed. All12 motors must be within16raw
 on3 fresh snapshots before declaring centered. Duplicate samples never advance
 the controller or settlement. Lack of12raw progress for500ms,15s total elapsed,
-invalid/stale feedback, invalid calibration, voltage outside5.0..7.4V,
-three fresh >=60C samples, PID or motorTX failure ends the attempt. Persistent
+three consecutive missing, invalid or stale feedback checks (20ms apart),
+voltage at or below 4.0V or above 7.4V,
+three fresh >=60C samples, PID or motorTX failure ends the attempt. The first two
+feedback failures pause output at PWM0; a successful sample resets the count.
+Persistent
 hot feedback is re-evaluated during recovery too. Follow with PWM0, explicit
 torqueOFF and OFF readback. A failed OFF is retried without restarting return.
 

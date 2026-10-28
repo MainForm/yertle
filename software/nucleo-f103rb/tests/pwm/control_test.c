@@ -357,13 +357,38 @@ static void return_first_tests(void){
  assert(pwm_control_submit_positions(&g)&&pwm_control_service());
  uint8_t trace[64];assert(pwm_control_pid_detail(trace));assert(trace[40]&64U);
 
+ /* Return path must permit 4.1V and fall back to OFF at 4.0V. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;feedback.motor[0].voltage=41;
+ pwm_control_stop(YPWM_REASON_RELEASE);assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ feedback.motor[0].voltage=40;advance();assert(pwm_control_service()&&phase()==YPWM_FAILED);
+ assert(pwm_control_stop_detail(detail)&&detail[2]==5&&servo_torque_on==0);
  /* A mechanically stalled motor and stale sensor both fall back to OFF. */
  reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;pwm_control_stop(YPWM_REASON_RELEASE);
  for(unsigned a=0;a<30&&phase()==YPWM_STOPPING;++a){advance();assert(pwm_control_service());}
  assert(phase()==YPWM_FAILED&&completed==1);
  assert(pwm_control_stop_detail(detail)&&detail[2]==7);
- reset();ready(YPWM_ALL_MASK);feedback_ok=false;pwm_control_stop(YPWM_REASON_SENSOR);
- assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
+ /* Read failures count once per 20ms, recover on a good sample. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;
+ pwm_control_stop(YPWM_REASON_SENSOR);const unsigned off_before=off_count;feedback_ok=false;
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING&&off_count==off_before);
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ feedback_ok=true;advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ assert(sent[0]>0&&sent[0]<=25); /* first 4 raw reference step */
+ feedback_ok=false;advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
+ assert(pwm_control_stop_detail(detail)&&detail[2]==4);
+ /* Incomplete samples also need three failed opportunities. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;pwm_control_stop(YPWM_REASON_RELEASE);
+ feedback.valid_mask=0;assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ advance();assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
+ /* A frozen sequence is eventually a failure. */
+ reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;pwm_control_stop(YPWM_REASON_RELEASE);
+ assert(pwm_control_service()&&phase()==YPWM_STOPPING);
+ for(unsigned i=0;i<2;++i){tick+=20;assert(pwm_control_service()&&phase()==YPWM_STOPPING);}
+ tick+=20;assert(pwm_control_service()&&phase()==YPWM_FAILED&&servo_torque_on==0);
  /* Nonzero calibration must be removed before checking the raw2048 center. */
  reset();ready(YPWM_ALL_MASK);const uint8_t offset[2]={100,0};
  assert(calibration_cache_observe(1,31,offset,2));feedback.motor[0].position=2148;
@@ -445,7 +470,10 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
  advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
  advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
- reset();ready(8);feedback.motor[3].voltage=49;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
+ /* 4.1V remains active; 4.0V or below triggers shutdown. */
+ reset();ready(8);feedback.motor[3].voltage=41;advance();assert(pwm_control_service()&&phase()==YPWM_ACTIVE);
+ reset();ready(8);feedback.motor[3].voltage=40;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
+ reset();ready(8);feedback.motor[3].voltage=39;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
  reset();ready(8);feedback.motor[3].voltage=75;advance();assert(pwm_control_service());stopped(YPWM_REASON_THERMAL_VOLTAGE);
  reset();ready(8);advance();write_ok=false;assert(pwm_control_service());write_ok=true;stopped(YPWM_REASON_DRIVER);
  reset();ready(8);pwm_control_stop(YPWM_REASON_RELEASE);off_ok=false;

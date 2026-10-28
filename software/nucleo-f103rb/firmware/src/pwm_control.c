@@ -34,8 +34,10 @@ static uint32_t thermal_sequence;
 static uint8_t hot_samples[12];
 /* Actuator-owned shutdown. Repeated host/fault requests must not restart it. */
 static struct {
-    bool initialized,off_only;
-    uint8_t settled,outcome;
+    bool initialized,off_only,reference_valid,feedback_paused;
+    uint8_t settled,outcome,feedback_failures;
+    int16_t reference[12];
+    uint32_t next_feedback_check;
     uint16_t max_error;
     uint32_t started,last_sequence,last_stamp,last_progress[12];
     uint16_t best_error[12];
@@ -499,52 +501,87 @@ static void service_stop(const control_context *s){
         returning.outcome=returning.off_only?3U:1U;
         publish_stop(s,now,true);
         memset(axes,0,sizeof axes);
+        returning.next_feedback_check=now;
         thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
         for(unsigned i=0;i<12;++i){returning.best_error[i]=UINT16_MAX;returning.last_progress[i]=now;}
     }
     if(!returning.off_only){
-        motor_feedback_set_t f;imu_feedback_t imu;
-        bool valid=sensor_get_feedback_snapshot(&f,&imu)&&f.sequence&&
-            f.valid_mask==YPWM_ALL_MASK;
-        if(now-returning.started>=15000U||!valid){returning.off_only=true;returning.outcome=valid?8U:4U;}
-        else if(f.sequence!=returning.last_sequence){
-            const uint32_t dt_ms=returning.last_sequence?f.uptime_ms-returning.last_stamp:20U;
-            int16_t out[12]={0};bool centered=true;
-            if(!dt_ms||(dt_ms&0x80000000UL)){returning.off_only=true;returning.outcome=4;}
-            returning.max_error=0;
-            for(unsigned i=0;i<12&&!returning.off_only;++i){
-                const motor_feedback_t *m=&f.motor[i];int16_t measured=m->position;
-                if(!m->valid||m->servo_error||m->position<0||m->position>4095||m->voltage<50||m->voltage>74||
-                   ((s->mask&(1U<<i))&&!calibration_cache_position((uint8_t)(i+1U),m->position,&measured))){
-                    returning.off_only=true;returning.outcome=(m->voltage<50||m->voltage>74)?5U:4U;break;
+        motor_feedback_set_t f={0};imu_feedback_t imu;
+        if(now-returning.started>=15000U){returning.off_only=true;returning.outcome=8U;}
+        else if((int32_t)(now-returning.next_feedback_check)<0)return;
+        else {
+            /* One read opportunity per 20ms: a repeated snapshot is not a new
+             * position measurement, and cannot be counted repeatedly at 10ms. */
+            returning.next_feedback_check=now+20U;
+            bool valid=sensor_get_feedback_snapshot(&f,&imu)&&f.sequence&&
+                f.sequence!=returning.last_sequence&&f.valid_mask==YPWM_ALL_MASK;
+            int16_t measured[12]={0};
+            if(valid){
+                const uint32_t dt=returning.last_sequence?f.uptime_ms-returning.last_stamp:20U;
+                if(!dt||(dt&0x80000000UL))valid=false;
+                for(unsigned i=0;i<12&&valid;++i){
+                    const motor_feedback_t *m=&f.motor[i];measured[i]=m->position;
+                    if(!m->valid||m->position<0||m->position>4095||
+                       ((s->mask&(1U<<i))&&!calibration_cache_position((uint8_t)(i+1U),m->position,&measured[i])))valid=false;
                 }
-                const uint16_t error=(uint16_t)(measured>2048?measured-2048:2048-measured);
-                if(error>returning.max_error)returning.max_error=error;
-                if(error>16U)centered=false;
-                if(error<=16U||returning.best_error[i]==UINT16_MAX||error+12U<=returning.best_error[i]){
-                    returning.best_error[i]=error;returning.last_progress[i]=now;
-                }
-                /* Native axes in a partial PWM bench mask must already be at
-                 * center: never send PWM or a native packet to the wrong mode. */
-                if(!(s->mask&(1U<<i))){if(error>16U){returning.off_only=true;returning.outcome=3;}continue;}
-                position_pid_config_t config=position_pid_default_config();
-                config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
-                if(!position_pid_step(&axes[i],&config,2048,measured,(float)dt_ms*.001f,&out[i])){
-                    returning.off_only=true;returning.outcome=9;}
             }
-            returning.last_sequence=f.sequence;returning.last_stamp=f.uptime_ms;
-            if(!returning.off_only&&temperature_trip(&f)){returning.off_only=true;returning.outcome=6;}
-            for(unsigned i=0;i<12;++i)if(!returning.off_only&&now-returning.last_progress[i]>=500U){returning.off_only=true;returning.outcome=7;}
-            returning.settled=centered?(uint8_t)(returning.settled+1U):0U;
-            if(!returning.off_only&&returning.settled>=3U){returning.off_only=true;returning.outcome=2;}
-            if(!returning.off_only&&phase_current(YPWM_STOPPING)){
-                if(motor_device_write_pwm(s->mask,out)==MOTOR_DEVICE_OK){
-                    taskENTER_CRITICAL();memcpy(p.sent,out,sizeof out);p.dirty=true;taskEXIT_CRITICAL();
-                    publish_stop(s,now,false);return;
+            if(!valid){
+                /* Stop applying the last drive output while feedback is absent.
+                 * PWM zero does not disable torque; explicit OFF occurs on the
+                 * third failed opportunity or other existing protection. */
+                if(!returning.feedback_paused){
+                    const int16_t zero_pwm[12]={0};
+                    if(motor_device_write_pwm(s->mask,zero_pwm)!=MOTOR_DEVICE_OK){returning.off_only=true;returning.outcome=10U;}
+                    returning.feedback_paused=true;
                 }
-                returning.off_only=true;returning.outcome=10;
+                if(returning.feedback_failures<3U)++returning.feedback_failures;
+                if(returning.feedback_failures>=3U){returning.off_only=true;returning.outcome=4U;}
+                if(!returning.off_only)return;
+            } else {
+                const uint32_t dt_ms=returning.last_sequence?f.uptime_ms-returning.last_stamp:20U;
+                int16_t out[12]={0};bool centered=true;
+                returning.feedback_failures=0;returning.feedback_paused=false;returning.max_error=0;
+                for(unsigned i=0;i<12&&!returning.off_only;++i){
+                    const motor_feedback_t *m=&f.motor[i];
+                    if(m->servo_error||m->voltage<=40||m->voltage>74){
+                        returning.off_only=true;returning.outcome=(m->voltage<=40||m->voltage>74)?5U:4U;break;
+                    }
+                    const uint16_t error=(uint16_t)(measured[i]>2048?measured[i]-2048:2048-measured[i]);
+                    if(error>returning.max_error)returning.max_error=error;
+                    if(error>16U)centered=false;
+                    if(error<=16U||returning.best_error[i]==UINT16_MAX||error+12U<=returning.best_error[i]){
+                        returning.best_error[i]=error;returning.last_progress[i]=now;
+                    }
+                    if(!(s->mask&(1U<<i))){if(error>16U){returning.off_only=true;returning.outcome=3U;}continue;}
+                    if(!returning.reference_valid)returning.reference[i]=measured[i];
+                    int ref=returning.reference[i];
+                    if(ref<2048)ref=(ref+4<2048)?ref+4:2048;
+                    else if(ref>2048)ref=(ref-4>2048)?ref-4:2048;
+                    /* Limit lead relative to measured position, preventing a
+                     * queued reference from running ahead of a stalled motor. */
+                    if(ref>measured[i]+8)ref=measured[i]+8;
+                    if(ref<measured[i]-8)ref=measured[i]-8;
+                    returning.reference[i]=(int16_t)ref;
+                    position_pid_config_t config=position_pid_default_config();
+                    config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
+                    if(!position_pid_step(&axes[i],&config,(uint16_t)ref,measured[i],(float)dt_ms*.001f,&out[i])){
+                        returning.off_only=true;returning.outcome=9U;
+                    }
+                }
+                returning.reference_valid=true;returning.last_sequence=f.sequence;returning.last_stamp=f.uptime_ms;
+                if(!returning.off_only&&temperature_trip(&f)){returning.off_only=true;returning.outcome=6;}
+                for(unsigned i=0;i<12;++i)if(!returning.off_only&&now-returning.last_progress[i]>=500U){returning.off_only=true;returning.outcome=7;}
+                returning.settled=centered?(uint8_t)(returning.settled+1U):0U;
+                if(!returning.off_only&&returning.settled>=3U){returning.off_only=true;returning.outcome=2;}
+                if(!returning.off_only&&phase_current(YPWM_STOPPING)){
+                    if(motor_device_write_pwm(s->mask,out)==MOTOR_DEVICE_OK){
+                        taskENTER_CRITICAL();memcpy(p.sent,out,sizeof out);p.dirty=true;taskEXIT_CRITICAL();
+                        publish_stop(s,now,false);return;
+                    }
+                    returning.off_only=true;returning.outcome=10;
+                }
             }
-        }else return; /* No duplicate integration; return timeout/progress bounds remain. */
+        }
     }
     const int16_t zero[12]={0};bool zero_sent=false;
     /* PWM0 and torqueOFF are separate writes; PWM0 alone can enable torque. */
@@ -565,7 +602,7 @@ static bool feedback_safe(const motor_feedback_set_t *f){
        servo-reported fault checks, but do not latch a local current trip. */
     for(unsigned i=0;i<12;++i){const motor_feedback_t *m=&f->motor[i];
         if(!m->valid||m->servo_error||m->position<0||m->position>4095){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-        if(m->voltage<50||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
+        if(m->voltage<=40||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
     }
     if(temperature_trip(f)){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
     return true;
