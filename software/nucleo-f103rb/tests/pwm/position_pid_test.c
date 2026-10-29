@@ -11,7 +11,7 @@ static void motor_polarity_tests(void){
   position_pid_config_t config=position_pid_default_config();position_pid_t pid={0};int16_t out=0;
   config.polarity=position_pid_motor_polarity(id);assert(config.polarity==expected[id-1]);
   assert(position_pid_step(&pid,&config,(uint16_t)(2048+sign*100),2048,.02f,&out));
-  assert(pid.trace_error==sign*100&&pid.trace_p==sign*1000&&pid.trace_d==0);
+  assert(pid.trace_error==sign*100&&pid.trace_p==sign*700&&pid.trace_d==0);
   assert(out*sign*expected[id-1]>0); /* signed error retained, only final output reverses */
   assert(((pid.trace_flags&32)!=0)==(expected[id-1]<0));
   position_pid_reset(&pid,2048);
@@ -22,15 +22,15 @@ int main(void){
  motor_polarity_tests();
  position_pid_config_t c=position_pid_default_config();position_pid_t p={0};int16_t out;
  assert(YPWM_DUTY_LIMIT==900&&c.duty_limit==900);
- assert(c.kp==10.0f&&c.ki==3.0f&&fabsf(c.kd-.13f)<1e-7f&&c.integral_limit==100.0f);
- assert(position_pid_step(&p,&c,2098,2048,.02f,&out));assert(out==503&&p.velocity==0&&p.reference==2098&&fabsf(p.integral-3.0f)<0.001f); /* direct goal on FIRST tick */
- const float previous=p.reference;assert(position_pid_step(&p,&c,1998,2048,.02f,&out));assert(p.reference==1998&&p.reference<previous&&p.velocity==0&&out==-500);
+ assert(c.kp==7.0f&&c.ki==3.0f&&fabsf(c.kd-.13f)<1e-7f&&c.integral_limit==100.0f);
+ assert(position_pid_step(&p,&c,2098,2048,.02f,&out));assert(out==353&&p.velocity==0&&p.reference==2098&&fabsf(p.integral-3.0f)<0.001f); /* direct goal on FIRST tick */
+ const float previous=p.reference;assert(position_pid_step(&p,&c,1998,2048,.02f,&out));assert(p.reference==1998&&p.reference<previous&&p.velocity==0&&out==-350);
  /* Default Ki=3 accumulates in both directions and respects the cap. */
  p=(position_pid_t){0};
  for(unsigned i=0;i<250;++i)assert(position_pid_step(&p,&c,2098,2048,.02f,&out));
- assert(out==600&&fabsf(p.integral-100.0f)<0.001f);
+ assert(out==450&&fabsf(p.integral-100.0f)<0.001f);
  for(unsigned i=0;i<250;++i)assert(position_pid_step(&p,&c,1998,2048,.02f,&out));
- assert(out==-600&&fabsf(p.integral+100.0f)<0.001f);
+ assert(out==-450&&fabsf(p.integral+100.0f)<0.001f);
  p=(position_pid_t){0};c.kp=100;c.ki=20;
  assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out==900&&(p.trace_flags&2)&&!(p.trace_flags&4)); /* no ramp from zero */
  for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out<=900&&out>=-900);}

@@ -4,7 +4,7 @@
 #include <string.h>
 static float clamp(float value,float low,float high){return value<low?low:(value>high?high:value);}
 position_pid_config_t position_pid_default_config(void){
-    const position_pid_config_t config={10.0f,3.0f,0.13f,100.0f,YPWM_DUTY_LIMIT,1};
+    const position_pid_config_t config={7.0f,3.0f,0.13f,100.0f,YPWM_DUTY_LIMIT,1};
     return config;
 }
 int8_t position_pid_motor_polarity(uint8_t motor_id){
