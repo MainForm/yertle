@@ -37,7 +37,6 @@ bool position_pid_step(position_pid_t *pid,const position_pid_config_t *c,uint16
     pid->velocity=((float)measured-pid->previous_position)/dt;
     pid->previous_position=(float)measured;
     const float error=pid->reference-(float)measured;
-    if(fabsf(error)>(float)YPWM_FOLLOWING_ERROR_LIMIT)return false;
     const float integral_unclipped=pid->integral+c->ki*error*dt;
     const float candidate=clamp(integral_unclipped,-c->integral_limit,c->integral_limit);
     const float without_i=c->kp*error-c->kd*pid->velocity;

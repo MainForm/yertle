@@ -45,8 +45,11 @@ int main(void){
  assert(p.integral>99.9f&&p.integral<=100.0f);
  position_pid_reset(&p,2048);assert(p.integral==0&&p.velocity==0&&p.output==0);
  c=position_pid_default_config();p=(position_pid_t){0};
- assert(!position_pid_step(&p,&c,3000,2048,.02f,&out)); /* existing 512-raw guard now checks DIRECT goal */
- assert(p.reference==3000);
+ assert(YPWM_FOLLOWING_ERROR_LIMIT==0U); /* reported as disabled */
+ assert(position_pid_step(&p,&c,3000,2048,.02f,&out));
+ assert(p.reference==3000&&p.trace_error==952&&out==900);
+ p=(position_pid_t){0};assert(position_pid_step(&p,&c,0,4095,.02f,&out));
+ assert(p.trace_error==-4095&&out==-900); /* full valid range still clamps duty */
  assert(!position_pid_step(&p,&c,4096,2048,.02f,&out));
  assert(!position_pid_step(&p,&c,2048,2048,NAN,&out));
  assert(position_pid_step(&p,&c,2048,2048,.051f,&out));

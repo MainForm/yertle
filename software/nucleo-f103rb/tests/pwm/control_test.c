@@ -449,7 +449,9 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  reset();ready(8);assert(sent[3]<0&&sent[0]==0);unsigned writes=write_count;tick+=10;assert(pwm_control_service()&&write_count==writes); /* duplicate sample */
  advance();assert(pwm_control_service());assert(sent[3]<0); /* updated sample */
  tick+=500;assert(pwm_control_service());stopped(YPWM_REASON_TTL);assert(prepare(123,8)==YPWM_STALE_EPOCH);
- reset();ready(8);feedback.motor[3].position=1000;advance();assert(pwm_control_service());stopped(YPWM_REASON_TRAVEL);
+ reset();ready(8);feedback.motor[3].position=1000;advance();
+ assert(pwm_control_service()&&phase()==YPWM_ACTIVE&&!stop_requested);
+ assert(sent[3]>=-YPWM_DUTY_LIMIT&&sent[3]<=YPWM_DUTY_LIMIT); /* large error does not stop */
  current_is_host_owned(307,false);current_is_host_owned(308,false);current_is_host_owned(309,false);
  current_is_host_owned(-308,false);current_is_host_owned(INT16_MIN,false);current_is_host_owned(INT16_MAX,false);
  current_is_host_owned(77,true);current_is_host_owned(-77,true); /* absolute sum924raw */
