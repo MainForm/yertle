@@ -21,7 +21,7 @@ static void motor_polarity_tests(void){
 int main(void){
  motor_polarity_tests();
  position_pid_config_t c=position_pid_default_config();position_pid_t p={0};int16_t out;
- assert(YPWM_DUTY_LIMIT==900&&c.duty_limit==900);
+ assert(YPWM_DUTY_LIMIT==1000&&c.duty_limit==1000);
  assert(c.kp==7.0f&&c.ki==3.0f&&fabsf(c.kd-.13f)<1e-7f&&c.integral_limit==100.0f);
  assert(position_pid_step(&p,&c,2098,2048,.02f,&out));assert(out==353&&p.velocity==0&&p.reference==2098&&fabsf(p.integral-3.0f)<0.001f); /* direct goal on FIRST tick */
  const float previous=p.reference;assert(position_pid_step(&p,&c,1998,2048,.02f,&out));assert(p.reference==1998&&p.reference<previous&&p.velocity==0&&out==-350);
@@ -32,14 +32,14 @@ int main(void){
  for(unsigned i=0;i<250;++i)assert(position_pid_step(&p,&c,1998,2048,.02f,&out));
  assert(out==-450&&fabsf(p.integral+100.0f)<0.001f);
  p=(position_pid_t){0};c.kp=100;c.ki=20;
- assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out==900&&(p.trace_flags&2)&&!(p.trace_flags&4)); /* no ramp from zero */
- for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out<=900&&out>=-900);}
- assert(out==900);assert((p.trace_flags&3)==3&&!(p.trace_flags&4)&&p.trace_p>900&&p.trace_d==0);
+ assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out==1000&&(p.trace_flags&2)&&!(p.trace_flags&4)); /* no ramp from zero */
+ for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,2148,2048,.02f,&out));assert(out<=1000&&out>=-1000);}
+ assert(out==1000);assert((p.trace_flags&3)==3&&!(p.trace_flags&4)&&p.trace_p>1000&&p.trace_d==0);
  assert(fabsf(p.integral)<.01f); /* saturating P must not accumulate I */
- assert(position_pid_step(&p,&c,1948,2048,.02f,&out));assert(out==-900&&!(p.trace_flags&4)); /* immediate full reversal */
- for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,1948,2048,.02f,&out));assert(out<=900&&out>=-900);}
- assert(out==-900&&fabsf(p.integral)<.01f);
- c.duty_limit=901;assert(!position_pid_step(&p,&c,2148,2048,.02f,&out));
+ assert(position_pid_step(&p,&c,1948,2048,.02f,&out));assert(out==-1000&&!(p.trace_flags&4)); /* immediate full reversal */
+ for(unsigned i=0;i<100;++i){assert(position_pid_step(&p,&c,1948,2048,.02f,&out));assert(out<=1000&&out>=-1000);}
+ assert(out==-1000&&fabsf(p.integral)<.01f);
+ c.duty_limit=1001;assert(!position_pid_step(&p,&c,2148,2048,.02f,&out));
  c=position_pid_default_config();c.kp=0;c.kd=0;c.ki=10;p=(position_pid_t){0};
  for(unsigned i=0;i<100;++i)assert(position_pid_step(&p,&c,2058,2048,.02f,&out));
  assert(p.integral>99.9f&&p.integral<=100.0f);
@@ -47,9 +47,9 @@ int main(void){
  c=position_pid_default_config();p=(position_pid_t){0};
  assert(YPWM_FOLLOWING_ERROR_LIMIT==0U); /* reported as disabled */
  assert(position_pid_step(&p,&c,3000,2048,.02f,&out));
- assert(p.reference==3000&&p.trace_error==952&&out==900);
+ assert(p.reference==3000&&p.trace_error==952&&out==1000);
  p=(position_pid_t){0};assert(position_pid_step(&p,&c,0,4095,.02f,&out));
- assert(p.trace_error==-4095&&out==-900); /* full valid range still clamps duty */
+ assert(p.trace_error==-4095&&out==-1000); /* full valid range still clamps duty */
  assert(!position_pid_step(&p,&c,4096,2048,.02f,&out));
  assert(!position_pid_step(&p,&c,2048,2048,NAN,&out));
  assert(position_pid_step(&p,&c,2048,2048,.051f,&out));
