@@ -86,6 +86,9 @@ int main(void){
  {unsigned before3=bus_tx[1];failing_bus=0;
   assert(motor_device_set_torque(false)==MOTOR_DEVICE_UART_ERROR);
   assert(bus_tx[1]==before3+1);failing_bus=-1;}
+ {unsigned before1=bus_tx[0];failing_bus=1;
+  assert(motor_device_set_torque(false)==MOTOR_DEVICE_UART_ERROR);
+  assert(bus_tx[0]==before1+1);failing_bus=-1;}
  {unsigned before1=bus_tx[0],before3=bus_tx[1];motor_target_set_t goals={0};
   for(unsigned i=0;i<12;++i){goals.motor[i].position=2048+i;goals.motor[i].speed=200;goals.motor[i].acceleration=10;}
   assert(motor_device_write_targets(&goals)==MOTOR_DEVICE_OK);

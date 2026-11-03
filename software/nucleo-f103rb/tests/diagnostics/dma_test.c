@@ -25,6 +25,8 @@ DMA_Channel_Type test_dma2,test_dma3;
 uint32_t SystemCoreClock=64000000U;
 static uint32_t tick=1000U;
 static bool complete_tx, inject_sync;
+static int blocked_bus=-1;
+static bool wrong_bus_reply;
 static uint8_t motion_reply_error, current_reply_error;
 static int omit_id;
 static unsigned tx_simulations;
@@ -80,7 +82,7 @@ void vTaskDelay(uint32_t ticks) {
     DMA_Channel_Type *tx=which?DMA1_Channel2:DMA1_Channel4;
     DMA_Channel_Type *rx=which?DMA1_Channel3:DMA1_Channel5;
     USART_Type *uart=which?USART3:USART1;
-    if (complete_tx && (tx->CCR & DMA_CCR_EN) && tx->CNDTR) {
+    if (complete_tx && (int)which!=blocked_bus && (tx->CCR & DMA_CCR_EN) && tx->CNDTR) {
         /* Verify RX ready when TX starts, before generating a reply. */
         assert(rx->CCR & DMA_CCR_EN);
         assert(uart->CR3 & USART_CR3_DMAR);
@@ -94,7 +96,7 @@ void vTaskDelay(uint32_t ticks) {
             uint8_t packets[256]; size_t size=0;
             for (unsigned i=7;i<tx_length-1U;++i){uint8_t id=q[i];
                 assert(motor_bus_for_id(id)==(which?MOTOR_BUS_USART3:MOTOR_BUS_USART1));
-                if(id!=omit_id)size+=reply(packets+size,id,q[6]);}
+                if(id!=omit_id)size+=reply(packets+size,wrong_bus_reply&&!which&&id==1U?7U:id,q[6]);}
             if(which)inject_bytes3(packets,size);else inject_bytes(packets,size);
         }
         if (inject_offset && q[4]==0x02) {
@@ -242,6 +244,14 @@ int main(void) {
     assert(transport_words[6]==1 && transport_words[7]==1 && transport_words[5]==1);
     assert(transport_words[8]==8 && transport_words[9]==6);
     assert(transport_words[10]==2 && transport_words[11]==1);
+    omit_id=0;wrong_bus_reply=true;
+    assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
+    assert(feedback.valid_mask==0xffeU);wrong_bus_reply=false;
+    blocked_bus=1;
+    assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
+    assert(feedback.valid_mask==0x03fU);blocked_bus=0;
+    assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
+    assert(feedback.valid_mask==0xfc0U);blocked_bus=-1;
     motor_position_offset_t offset;
     const unsigned before_invalid=tx_simulations;
     assert(motor_device_read_position_offset(0U,&offset)==MOTOR_DEVICE_INVALID_ARGUMENT);
