@@ -27,7 +27,7 @@ try:
     changed={'feet_air_time','track_lin_vel_xy_cauchy','track_ang_vel_z_cauchy','phase_unscheduled_contact_penalty','phase_swing_clearance','action_second_difference_l2','nonsole_foot_contact_penalty','motor_operating_range_penalty','flat_orientation_l2','shoulder_posture_barrier'}
     unchanged=0
     for name,term in vars(cfg.rewards).items():
-        if not hasattr(term,'weight') or name in changed or name in ('fall_termination_penalty','body_height_barrier','estimated_total_current_excess'):
+        if not hasattr(term,'weight') or name in changed or name in ('fall_termination_penalty','body_height_barrier','estimated_total_current_excess','estimated_leg_current_excess'):
             continue
         assert term.weight==float(old[name]['weight']),(name,term.weight,old[name]['weight'])
         unchanged+=1

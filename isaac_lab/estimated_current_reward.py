@@ -12,8 +12,8 @@ from isaaclab.managers import SceneEntityCfg
 LEGS = ('lf', 'rf', 'lb', 'rb')
 
 
-def estimated_motor_current_sum(env, amp_per_nm: float, asset_cfg=SceneEntityCfg('robot')):
-    """Return per-environment sum of absolute torque-derived current proxies [A]."""
+def estimated_leg_current_sums(env, amp_per_nm: float, asset_cfg=SceneEntityCfg('robot')):
+    """Return torque-derived current proxy [A] per leg in LEGS order."""
     if not math.isfinite(amp_per_nm) or amp_per_nm <= 0:
         raise ValueError('amp_per_nm must be finite and positive')
     robot = env.scene[asset_cfg.name]
@@ -23,13 +23,18 @@ def estimated_motor_current_sum(env, amp_per_nm: float, asset_cfg=SceneEntityCfg
         raise ValueError('torque layout must match joint_names')
     indices = {f'{leg}_{kind}': names.index(f'{leg}_{kind}')
                for leg in LEGS for kind in ('shoulder', 'thigh', 'shin')}
-    motors = []
+    legs = []
     for leg in LEGS:
         shoulder = torque[:, indices[f'{leg}_shoulder']]
         thigh = torque[:, indices[f'{leg}_thigh']]
         shin = torque[:, indices[f'{leg}_shin']]
-        motors.extend((shoulder, thigh - shin, shin))
-    return torch.stack(motors, dim=-1).abs().sum(dim=-1) * amp_per_nm
+        legs.append(shoulder.abs() + (thigh - shin).abs() + shin.abs())
+    return torch.stack(legs, dim=-1) * amp_per_nm
+
+
+def estimated_motor_current_sum(env, amp_per_nm: float, asset_cfg=SceneEntityCfg('robot')):
+    """Return per-environment sum of all four leg current proxies [A]."""
+    return estimated_leg_current_sums(env, amp_per_nm, asset_cfg).sum(dim=-1)
 
 
 def estimated_total_current_excess(env, amp_per_nm: float, threshold_a: float = 7.0,
@@ -41,3 +46,14 @@ def estimated_total_current_excess(env, amp_per_nm: float, threshold_a: float = 
         raise ValueError('scale_a must be finite and positive')
     total = estimated_motor_current_sum(env, amp_per_nm, asset_cfg)
     return torch.square(torch.clamp_min(total - threshold_a, 0.0) / scale_a)
+
+
+def estimated_leg_current_excess(env, amp_per_nm: float, threshold_a: float = 3.0,
+                                 scale_a: float = 1.0, asset_cfg=SceneEntityCfg('robot')):
+    """Sum squared normalized excesses over the four independent leg limits."""
+    if not math.isfinite(threshold_a) or threshold_a < 0:
+        raise ValueError('threshold_a must be finite and nonnegative')
+    if not math.isfinite(scale_a) or scale_a <= 0:
+        raise ValueError('scale_a must be finite and positive')
+    currents = estimated_leg_current_sums(env, amp_per_nm, asset_cfg)
+    return torch.square(torch.clamp_min(currents - threshold_a, 0.0) / scale_a).sum(dim=-1)

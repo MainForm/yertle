@@ -18,7 +18,7 @@ from . import phase_generator
 from .foot_geometry import foot_sole_contact_velocities
 from .ground_contact import GroundContactPenalty
 from .motor_operating_range import MotorRawTransform, OperatingRangeCost
-from .estimated_current_reward import estimated_total_current_excess
+from .estimated_current_reward import estimated_total_current_excess, estimated_leg_current_excess
 
 FOOT_NAMES = ("lf_shin", "rf_shin", "lb_shin", "rb_shin")
 SHOULDER_NAMES = ("lf_shoulder", "rf_shoulder", "lb_shoulder", "rb_shoulder")
@@ -115,7 +115,11 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     # Provisional 7.4-V locked-rotor ratio: not measured battery current.
     rewards.estimated_total_current_excess = RewTerm(
         func=estimated_total_current_excess, weight=-0.10,
-        params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 7.0,
+        params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 8.0,
+                "scale_a": 1.0, "asset_cfg": SceneEntityCfg("robot")})
+    rewards.estimated_leg_current_excess = RewTerm(
+        func=estimated_leg_current_excess, weight=-0.10,
+        params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 3.0,
                 "scale_a": 1.0, "asset_cfg": SceneEntityCfg("robot")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     rewards.feet_contact_forces = RewTerm(func=mdp.contact_forces, weight=-0.01, params={"threshold": 5.0, "sensor_cfg": CONTACT_SENSOR})
