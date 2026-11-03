@@ -53,38 +53,41 @@ static bool take_bus(void)
            (xSemaphoreTake(bus_mutex, pdMS_TO_TICKS(MOTOR_BUS_LOCK_TIMEOUT_MS)) == pdTRUE);
 }
 
-static motor_device_status_t send_broadcast(int16_t frame_length)
+static motor_device_status_t send_broadcast(motor_bus_id_t bus, int16_t frame_length)
 {
     if (frame_length <= 0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
         return MOTOR_DEVICE_PROTOCOL_ERROR;
     }
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
-    const bool sent = motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS);
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(bus);
+    const bool sent = motor_uart_write(bus, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS);
+    motor_uart_discard_rx(bus);
     return sent ? MOTOR_DEVICE_OK : MOTOR_DEVICE_UART_ERROR;
 }
 
-static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
+static uint16_t read_sync_block(motor_bus_id_t bus, uint8_t reg, uint8_t data_length,
                                motor_feedback_set_t *feedback, bool current_block)
 {
+    const uint8_t start=bus==MOTOR_BUS_USART1?0U:6U;
+    const uint8_t count=6U;
     const int16_t frame_length = STS3215_BuildSyncRead(
-        tx_frame, sizeof(tx_frame), reg, data_length, motor_ids, YERTLE_MOTOR_COUNT);
+        tx_frame, sizeof(tx_frame), reg, data_length, motor_ids+start, count);
     if (frame_length <= 0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
         return 0U;
     }
 
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(bus);
     motor_transport_record(TRANSPORT_SYNC_REQUEST);
-    if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
+    if (!motor_uart_write(bus, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
+        motor_uart_discard_rx(bus);
         return 0U;
     }
 
     uint16_t received_mask = 0U;
-    for (uint8_t reply_index = 0U; reply_index < YERTLE_MOTOR_COUNT; ++reply_index) {
+    for (uint8_t reply_index = 0U; reply_index < count; ++reply_index) {
         size_t received_length = 0U;
-        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received_length,
+        if (!motor_uart_read_frame(bus, rx_frame, sizeof(rx_frame), &received_length,
                                    MOTOR_UART_TIMEOUT_MS)) {
             break;
         }
@@ -100,7 +103,8 @@ static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
         }
 
         const int index = motor_index_from_id(reply.id);
-        if ((index < 0) || (reply.data_len < data_length)) {
+        if ((index < 0) || motor_bus_for_id(reply.id)!=bus || (reply.data_len < data_length) ||
+            (received_mask & (uint16_t)(1U << (uint8_t)index))) {
             motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
             continue;
         }
@@ -122,8 +126,8 @@ static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
         }
         received_mask |= (uint16_t) (1U << (uint8_t) index);
     }
-    motor_uart_discard_rx(MOTOR_BUS_USART1); /* Stop DMA even on partial response/error. */
-    if (received_mask == YERTLE_ALL_MOTORS_MASK) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
+    motor_uart_discard_rx(bus); /* Stop DMA even on partial response/error. */
+    if (received_mask == motor_bus_mask(bus)) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
     return received_mask;
 }
 
@@ -137,6 +141,7 @@ bool motor_device_init(void)
     }
     calibration_cache_init();
     motor_uart_init(MOTOR_BUS_USART1);
+    motor_uart_init(MOTOR_BUS_USART3);
     return true;
 }
 
@@ -163,23 +168,29 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *targe
         return bus_mutex == NULL ? MOTOR_DEVICE_NOT_INITIALIZED : MOTOR_DEVICE_BUSY;
     }
 
-    STS3215_SyncEntry_t entries[YERTLE_MOTOR_COUNT] = { 0 };
+    motor_device_status_t result=MOTOR_DEVICE_OK;
+    for(unsigned which=0;which<2U;++which){
+    motor_bus_id_t bus=which==0U?MOTOR_BUS_USART1:MOTOR_BUS_USART3;
+    STS3215_SyncEntry_t entries[6] = { 0 }; uint8_t n=0;
     for (uint8_t index = 0U; index < YERTLE_MOTOR_COUNT; ++index) {
+        if(motor_bus_for_id(motor_ids[index])!=bus)continue;
         const motor_target_t *target = &targets->motor[index];
-        entries[index].id = motor_ids[index];
-        entries[index].data[0] = target->acceleration;
-        entries[index].data[1] = (uint8_t) target->position;
-        entries[index].data[2] = (uint8_t) (target->position >> 8U);
-        entries[index].data[3] = 0U;
-        entries[index].data[4] = 0U;
-        entries[index].data[5] = (uint8_t) target->speed;
-        entries[index].data[6] = (uint8_t) (target->speed >> 8U);
+        entries[n].id = motor_ids[index];
+        entries[n].data[0] = target->acceleration;
+        entries[n].data[1] = (uint8_t) target->position;
+        entries[n].data[2] = (uint8_t) (target->position >> 8U);
+        entries[n].data[3] = 0U;
+        entries[n].data[4] = 0U;
+        entries[n].data[5] = (uint8_t) target->speed;
+        entries[n].data[6] = (uint8_t) (target->speed >> 8U); ++n;
     }
 
     const int16_t frame_length = STS3215_BuildSyncWrite(
         tx_frame, sizeof(tx_frame), STS3215_REG_ACCELERATION, 7U,
-        entries, YERTLE_MOTOR_COUNT);
-    const motor_device_status_t result = send_broadcast(frame_length);
+        entries, n);
+    const motor_device_status_t status = send_broadcast(bus, frame_length);
+    if(status!=MOTOR_DEVICE_OK)result=status;
+    }
     (void) xSemaphoreGive(bus_mutex);
     return result;
 }
@@ -192,7 +203,9 @@ motor_device_status_t motor_device_set_torque(bool enabled)
     const int16_t frame_length = enabled
         ? STS3215_BuildEnableTorque(tx_frame, sizeof(tx_frame), STS3215_BROADCAST_ID)
         : STS3215_BuildDisableTorque(tx_frame, sizeof(tx_frame), STS3215_BROADCAST_ID);
-    const motor_device_status_t result = send_broadcast(frame_length);
+    const motor_device_status_t first = send_broadcast(MOTOR_BUS_USART1,frame_length);
+    const motor_device_status_t second = send_broadcast(MOTOR_BUS_USART3,frame_length);
+    const motor_device_status_t result = first!=MOTOR_DEVICE_OK?first:second;
     (void) xSemaphoreGive(bus_mutex);
     return result;
 }
@@ -210,14 +223,14 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
     motor_device_status_t result = MOTOR_DEVICE_PROTOCOL_ERROR;
     const int16_t length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id,
                                            STS3215_REG_POS_CORRECTION, 2U);
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     if (length <= 0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t)length, MOTOR_UART_TIMEOUT_MS)) {
+    } else if (!motor_uart_write(motor_bus_for_id(id), tx_frame, (size_t)length, MOTOR_UART_TIMEOUT_MS)) {
         result = MOTOR_DEVICE_UART_ERROR;
     } else {
         size_t received = 0U;
-        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received, MOTOR_UART_TIMEOUT_MS)) {
+        if (!motor_uart_read_frame(motor_bus_for_id(id), rx_frame, sizeof(rx_frame), &received, MOTOR_UART_TIMEOUT_MS)) {
             result = MOTOR_DEVICE_UART_ERROR;
         } else {
             STS3215_Reply_t reply = { 0 };
@@ -244,7 +257,7 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
             }
         }
     }
-    motor_uart_discard_rx(MOTOR_BUS_USART1); /* Stop DMA on every success/error path. */
+    motor_uart_discard_rx(motor_bus_for_id(id)); /* Stop DMA on every success/error path. */
     (void)xSemaphoreGive(bus_mutex);
     return result;
 }
@@ -259,16 +272,16 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
 
     motor_register_status_t status = MOTOR_REGISTER_REPLY_ERROR;
     const int16_t frame_length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id, address, length);
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     if (frame_length <= 0) {
         register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t)frame_length, timeout_ms)) {
+    } else if (!motor_uart_write(motor_bus_for_id(id), tx_frame, (size_t)frame_length, timeout_ms)) {
         register_io_detail=MOTOR_IO_TX;
         status = MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else {
         size_t received_length = 0U;
-        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
+        if (!motor_uart_read_frame(motor_bus_for_id(id), rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
             register_io_detail=MOTOR_IO_RX;
             status = MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
@@ -299,7 +312,7 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
             }
         }
     }
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     return status;
 }
 
@@ -332,18 +345,18 @@ static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
     register_io_detail=MOTOR_IO_NONE;
     const int16_t size=STS3215_BuildWriteRaw(tx_frame,sizeof(tx_frame),id,address,data,length);
     motor_register_status_t status=MOTOR_REGISTER_REPLY_ERROR;
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     if (size<=0) {
         register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame,(size_t)size,timeout_ms)) {
+    } else if (!motor_uart_write(motor_bus_for_id(id), tx_frame,(size_t)size,timeout_ms)) {
         register_io_detail=MOTOR_IO_TX;
         status=MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else if (response_level==STS3215_RESP_READ_PING_ONLY) {
         status=MOTOR_REGISTER_OK; /* Confirmation still requires read-back. */
     } else {
         size_t received=0U;
-        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
+        if (!motor_uart_read_frame(motor_bus_for_id(id), rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
             register_io_detail=MOTOR_IO_RX;
             status=MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
@@ -366,7 +379,7 @@ static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
             }
         }
     }
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     return status;
 }
 
@@ -567,7 +580,7 @@ done:
     register_write_diagnostics.motor_id=id;
     register_write_diagnostics.address=request->address;
     register_write_diagnostics.report=report;
-    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    motor_uart_discard_rx(motor_bus_for_id(id));
     (void)xSemaphoreGive(bus_mutex);
     return report;
 }
@@ -658,10 +671,16 @@ motor_device_status_t motor_device_torque_mask(uint16_t mask,bool enabled)
 {
     if(!mask||(mask&~YPWM_ALL_MASK))return MOTOR_DEVICE_INVALID_ARGUMENT;
     if(!take_bus())return MOTOR_DEVICE_BUSY;
-    STS3215_SyncEntry_t entries[12]={0};uint8_t n=0;
-    for(uint8_t i=0;i<12;++i)if(mask&(1U<<i)){entries[n].id=i+1U;entries[n++].data[0]=enabled?1U:0U;}
-    const motor_device_status_t status=send_broadcast(STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x28,1,entries,n));
-    (void)xSemaphoreGive(bus_mutex);return status;
+    motor_device_status_t result=MOTOR_DEVICE_OK;
+    for(unsigned which=0;which<2U;++which){
+        motor_bus_id_t bus=which==0U?MOTOR_BUS_USART1:MOTOR_BUS_USART3;
+        STS3215_SyncEntry_t entries[6]={0};uint8_t n=0;
+        for(uint8_t i=0;i<12;++i)if((mask&(1U<<i))&&motor_bus_for_id(i+1U)==bus){entries[n].id=i+1U;entries[n++].data[0]=enabled?1U:0U;}
+        if(!n)continue;
+        const motor_device_status_t status=send_broadcast(bus,STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x28,1,entries,n));
+        if(status!=MOTOR_DEVICE_OK)result=status;
+    }
+    (void)xSemaphoreGive(bus_mutex);return result;
 }
 
 motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t pwm[12])
@@ -670,13 +689,19 @@ motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t pwm[12]
     for(unsigned i=0;i<12;++i)if(pwm[i]<-YPWM_DUTY_LIMIT||pwm[i]>YPWM_DUTY_LIMIT||
         (!(mask&(1U<<i))&&pwm[i]!=0))return MOTOR_DEVICE_INVALID_ARGUMENT;
     if(!take_bus())return MOTOR_DEVICE_BUSY;
-    STS3215_SyncEntry_t entries[12]={0};uint8_t n=0;
-    for(uint8_t i=0;i<12;++i)if(mask&(1U<<i)){
-        entries[n].id=i+1U;const uint16_t word=ypwm_servo_word(pwm[i]);
-        entries[n].data[0]=(uint8_t)word;entries[n++].data[1]=(uint8_t)(word>>8);
+    motor_device_status_t result=MOTOR_DEVICE_OK;
+    for(unsigned which=0;which<2U;++which){
+        motor_bus_id_t bus=which==0U?MOTOR_BUS_USART1:MOTOR_BUS_USART3;
+        STS3215_SyncEntry_t entries[6]={0};uint8_t n=0;
+        for(uint8_t i=0;i<12;++i)if((mask&(1U<<i))&&motor_bus_for_id(i+1U)==bus){
+            entries[n].id=i+1U;const uint16_t word=ypwm_servo_word(pwm[i]);
+            entries[n].data[0]=(uint8_t)word;entries[n++].data[1]=(uint8_t)(word>>8);
+        }
+        if(!n)continue;
+        const motor_device_status_t status=send_broadcast(bus,STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x2c,2,entries,n));
+        if(status!=MOTOR_DEVICE_OK)result=status;
     }
-    const motor_device_status_t status=send_broadcast(STS3215_BuildSyncWrite(tx_frame,sizeof tx_frame,0x2c,2,entries,n));
-    (void)xSemaphoreGive(bus_mutex);return status;
+    (void)xSemaphoreGive(bus_mutex);return result;
 }
 
 uint16_t motor_device_register_lock_uncertain_mask(void)
@@ -705,10 +730,12 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)
     }
 
     motor_transport_record(TRANSPORT_FEEDBACK_CYCLE);
-    const uint16_t motion_mask = read_sync_block(
-        STS3215_REG_CURRENT_POS, 8U, feedback, false);
-    const uint16_t current_mask = read_sync_block(
-        STS3215_REG_CURRENT_CURRENT, 2U, feedback, true);
+    const uint16_t motion1=read_sync_block(MOTOR_BUS_USART1,STS3215_REG_CURRENT_POS,8U,feedback,false);
+    const uint16_t motion3=read_sync_block(MOTOR_BUS_USART3,STS3215_REG_CURRENT_POS,8U,feedback,false);
+    const uint16_t current1=read_sync_block(MOTOR_BUS_USART1,STS3215_REG_CURRENT_CURRENT,2U,feedback,true);
+    const uint16_t current3=read_sync_block(MOTOR_BUS_USART3,STS3215_REG_CURRENT_CURRENT,2U,feedback,true);
+    const uint16_t motion_mask=motion1|motion3;
+    const uint16_t current_mask=current1|current3;
     feedback->valid_mask = motion_mask & current_mask;
     if (feedback->valid_mask == YERTLE_ALL_MOTORS_MASK) motor_transport_record(TRANSPORT_FEEDBACK_COMPLETE);
     motor_diagnostics_masks(motion_mask, current_mask);

@@ -10,6 +10,7 @@
 static uint8_t memory[12][256],reply[48],last[160];
 static size_t reply_length,last_length;
 static unsigned depth,clock_ms,tx_count;
+static unsigned bus_tx[2];static int failing_bus=-1;
 static uint8_t fail_write_id,override_read_id,servo_fault_id;
 static unsigned transient_mode_failures,mode_target_writes;
 static bool permission=true,apply_then_lose_ack,cancel_on_error,ignore_relock;
@@ -25,7 +26,8 @@ void motor_diagnostics_record(enum motor_diag_reason r){(void)r;}
 void motor_transport_record(enum motor_transport_event e){(void)e;}
 void motor_diagnostics_masks(uint16_t a,uint16_t b){(void)a;(void)b;}
 bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t timeout){
-    (void)bus;
+ assert(bus==MOTOR_BUS_USART1||bus==MOTOR_BUS_USART3);++bus_tx[bus];
+ if((int)bus==failing_bus)return false;
  (void)timeout;assert(depth==1&&n<sizeof last);memcpy(last,p,n);last_length=n;++tx_count;
  unsigned sum=0;for(size_t k=2;k<n;++k)sum+=p[k];assert((sum&255U)==255U);
  if(p[4]==3&&p[5]==0x21){
@@ -38,9 +40,9 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t tim
   }
  }
  if(p[4]==0x83){assert(p[2]==254);unsigned width=p[6];
-  for(size_t k=7;k<n-1;k+=width+1){assert(p[k]>=1&&p[k]<=12);memcpy(memory[p[k]-1]+p[5],p+k+1,width);}return true;}
- if(p[2]==254){assert(p[4]==3&&p[5]==0x28&&p[6]==0);for(unsigned i=0;i<12;++i)memory[i][0x28]=0;return true;}
- assert(p[2]>=1&&p[2]<=12);unsigned width=0;
+  for(size_t k=7;k<n-1;k+=width+1){assert(p[k]>=1&&p[k]<=12&&motor_bus_for_id(p[k])==bus);memcpy(memory[p[k]-1]+p[5],p+k+1,width);}return true;}
+ if(p[2]==254){assert(p[4]==3&&p[5]==0x28&&p[6]==0);for(unsigned i=0;i<12;++i)if(motor_bus_for_id(i+1)==bus)memory[i][0x28]=0;return true;}
+ assert(p[2]>=1&&p[2]<=12&&motor_bus_for_id(p[2])==bus);unsigned width=0;
  if(p[4]==2)width=p[6];else {assert(p[4]==3);
   if(!(ignore_relock&&p[5]==55&&p[6]==1))memcpy(memory[p[2]-1]+p[5],p+6,n-7);}
  reply[0]=reply[1]=255;reply[2]=p[2];reply[3]=(uint8_t)(width+2);reply[4]=0;
@@ -77,6 +79,18 @@ int main(void){
  pwm[3]=0;pwm[0]=1;assert(motor_device_write_pwm(1U<<3,pwm)==MOTOR_DEVICE_INVALID_ARGUMENT&&tx_count==before);
  assert(motor_device_torque_mask(1U<<3,true)==MOTOR_DEVICE_OK&&memory[3][0x28]==1&&memory[0][0x28]==0);
  assert(motor_device_torque_mask(YPWM_ALL_MASK,false)==MOTOR_DEVICE_OK);
+ assert(bus_tx[0]>0&&bus_tx[1]>0);
+ {unsigned before3=bus_tx[1];failing_bus=0;
+  assert(motor_device_torque_mask(YPWM_ALL_MASK,false)==MOTOR_DEVICE_UART_ERROR);
+  assert(bus_tx[1]==before3+1);failing_bus=-1;}
+ {unsigned before3=bus_tx[1];failing_bus=0;
+  assert(motor_device_set_torque(false)==MOTOR_DEVICE_UART_ERROR);
+  assert(bus_tx[1]==before3+1);failing_bus=-1;}
+ {unsigned before1=bus_tx[0],before3=bus_tx[1];motor_target_set_t goals={0};
+  for(unsigned i=0;i<12;++i){goals.motor[i].position=2048+i;goals.motor[i].speed=200;goals.motor[i].acceleration=10;}
+  assert(motor_device_write_targets(&goals)==MOTOR_DEVICE_OK);
+  assert(bus_tx[0]==before1+1&&bus_tx[1]==before3+1);
+  for(unsigned i=0;i<12;++i)assert(memory[i][0x2a]==(uint8_t)(2048+i));}
  assert(motor_device_verify_torque_off(&unknown));
  memory[1][0x21]=0;
  motor_register_write_report_t r=motor_device_write_mode(2,2,allowed);

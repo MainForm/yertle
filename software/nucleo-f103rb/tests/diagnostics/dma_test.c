@@ -37,6 +37,7 @@ static uint8_t register_address, register_length, register_reply_length;
 static uint8_t register_reply_id, register_error;
 static uint16_t register_calibration=3011;
 void USART1_IRQHandler(void);
+void USART3_IRQHandler(void);
 void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
 void DMA1_Channel2_IRQHandler(void);
@@ -51,6 +52,11 @@ static void inject_bytes(const uint8_t *data,size_t size) {
     USART1->SR=USART_SR_TC | USART_SR_IDLE;
     USART1_IRQHandler();
     USART1->SR=USART_SR_TC;
+}
+static void inject_bytes3(const uint8_t *data,size_t size) {
+    assert(size<=256);memcpy((void *)DMA1_Channel3->CMAR,data,size);
+    DMA1_Channel3->CNDTR=256U-(uint32_t)size;
+    USART3->SR=USART_SR_TC|USART_SR_IDLE;USART3_IRQHandler();USART3->SR=USART_SR_TC;
 }
 static size_t reply(uint8_t *p,uint8_t id,uint8_t len) {
     p[0]=0xff; p[1]=0xff; p[2]=id; p[3]=len+2;
@@ -70,18 +76,26 @@ static size_t reply(uint8_t *p,uint8_t id,uint8_t len) {
 }
 void vTaskDelay(uint32_t ticks) {
     tick+=ticks;
-    if (complete_tx && (DMA1_Channel4->CCR & DMA_CCR_EN) && DMA1_Channel4->CNDTR) {
+    for(unsigned which=0;which<2;++which){
+    DMA_Channel_Type *tx=which?DMA1_Channel2:DMA1_Channel4;
+    DMA_Channel_Type *rx=which?DMA1_Channel3:DMA1_Channel5;
+    USART_Type *uart=which?USART3:USART1;
+    if (complete_tx && (tx->CCR & DMA_CCR_EN) && tx->CNDTR) {
         /* Verify RX ready when TX starts, before generating a reply. */
-        assert(DMA1_Channel5->CCR & DMA_CCR_EN);
-        assert(USART1->CR3 & USART_CR3_DMAR);
-        const uint8_t *q=(const uint8_t *)DMA1_Channel4->CMAR;
-        DMA1_Channel4->CNDTR=0;
-        DMA1->ISR=DMA_ISR_TCIF4; DMA1_Channel4_IRQHandler(); DMA1->ISR=0;
-        USART1->SR=USART_SR_TC; ++tx_simulations;
+        assert(rx->CCR & DMA_CCR_EN);
+        assert(uart->CR3 & USART_CR3_DMAR);
+        const uint8_t *q=(const uint8_t *)tx->CMAR;
+        const uint32_t tx_length=tx->CNDTR;
+        tx->CNDTR=0;
+        DMA1->ISR=which?DMA_ISR_TCIF2:DMA_ISR_TCIF4;
+        if(which)DMA1_Channel2_IRQHandler();else DMA1_Channel4_IRQHandler();DMA1->ISR=0;
+        uart->SR=USART_SR_TC; ++tx_simulations;
         if (inject_sync && q[4]==0x82) {
             uint8_t packets[256]; size_t size=0;
-            for (uint8_t id=1;id<=YERTLE_MOTOR_COUNT;++id) if (id!=omit_id) size+=reply(packets+size,id,q[6]);
-            inject_bytes(packets,size);
+            for (unsigned i=7;i<tx_length-1U;++i){uint8_t id=q[i];
+                assert(motor_bus_for_id(id)==(which?MOTOR_BUS_USART3:MOTOR_BUS_USART1));
+                if(id!=omit_id)size+=reply(packets+size,id,q[6]);}
+            if(which)inject_bytes3(packets,size);else inject_bytes(packets,size);
         }
         if (inject_offset && q[4]==0x02) {
             assert(q[5]==0x1f && q[6]==2U && q[3]==4U); /* EEPROM READ only */
@@ -94,7 +108,7 @@ void vTaskDelay(uint32_t ticks) {
             for (unsigned i=2U;i<size-1U;++i) sum+=packet[i];
             packet[size-1U]=(uint8_t)~sum;
             if (offset_bad_checksum) packet[size-1U]^=1U;
-            inject_bytes(packet,size);
+            if(which)inject_bytes3(packet,size);else inject_bytes(packet,size);
         }
         if (inject_register && q[4]==0x02) {
             assert(q[5]==register_address && q[6]==register_length && q[3]==4U);
@@ -110,9 +124,9 @@ void vTaskDelay(uint32_t ticks) {
             for (unsigned i=2U;i<size-1U;++i) sum+=packet[i];
             packet[size-1U]=(uint8_t)~sum;
             if (register_bad_checksum) packet[size-1U]^=1U;
-            inject_bytes(packet,size);
+            if(which)inject_bytes3(packet,size);else inject_bytes(packet,size);
         }
-    }
+    }}
 }
 static uint32_t transport_words[16], diagnostic_words[16];
 static uint32_t get32(const uint8_t *p) {
@@ -203,7 +217,7 @@ int main(void) {
     inject_sync=true;
     motor_feedback_set_t feedback;
     assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_OK);
-    assert(feedback.valid_mask==YERTLE_ALL_MOTORS_MASK && tx_simulations==4);
+    assert(feedback.valid_mask==YERTLE_ALL_MOTORS_MASK && tx_simulations==6);
     for (unsigned i=0;i<YERTLE_MOTOR_COUNT;++i) {
         assert(feedback.motor[i].position==(i==11U ? -12 : (int)i+1));
         assert(feedback.motor[i].current==(i==8U ? -5 : (int)i+1));
@@ -226,7 +240,7 @@ int main(void) {
     uart_diagnostics_send(NULL,capture);
     assert(transport_words[1]==1 && transport_words[12]==256);
     assert(transport_words[6]==1 && transport_words[7]==1 && transport_words[5]==1);
-    assert(transport_words[8]==4 && transport_words[9]==2);
+    assert(transport_words[8]==8 && transport_words[9]==6);
     assert(transport_words[10]==2 && transport_words[11]==1);
     motor_position_offset_t offset;
     const unsigned before_invalid=tx_simulations;
