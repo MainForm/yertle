@@ -1,4 +1,5 @@
 #include "motor_device.h"
+#include "motor_bus_map.h"
 #include "calibration_store.h"
 #include "pwm_contract.h"
 
@@ -34,10 +35,7 @@ static const uint8_t motor_ids[YERTLE_MOTOR_COUNT] = {
 
 static int motor_index_from_id(uint8_t id)
 {
-    if ((id < 1U) || (id > YERTLE_MOTOR_COUNT)) {
-        return -1;
-    }
-    return (int) id - 1;
+    return motor_bus_index_from_id(id);
 }
 
 /* STS3215 feedback uses a direction bit and magnitude, not two's complement.
