@@ -36,6 +36,8 @@ parser.add_argument('--trot-support-penalties', action='store_true', help='Enabl
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
+parser.add_argument("--zero-base-linear-velocity", action="store_true",
+                    help="Feed zero XYZ base linear velocity to the policy; leave physical velocity and commands unchanged.")
 parser.add_argument("--signed-joint-reference", action="store_true", help="Use 0/+34/-85 deg reference with original axes and reward-only position envelope (no PhysX position stops). Existing fixed-stop checkpoints see different physics; not for original-reference v6.0 policies.")
 parser.add_argument("--start-pose", choices=["random", "default", "json"], default=None,
                     help="Joint pose at every reset: random (legacy), default (exact standing), or json.")
@@ -100,6 +102,12 @@ except ImportError:  # pragma: no cover
 
 
 GAIT_MODE_NAMES = ("walk", "trot", "bound")
+
+
+def zero_base_linear_velocity_observation(env):
+    """Zero only policy XYZ linear-velocity observations, not the robot state."""
+    return torch.zeros((env.num_envs, 3), device=env.device)
+
 
 _TASKS = {
     "flat": ("Isaac-Velocity-Flat-Yertle-Play-v0", YertleFlatEnvCfg_PLAY, YertleFlatPPORunnerCfg),
@@ -173,6 +181,9 @@ class ForcePulse:
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.zero_base_linear_velocity:
+        env_cfg.observations.policy.base_lin_vel.func = zero_base_linear_velocity_observation
+    print(f"PLAY_BASE_LINEAR_VELOCITY_INPUT {'zero' if args_cli.zero_base_linear_velocity else 'measured'}", flush=True)
     if args_cli.trot_frequency_hz is not None:
         env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
     if args_cli.trot_duty_factor is not None:
