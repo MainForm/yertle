@@ -8,6 +8,7 @@ bool pwm_control_accepts_positions(void){return true;}
 bool pwm_control_can_arm(void){return true;}
 void pwm_control_on_armed(void){}
 void pwm_control_connection_reset(void){}
+void pwm_control_reconnect_recover(void){}
 void pwm_control_stop(uint8_t reason){(void)reason;}
 uint8_t pwm_control_request_mode(const uint8_t *b,size_t n,uint16_t s){(void)b;(void)n;(void)s;return YPWM_INVALID_STATE;}
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){(void)id;(void)mode;return false;}
