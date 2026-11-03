@@ -14,11 +14,14 @@ extern bool calibration_allowed;
 DWT_Type test_dwt;
 CoreDebug_Type test_debug;
 USART_Type test_usart;
+USART_Type test_usart3;
 GPIO_Type test_gpio;
+GPIO_Type test_gpiob;
 NVIC_Type test_nvic;
 RCC_Type test_rcc;
 DMA_Type test_dma;
 DMA_Channel_Type test_dma4,test_dma5;
+DMA_Channel_Type test_dma2,test_dma3;
 uint32_t SystemCoreClock=64000000U;
 static uint32_t tick=1000U;
 static bool complete_tx, inject_sync;
@@ -36,7 +39,10 @@ static uint16_t register_calibration=3011;
 void USART1_IRQHandler(void);
 void DMA1_Channel4_IRQHandler(void);
 void DMA1_Channel5_IRQHandler(void);
+void DMA1_Channel2_IRQHandler(void);
+void DMA1_Channel3_IRQHandler(void);
 uint32_t board_apb2_clock_hz(void) { return 64000000U; }
+uint32_t board_apb1_clock_hz(void) { return 32000000U; }
 uint32_t xTaskGetTickCount(void) { return tick; }
 static void inject_bytes(const uint8_t *data,size_t size) {
     assert(size<=256);
@@ -126,7 +132,7 @@ int main(void) {
     motor_position_offset_t not_initialized;
     assert(motor_device_read_position_offset(1U,&not_initialized)==MOTOR_DEVICE_NOT_INITIALIZED);
     motor_dma_init(MOTOR_BUS_USART1);
-    /* Until USART3 is implemented it must fail closed, not address USART1. */
+    /* Uninitialized ports and invalid IDs fail closed. */
     const uint8_t bus_probe[] = {0xff, 0xff};
     assert(!motor_dma_start(MOTOR_BUS_USART3,bus_probe,sizeof bus_probe));
     assert(!motor_dma_start(MOTOR_BUS_INVALID,bus_probe,sizeof bus_probe));
@@ -321,5 +327,20 @@ int main(void) {
     complete_tx=false;
     assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
     assert(!(DMA1_Channel4->CCR & DMA_CCR_EN) && !(DMA1_Channel5->CCR & DMA_CCR_EN));
+    motor_dma_init(MOTOR_BUS_USART3);
+    assert(USART3->BRR==0x20);
+    assert(motor_dma_start(MOTOR_BUS_USART3,bus_probe,sizeof bus_probe));
+    assert(DMA1_Channel3->CPAR==(uintptr_t)&USART3->DR);
+    assert(DMA1_Channel2->CPAR==(uintptr_t)&USART3->DR);
+    assert((DMA1_Channel3->CCR&DMA_CCR_EN)&&(DMA1_Channel2->CCR&DMA_CCR_EN));
+    ((uint8_t *)DMA1_Channel3->CMAR)[0]=0x5a;
+    DMA1_Channel3->CNDTR=255;
+    uint8_t bus3_byte=0;
+    assert(motor_dma_read_byte(MOTOR_BUS_USART3,&bus3_byte)&&bus3_byte==0x5a);
+    assert(!motor_dma_read_byte(MOTOR_BUS_USART1,&bus3_byte));
+    DMA1_Channel2->CNDTR=0;DMA1->ISR=DMA_ISR_TCIF2;DMA1_Channel2_IRQHandler();DMA1->ISR=0;
+    USART3->SR=USART_SR_TC;assert(motor_dma_tx_complete(MOTOR_BUS_USART3));
+    assert(!motor_dma_tx_complete(MOTOR_BUS_USART1));
+    motor_dma_stop(MOTOR_BUS_USART3);
     puts("DMA driver/offset/register tests passed (mock registers, not board)");
 }

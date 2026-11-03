@@ -32,6 +32,33 @@ extern uint32_t SystemCoreClock;
 typedef struct { volatile uint32_t AHBENR, APB2ENR, APB1ENR; } RCC_Type;
 typedef struct { volatile uint32_t ISR, IFCR; } DMA_Type;
 typedef struct { volatile uint32_t CCR, CNDTR; volatile uintptr_t CPAR, CMAR; } DMA_Channel_Type;
+typedef USART_Type USART_TypeDef;
+typedef DMA_Channel_Type DMA_Channel_TypeDef;
+typedef unsigned IRQn_Type;
+extern USART_Type test_usart3;
+extern GPIO_Type test_gpiob;
+extern DMA_Channel_Type test_dma2,test_dma3;
+#define USART3 (&test_usart3)
+#define GPIOB (&test_gpiob)
+#define DMA1_Channel2 (&test_dma2)
+#define DMA1_Channel3 (&test_dma3)
+#define USART3_IRQn 39U
+#define DMA1_Channel2_IRQn 12U
+#define DMA1_Channel3_IRQn 13U
+#define DMA_ISR_TCIF2 (1U<<5)
+#define DMA_ISR_TEIF2 (1U<<7)
+#define DMA_ISR_TCIF3 (1U<<9)
+#define DMA_ISR_TEIF3 (1U<<11)
+#define DMA_IFCR_CGIF2 (1U<<4)
+#define DMA_IFCR_CGIF3 (1U<<8)
+#define RCC_APB2ENR_IOPBEN (1U<<3)
+#define RCC_APB1ENR_USART3EN (1U<<18)
+#define GPIO_CRH_MODE10_0 (1U<<8)
+#define GPIO_CRH_MODE10_1 (1U<<9)
+#define GPIO_CRH_CNF10_1 (1U<<11)
+#define GPIO_CRH_MODE11 (3U<<12)
+#define GPIO_CRH_CNF11 (3U<<14)
+#define GPIO_CRH_CNF11_0 (1U<<14)
 extern RCC_Type test_rcc;
 extern DMA_Type test_dma;
 extern DMA_Channel_Type test_dma4, test_dma5;
