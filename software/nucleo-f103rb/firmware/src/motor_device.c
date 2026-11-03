@@ -59,9 +59,9 @@ static motor_device_status_t send_broadcast(int16_t frame_length)
         motor_diagnostics_record(DIAG_BUILD_FAILED);
         return MOTOR_DEVICE_PROTOCOL_ERROR;
     }
-    motor_uart_discard_rx();
-    const bool sent = motor_uart_write(tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS);
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
+    const bool sent = motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS);
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     return sent ? MOTOR_DEVICE_OK : MOTOR_DEVICE_UART_ERROR;
 }
 
@@ -75,16 +75,16 @@ static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
         return 0U;
     }
 
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     motor_transport_record(TRANSPORT_SYNC_REQUEST);
-    if (!motor_uart_write(tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
+    if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
         return 0U;
     }
 
     uint16_t received_mask = 0U;
     for (uint8_t reply_index = 0U; reply_index < YERTLE_MOTOR_COUNT; ++reply_index) {
         size_t received_length = 0U;
-        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length,
+        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received_length,
                                    MOTOR_UART_TIMEOUT_MS)) {
             break;
         }
@@ -122,7 +122,7 @@ static uint16_t read_sync_block(uint8_t reg, uint8_t data_length,
         }
         received_mask |= (uint16_t) (1U << (uint8_t) index);
     }
-    motor_uart_discard_rx(); /* Stop DMA even on partial response/error. */
+    motor_uart_discard_rx(MOTOR_BUS_USART1); /* Stop DMA even on partial response/error. */
     if (received_mask == YERTLE_ALL_MOTORS_MASK) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
     return received_mask;
 }
@@ -136,7 +136,7 @@ bool motor_device_init(void)
         return false;
     }
     calibration_cache_init();
-    motor_uart_init();
+    motor_uart_init(MOTOR_BUS_USART1);
     return true;
 }
 
@@ -210,14 +210,14 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
     motor_device_status_t result = MOTOR_DEVICE_PROTOCOL_ERROR;
     const int16_t length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id,
                                            STS3215_REG_POS_CORRECTION, 2U);
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     if (length <= 0) {
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(tx_frame, (size_t)length, MOTOR_UART_TIMEOUT_MS)) {
+    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t)length, MOTOR_UART_TIMEOUT_MS)) {
         result = MOTOR_DEVICE_UART_ERROR;
     } else {
         size_t received = 0U;
-        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received, MOTOR_UART_TIMEOUT_MS)) {
+        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received, MOTOR_UART_TIMEOUT_MS)) {
             result = MOTOR_DEVICE_UART_ERROR;
         } else {
             STS3215_Reply_t reply = { 0 };
@@ -244,7 +244,7 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
             }
         }
     }
-    motor_uart_discard_rx(); /* Stop DMA on every success/error path. */
+    motor_uart_discard_rx(MOTOR_BUS_USART1); /* Stop DMA on every success/error path. */
     (void)xSemaphoreGive(bus_mutex);
     return result;
 }
@@ -259,16 +259,16 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
 
     motor_register_status_t status = MOTOR_REGISTER_REPLY_ERROR;
     const int16_t frame_length = STS3215_BuildRead(tx_frame, sizeof(tx_frame), id, address, length);
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     if (frame_length <= 0) {
         register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(tx_frame, (size_t)frame_length, timeout_ms)) {
+    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame, (size_t)frame_length, timeout_ms)) {
         register_io_detail=MOTOR_IO_TX;
         status = MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else {
         size_t received_length = 0U;
-        if (!motor_uart_read_frame(rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
+        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame, sizeof(rx_frame), &received_length, timeout_ms)) {
             register_io_detail=MOTOR_IO_RX;
             status = MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
@@ -299,7 +299,7 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
             }
         }
     }
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     return status;
 }
 
@@ -332,18 +332,18 @@ static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
     register_io_detail=MOTOR_IO_NONE;
     const int16_t size=STS3215_BuildWriteRaw(tx_frame,sizeof(tx_frame),id,address,data,length);
     motor_register_status_t status=MOTOR_REGISTER_REPLY_ERROR;
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     if (size<=0) {
         register_io_detail=MOTOR_IO_BUILD;
         motor_diagnostics_record(DIAG_BUILD_FAILED);
-    } else if (!motor_uart_write(tx_frame,(size_t)size,timeout_ms)) {
+    } else if (!motor_uart_write(MOTOR_BUS_USART1, tx_frame,(size_t)size,timeout_ms)) {
         register_io_detail=MOTOR_IO_TX;
         status=MOTOR_REGISTER_COMMUNICATION_ERROR;
     } else if (response_level==STS3215_RESP_READ_PING_ONLY) {
         status=MOTOR_REGISTER_OK; /* Confirmation still requires read-back. */
     } else {
         size_t received=0U;
-        if (!motor_uart_read_frame(rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
+        if (!motor_uart_read_frame(MOTOR_BUS_USART1, rx_frame,sizeof(rx_frame),&received,timeout_ms)) {
             register_io_detail=MOTOR_IO_RX;
             status=MOTOR_REGISTER_COMMUNICATION_ERROR;
         } else {
@@ -366,7 +366,7 @@ static motor_register_status_t write_register_timed(uint8_t id, uint8_t address,
             }
         }
     }
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     return status;
 }
 
@@ -567,7 +567,7 @@ done:
     register_write_diagnostics.motor_id=id;
     register_write_diagnostics.address=request->address;
     register_write_diagnostics.report=report;
-    motor_uart_discard_rx();
+    motor_uart_discard_rx(MOTOR_BUS_USART1);
     (void)xSemaphoreGive(bus_mutex);
     return report;
 }

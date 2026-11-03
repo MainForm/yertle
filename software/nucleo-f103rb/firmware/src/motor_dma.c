@@ -75,7 +75,8 @@ static void account_tx_task(void) {
         tx_accounted = true;
     }
 }
-void motor_dma_stop(void) {
+void motor_dma_stop(motor_bus_id_t bus) {
+    if (bus != MOTOR_BUS_USART1) return;
     /* Peripheral-specific short boundary guard, NOT a diagnostic snapshot mask. */
     NVIC_DisableIRQ(USART1_IRQn); NVIC_DisableIRQ(DMA1_Channel4_IRQn); NVIC_DisableIRQ(DMA1_Channel5_IRQn);
     USART1->CR3 &= ~(USART_CR3_DMAR | USART_CR3_DMAT);
@@ -93,7 +94,8 @@ void motor_dma_stop(void) {
     __DMB();
     NVIC_EnableIRQ(DMA1_Channel4_IRQn); NVIC_EnableIRQ(DMA1_Channel5_IRQn); NVIC_EnableIRQ(USART1_IRQn);
 }
-void motor_dma_init(void) {
+void motor_dma_init(motor_bus_id_t bus) {
+    if (bus != MOTOR_BUS_USART1) return;
     s = uart_diagnostics_port(0U); uart_isr_timing_init(s);
     RCC->AHBENR |= RCC_AHBENR_DMA1EN;
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_USART1EN;
@@ -106,10 +108,10 @@ void motor_dma_init(void) {
     USART1->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE | USART_CR1_IDLEIE | USART_CR1_PEIE;
     NVIC_SetPriority(USART1_IRQn,5U); NVIC_SetPriority(DMA1_Channel4_IRQn,5U); NVIC_SetPriority(DMA1_Channel5_IRQn,5U);
     /* Equal IRQ priority serializes the three ISR diagnostic writers. */
-    motor_transport_dma_mode(RX_CAPACITY); motor_dma_stop();
+    motor_transport_dma_mode(RX_CAPACITY); motor_dma_stop(bus);
 }
-bool motor_dma_start(const uint8_t *data, size_t length) {
-    if (!data || !length || length>sizeof tx_buffer || active) return false;
+bool motor_dma_start(motor_bus_id_t bus, const uint8_t *data, size_t length) {
+    if (bus != MOTOR_BUS_USART1 || !data || !length || length>sizeof tx_buffer || active) return false;
     memcpy(tx_buffer,data,length);
     rx_accounted=0; rx_consumed=0; tx_length=(uint32_t)length;
     failed=false; tx_dma_failed=false; tx_finished=false; tx_accounted=false;
@@ -126,14 +128,14 @@ bool motor_dma_start(const uint8_t *data, size_t length) {
     DMA1_Channel4->CCR |= DMA_CCR_EN; USART1->CR3 |= USART_CR3_DMAT;
     return true;
 }
-bool motor_dma_tx_complete(void) {
-    if (failed || !tx_finished || !(USART1->SR & USART_SR_TC)) return false;
+bool motor_dma_tx_complete(motor_bus_id_t bus) {
+    if (bus != MOTOR_BUS_USART1 || failed || !tx_finished || !(USART1->SR & USART_SR_TC)) return false;
     if (!tx_accounted) { account_tx_task(); motor_transport_record(TRANSPORT_TX_COMPLETE); }
     return true;
 }
-bool motor_dma_failed(void) { return failed; }
-bool motor_dma_tx_failed(void) { return tx_dma_failed; }
-bool motor_dma_read_byte(uint8_t *byte) {
-    if (!active || failed || !byte || rx_consumed>=received()) return false;
+bool motor_dma_failed(motor_bus_id_t bus) { return bus != MOTOR_BUS_USART1 || failed; }
+bool motor_dma_tx_failed(motor_bus_id_t bus) { return bus != MOTOR_BUS_USART1 || tx_dma_failed; }
+bool motor_dma_read_byte(motor_bus_id_t bus, uint8_t *byte) {
+    if (bus != MOTOR_BUS_USART1 || !active || failed || !byte || rx_consumed>=received()) return false;
     __DMB(); *byte=rx_buffer[rx_consumed++]; return true;
 }

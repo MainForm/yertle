@@ -26,14 +26,15 @@ int xSemaphoreGive(SemaphoreHandle_t handle)
 { assert(handle && mutex_depth==1U); --mutex_depth; return 1; }
 uint32_t xTaskGetTickCount(void) { return test_tick; }
 void vTaskDelay(uint32_t ticks) { assert(mutex_depth==1U && (ticks==10U || ticks==2U));test_tick+=ticks; }
-void motor_uart_init(void) {}
-void motor_uart_discard_rx(void) {}
+void motor_uart_init(motor_bus_id_t bus) {(void)bus;}
+void motor_uart_discard_rx(motor_bus_id_t bus) {(void)bus;}
 static bool allowed(void) { return safe; }
 void motor_diagnostics_record(enum motor_diag_reason reason) { (void)reason; }
 void motor_transport_record(enum motor_transport_event event) { (void)event; }
 void motor_diagnostics_masks(uint16_t motion, uint16_t current) { (void)motion; (void)current; }
-bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
+bool motor_uart_write(motor_bus_id_t bus, const uint8_t *data, size_t length, uint32_t timeout_ms)
 {
+    (void)bus;
     assert(mutex_depth==1U && timeout_ms>=1U && timeout_ms<=10U && length>=8U && data[2]>=1U && data[2]<=12U);
     test_tick+=operation_cost;
     unsigned sum=0U; for (size_t i=2U;i<length;++i) sum+=data[i]; assert((sum & 255U)==255U);
@@ -70,8 +71,9 @@ bool motor_uart_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
     if (fail && fault==CHECKSUM) packet[packet_length-1U]^=1U;
     return true;
 }
-bool motor_uart_read_frame(uint8_t *frame, size_t capacity, size_t *length, uint32_t timeout_ms)
+bool motor_uart_read_frame(motor_bus_id_t bus, uint8_t *frame, size_t capacity, size_t *length, uint32_t timeout_ms)
 {
+    (void)bus;
     assert(mutex_depth==1U && timeout_ms>=1U && timeout_ms<=10U);
     if (packet_length==0U) return false;
     assert(capacity>=packet_length); memcpy(frame,packet,packet_length); *length=packet_length; return true;

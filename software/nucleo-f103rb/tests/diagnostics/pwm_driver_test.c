@@ -19,12 +19,13 @@ int xSemaphoreTake(SemaphoreHandle_t m,TickType_t t){(void)t;assert(m&&!depth);+
 int xSemaphoreGive(SemaphoreHandle_t m){assert(m&&depth==1);--depth;return 1;}
 uint32_t xTaskGetTickCount(void){return clock_ms;}
 void vTaskDelay(uint32_t t){clock_ms+=t;}
-void motor_uart_init(void){}
-void motor_uart_discard_rx(void){}
+void motor_uart_init(motor_bus_id_t bus){(void)bus;}
+void motor_uart_discard_rx(motor_bus_id_t bus){(void)bus;}
 void motor_diagnostics_record(enum motor_diag_reason r){(void)r;}
 void motor_transport_record(enum motor_transport_event e){(void)e;}
 void motor_diagnostics_masks(uint16_t a,uint16_t b){(void)a;(void)b;}
-bool motor_uart_write(const uint8_t *p,size_t n,uint32_t timeout){
+bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t timeout){
+    (void)bus;
  (void)timeout;assert(depth==1&&n<sizeof last);memcpy(last,p,n);last_length=n;++tx_count;
  unsigned sum=0;for(size_t k=2;k<n;++k)sum+=p[k];assert((sum&255U)==255U);
  if(p[4]==3&&p[5]==0x21){
@@ -48,7 +49,8 @@ bool motor_uart_write(const uint8_t *p,size_t n,uint32_t timeout){
  if(p[4]==2&&p[2]==override_read_id&&p[5]==0x21)reply[5]=1;
  sum=0;for(size_t k=2;k<reply_length-1;++k)sum+=reply[k];reply[reply_length-1]=(uint8_t)~sum;return true;
 }
-bool motor_uart_read_frame(uint8_t *p,size_t cap,size_t *n,uint32_t timeout){
+bool motor_uart_read_frame(motor_bus_id_t bus, uint8_t *p,size_t cap,size_t *n,uint32_t timeout){
+    (void)bus;
  (void)timeout;assert(depth==1&&cap>=reply_length);memcpy(p,reply,reply_length);*n=reply_length;return true;}
 int main(void){
  assert(motor_device_init());for(unsigned i=0;i<12;++i){memory[i][8]=1;memory[i][55]=1;}
