@@ -41,6 +41,7 @@ bool actuator_submit_targets(const motor_target_set_t *targets)
 { (void)targets; ++submitted; accepted_tick = tick; return true; }
 void uart_diagnostics_send(void *context, uart_diag_sender_t send)
 { (void)context; (void)send; }
+void uart_diagnostics_send_motor_buses(void *c, uart_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
 
 static protocol_context_t reset(void)
 {

@@ -7,7 +7,7 @@
 
 DWT_Type test_dwt;
 CoreDebug_Type test_debug;
-USART_Type test_usart, test_usart2;
+USART_Type test_usart, test_usart2, test_usart3;
 GPIO_Type test_gpio;
 NVIC_Type test_nvic;
 RCC_Type test_rcc;

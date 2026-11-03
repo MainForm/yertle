@@ -31,6 +31,35 @@ metadata words, but must not label the new buffer as a 255-byte IRQ ring.
 
 ## Motor transaction diagnostics
 
+### Optional per-motor-bus extension (0x91)
+
+GET_UART_STATS sends the six v1 legacy frames unchanged, then (only when not
+ARMED) five 0x91
+sections for USART1 (motor IDs 1..6) and five for USART3 (IDs 7..12).
+Legacy slot 0 is the aggregate of both buses; it must not be interpreted as
+USART1-only or a single physical bus utilization. USART2 remains the host.
+Payload header: version=1, USART number (1 or 3), section 0..4, reserved=0,
+request sequence u16 little endian, reserved u16=0, uptime_ms u32. Section
+data consists of u32 little endian words except packet prefixes in section 3:
+
+* 0 (52 bytes total): tx bytes, rx bytes, rx IRQ, rx errors, overflows, peak,
+  timeouts, configured motor ID mask, last completed motion/current masks.
+* 1 (60): ISR calls, cumulative cycles low/high, max cycles, timing enabled,
+  ORE/FE/NE/PE, historical SR/DR/cycle.
+* 2 (64): last reason, then 12 counters in the same order as 0x87.
+* 3 (52): TX/RX lengths and 16-byte TX/RX prefixes.
+* 4 (60): current SR/BRR/CR1/CR3 and eight counters for TX start/complete,
+  RX idle/full, TX/RX DMA errors, sync requests/completions.
+
+Each section is a best-effort snapshot, not an atomic transaction. Legacy
+0x87/0x88 remain combined-reason/latest-transaction advisory data, and the
+legacy live registers remain USART1 only. Attribution for failures before a
+bus transaction begins is best-effort; per-bus totals are diagnostics, not a
+safety decision. An old host may ignore 0x91. A new host should correlate the
+request sequence, allow old firmware without 0x91 and report incomplete sets.
+Collection is intended for control-inactive use; the extra ten frames add
+traffic and latency, and actual timing must be measured on hardware.
+
 ### UART receive-error detail (0x89)
 
 GET_UART_STATS additionally returns UART_RX_ERRORS (0x89), a 64-byte payload:

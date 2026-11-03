@@ -5,7 +5,7 @@
 #include "uart_diagnostics.h"
 
 void motor_uart_init(motor_bus_id_t bus) { motor_dma_init(bus); }
-void motor_uart_discard_rx(motor_bus_id_t bus) { motor_dma_stop(bus); }
+void motor_uart_discard_rx(motor_bus_id_t bus) { motor_diagnostics_select_bus(bus==MOTOR_BUS_USART1?0U:2U); motor_dma_stop(bus); }
 
 bool motor_uart_write(motor_bus_id_t bus, const uint8_t *data, size_t length, uint32_t timeout_ms) {
     if (!data || !length) return false;
@@ -23,7 +23,7 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *data, size_t length, ui
             motor_dma_stop(bus); return false;
         }
         if (xTaskGetTickCount()-start>=timeout) {
-            uart_diagnostics_timeout(0U); motor_diagnostics_record(DIAG_TX_TIMEOUT);
+            uart_diagnostics_timeout(bus==MOTOR_BUS_USART1?0U:2U); motor_diagnostics_record(DIAG_TX_TIMEOUT);
             motor_dma_stop(bus); return false;
         }
         vTaskDelay(1U); /* DMA transfers while the owning task sleeps. */
@@ -35,7 +35,7 @@ static bool read_byte(motor_bus_id_t bus, uint8_t *byte, TickType_t start, TickT
         if (motor_dma_failed(bus)) { motor_diagnostics_record(DIAG_RX_ERROR); return false; }
         if (motor_dma_read_byte(bus,byte)) { motor_diagnostics_rx_byte(*byte); return true; }
         if (xTaskGetTickCount()-start>=timeout) {
-            uart_diagnostics_timeout(0U); motor_diagnostics_record(reason); return false;
+            uart_diagnostics_timeout(bus==MOTOR_BUS_USART1?0U:2U); motor_diagnostics_record(reason); return false;
         }
         vTaskDelay(1U);
     }

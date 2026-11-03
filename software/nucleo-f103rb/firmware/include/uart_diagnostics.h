@@ -30,6 +30,8 @@ enum motor_transport_event {
 };
 void motor_transport_dma_mode(uint32_t capacity);
 void motor_transport_record(enum motor_transport_event event);
+void motor_transport_record_bus(unsigned port, enum motor_transport_event event);
+void motor_diagnostics_select_bus(unsigned port);
 /* 0x8A words 13..15: host RX mode (1=circular DMA), capacity, DMA errors. */
 void host_transport_rx_dma_mode(uint32_t capacity);
 void host_transport_rx_dma_error(void);
@@ -41,4 +43,5 @@ void motor_diagnostics_tx(const uint8_t *data, size_t length);
 void motor_diagnostics_rx_byte(uint8_t byte);
 void motor_diagnostics_masks(uint16_t motion, uint16_t current);
 void uart_diagnostics_send(void *context, uart_diag_sender_t send);
+void uart_diagnostics_send_motor_buses(void *context, uart_diag_sender_t send, uint16_t request_sequence);
 #endif

@@ -84,6 +84,7 @@ bool sensor_take_motor_register_write(motor_register_write_result_t *result)
 uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
 void uart_diagnostics_send(void *opaque, uart_diag_sender_t send)
 { (void)opaque; (void)send; }
+void uart_diagnostics_send_motor_buses(void *c, uart_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
 bool motor_device_validate_targets(const motor_target_set_t *targets)
 { return targets != NULL; }
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *targets)

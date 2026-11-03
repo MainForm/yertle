@@ -352,6 +352,8 @@ int main(void) {
     assert(motor_device_read_register(1U,255U,1U,&registers)==MOTOR_REGISTER_COMMUNICATION_ERROR);
     assert(!(DMA1_Channel4->CCR & DMA_CCR_EN) && !(DMA1_Channel5->CCR & DMA_CCR_EN));
     motor_dma_init(MOTOR_BUS_USART3);
+    uart_stats_t before1,before3,after1,after3;
+    uart_diagnostics_get_stats(0U,&before1);uart_diagnostics_get_stats(2U,&before3);
     assert(USART3->BRR==0x20);
     assert(motor_dma_start(MOTOR_BUS_USART3,bus_probe,sizeof bus_probe));
     assert(DMA1_Channel3->CPAR==(uintptr_t)&USART3->DR);
@@ -366,5 +368,8 @@ int main(void) {
     USART3->SR=USART_SR_TC;assert(motor_dma_tx_complete(MOTOR_BUS_USART3));
     assert(!motor_dma_tx_complete(MOTOR_BUS_USART1));
     motor_dma_stop(MOTOR_BUS_USART3);
+    uart_diagnostics_get_stats(0U,&after1);uart_diagnostics_get_stats(2U,&after3);
+    assert(after1.tx_bytes==before1.tx_bytes && after1.rx_bytes==before1.rx_bytes);
+    assert(after3.tx_bytes==before3.tx_bytes+sizeof bus_probe && after3.rx_bytes==before3.rx_bytes+1U);
     puts("DMA driver/offset/register tests passed (mock registers, not board)");
 }

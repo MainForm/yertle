@@ -45,6 +45,7 @@ bool sensor_request_motor_register_write(uint16_t seq,const motor_register_write
 }
 uint16_t motor_device_register_lock_uncertain_mask(void){return 0;}
 void uart_diagnostics_send(void *c,uart_diag_sender_t send){(void)c;(void)send;}
+void uart_diagnostics_send_motor_buses(void *c, uart_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);memset(f,0,sizeof *f);memset(imu,0,sizeof *imu);
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}

@@ -20,6 +20,7 @@ typedef struct {
     uint32_t rx_consumed, tx_length;
     bool tx_accounted, initialized;
     volatile uart_isr_stats_t *stats;
+    unsigned diagnostic_port;
 } motor_dma_port_t;
 
 static motor_dma_port_t ports[2] = {
@@ -50,7 +51,7 @@ static void uart_irq(motor_dma_port_t *p) {
     if(sr&(USART_SR_IDLE|USART_SR_ORE|USART_SR_FE|USART_SR_NE|USART_SR_PE)) {
         const uint8_t byte=(uint8_t)p->uart->DR;
         ++p->stats->rx_interrupts;account_rx_irq(p);
-        if(sr&USART_SR_IDLE)motor_transport_record(TRANSPORT_RX_IDLE);
+        if(sr&USART_SR_IDLE)motor_transport_record_bus(p->diagnostic_port,TRANSPORT_RX_IDLE);
         if(errors){++p->stats->rx_errors;uart_diagnostics_rx_error(p->stats,sr,byte);if(p->active)p->failed=true;}
     }
     uart_isr_timing_finish(p->stats,begin);
@@ -58,15 +59,15 @@ static void uart_irq(motor_dma_port_t *p) {
 static void tx_irq(motor_dma_port_t *p) {
     const uint32_t begin=DWT->CYCCNT, flags=DMA1->ISR;
     DMA1->IFCR=p->tx_clear;
-    if(flags&p->tx_error){p->tx_dma_failed=true;p->failed=true;motor_transport_record(TRANSPORT_TX_DMA_ERROR);}
+    if(flags&p->tx_error){p->tx_dma_failed=true;p->failed=true;motor_transport_record_bus(p->diagnostic_port,TRANSPORT_TX_DMA_ERROR);}
     if(flags&p->tx_tc){p->tx->CCR&=~DMA_CCR_EN;p->tx_finished=true;}
     uart_isr_timing_finish(p->stats,begin);
 }
 static void rx_irq(motor_dma_port_t *p) {
     const uint32_t begin=DWT->CYCCNT,flags=DMA1->ISR;
     DMA1->IFCR=p->rx_clear;account_rx_irq(p);
-    if(flags&p->rx_error){p->failed=true;motor_transport_record(TRANSPORT_RX_DMA_ERROR);}
-    if(flags&p->rx_tc){p->failed=true;++p->stats->rx_overflows;motor_transport_record(TRANSPORT_RX_FULL);}
+    if(flags&p->rx_error){p->failed=true;motor_transport_record_bus(p->diagnostic_port,TRANSPORT_RX_DMA_ERROR);}
+    if(flags&p->rx_tc){p->failed=true;++p->stats->rx_overflows;motor_transport_record_bus(p->diagnostic_port,TRANSPORT_RX_FULL);}
     uart_isr_timing_finish(p->stats,begin);
 }
 void USART1_IRQHandler(void){uart_irq(&ports[0]);}
@@ -78,7 +79,7 @@ void DMA1_Channel3_IRQHandler(void){rx_irq(&ports[1]);}
 
 static void account_tx(motor_dma_port_t *p) {
     if(p->active&&!p->tx_accounted){uint32_t left=p->tx->CNDTR;
-        if(left<=p->tx_length)uart_diagnostics_tx_bytes(0U,p->tx_length-left);
+        if(left<=p->tx_length)uart_diagnostics_tx_bytes(p->diagnostic_port,p->tx_length-left);
         p->tx_accounted=true;}
 }
 void motor_dma_stop(motor_bus_id_t bus) {
@@ -87,7 +88,7 @@ void motor_dma_stop(motor_bus_id_t bus) {
     p->uart->CR3&=~(USART_CR3_DMAR|USART_CR3_DMAT);
     p->tx->CCR&=~DMA_CCR_EN;p->rx->CCR&=~DMA_CCR_EN;
     __DMB();account_tx(p);
-    if(p->active){uint32_t count=received(p);if(count>=p->rx_accounted)uart_diagnostics_rx_tail_bytes(0U,count-p->rx_accounted);}
+    if(p->active){uint32_t count=received(p);if(count>=p->rx_accounted)uart_diagnostics_rx_tail_bytes(p->diagnostic_port,count-p->rx_accounted);}
     p->active=false;DMA1->IFCR=p->tx_clear|p->rx_clear;
     volatile uint32_t discard=p->uart->SR;discard=p->uart->DR;(void)discard;
     NVIC_ClearPendingIRQ(p->uart_irq);NVIC_ClearPendingIRQ(p->tx_irq);NVIC_ClearPendingIRQ(p->rx_irq);
@@ -95,9 +96,8 @@ void motor_dma_stop(motor_bus_id_t bus) {
 }
 void motor_dma_init(motor_bus_id_t bus) {
     motor_dma_port_t *p=port(bus);if(!p)return;
-    /* Existing host protocol has two UART diagnostic slots; aggregate motor
-     * buses in slot 0 until a versioned per-bus diagnostic is introduced. */
-    p->stats=uart_diagnostics_port(0U);uart_isr_timing_init(p->stats);
+    p->diagnostic_port=bus==MOTOR_BUS_USART1?0U:2U;
+    p->stats=uart_diagnostics_port(p->diagnostic_port);uart_isr_timing_init(p->stats);
     RCC->AHBENR|=RCC_AHBENR_DMA1EN;
     if(bus==MOTOR_BUS_USART1){
         RCC->APB2ENR|=RCC_APB2ENR_IOPAEN|RCC_APB2ENR_USART1EN;
@@ -127,12 +127,12 @@ bool motor_dma_start(motor_bus_id_t bus,const uint8_t *data,size_t length) {
     p->tx->CCR=DMA_CCR_DIR|DMA_CCR_MINC|DMA_CCR_PL_1|DMA_CCR_TCIE|DMA_CCR_TEIE;
     p->tx->CPAR=(uintptr_t)&p->uart->DR;p->tx->CMAR=(uintptr_t)p->tx_buffer;p->tx->CNDTR=p->tx_length;
     p->active=true;__DMB();p->rx->CCR|=DMA_CCR_EN;p->uart->CR3|=USART_CR3_DMAR;
-    motor_transport_record(TRANSPORT_TX_STARTED);p->tx->CCR|=DMA_CCR_EN;p->uart->CR3|=USART_CR3_DMAT;
+    motor_transport_record_bus(p->diagnostic_port,TRANSPORT_TX_STARTED);p->tx->CCR|=DMA_CCR_EN;p->uart->CR3|=USART_CR3_DMAT;
     return true;
 }
 bool motor_dma_tx_complete(motor_bus_id_t bus) {
     motor_dma_port_t *p=port(bus);if(!p||!p->initialized||p->failed||!p->tx_finished||!(p->uart->SR&USART_SR_TC))return false;
-    if(!p->tx_accounted){account_tx(p);motor_transport_record(TRANSPORT_TX_COMPLETE);}return true;
+    if(!p->tx_accounted){account_tx(p);motor_transport_record_bus(p->diagnostic_port,TRANSPORT_TX_COMPLETE);}return true;
 }
 bool motor_dma_failed(motor_bus_id_t bus){motor_dma_port_t *p=port(bus);return !p||!p->initialized||p->failed;}
 bool motor_dma_tx_failed(motor_bus_id_t bus){motor_dma_port_t *p=port(bus);return !p||!p->initialized||p->tx_dma_failed;}
