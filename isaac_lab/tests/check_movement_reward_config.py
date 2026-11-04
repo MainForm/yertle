@@ -19,7 +19,7 @@ try:
     from isaac_lab.flat_env_cfg import YertleFlatEnvCfg
     from isaac_lab.flat_env_cfg_reward import feet_air_time_trot, track_lin_vel_xy_cauchy, feet_slide_sole, ActionSecondDifferencePenalty
     cfg=YertleFlatEnvCfg()
-    assert cfg.rewards.body_height_barrier.weight == -.10
+    assert cfg.rewards.body_height_barrier.weight == -.03
     assert cfg.rewards.body_height_barrier.params['lower_m'] == .08
     assert cfg.rewards.body_height_barrier.params['upper_m'] == .12
     assert cfg.rewards.body_height_barrier.params['transition_m'] == .02

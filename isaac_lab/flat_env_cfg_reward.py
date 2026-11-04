@@ -108,17 +108,17 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
     rewards.shoulder_posture_barrier = RewTerm(func=shoulder_posture_barrier, weight=-0.20, params={"asset_cfg": SceneEntityCfg("robot", joint_names=SHOULDER_NAMES), "lower": -0.17453292519943295, "upper": 0.17453292519943295})
     rewards.stance_width_barrier = RewTerm(func=stance_width_barrier, weight=-0.04, params={"sensor_cfg": CONTACT_SENSOR})
     rewards.body_height_barrier = RewTerm(
-        func=body_height_barrier, weight=-0.10,
+        func=body_height_barrier, weight=-0.03,
         params={"asset_cfg": SceneEntityCfg("robot"), "lower_m": 0.08, "upper_m": 0.12, "transition_m": 0.02})
     rewards.foot_workspace_barrier = RewTerm(func=foot_workspace_barrier, weight=-0.02, params={})
     rewards.energy = RewTerm(func=joint_energy_l1, weight=-2.0e-5, params={"asset_cfg": SceneEntityCfg("robot", joint_names=".*")})
     # Provisional 7.4-V locked-rotor ratio: not measured battery current.
     rewards.estimated_total_current_excess = RewTerm(
-        func=estimated_total_current_excess, weight=-0.10,
+        func=estimated_total_current_excess, weight=-0.30,
         params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 8.0,
                 "scale_a": 1.0, "asset_cfg": SceneEntityCfg("robot")})
     rewards.estimated_leg_current_excess = RewTerm(
-        func=estimated_leg_current_excess, weight=-0.10,
+        func=estimated_leg_current_excess, weight=-0.30,
         params={"amp_per_nm": 2.5 / (19.5 * 0.0980665), "threshold_a": 3.0,
                 "scale_a": 1.0, "asset_cfg": SceneEntityCfg("robot")})
     rewards.joint_pos = RewTerm(func=mdp.stand_still_joint_deviation_l1, weight=-0.10, params={"command_name": "base_velocity", "command_threshold": 0.05, "asset_cfg": SceneEntityCfg("robot", joint_names=".*")})

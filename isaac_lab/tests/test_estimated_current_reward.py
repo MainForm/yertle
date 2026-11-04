@@ -53,14 +53,14 @@ class EstimatedCurrentTests(unittest.TestCase):
               'estimated_total_current_excess': mod.estimated_total_current_excess}
         exec(compile(ast.Module(body=[assignment],type_ignores=[]),str(path),'exec'),ns)
         term = rewards.estimated_total_current_excess
-        self.assertEqual(term.weight, -.1)
+        self.assertEqual(term.weight, -.3)
         self.assertEqual(term.params['threshold_a'], 8.)
         self.assertAlmostEqual(term.params['amp_per_nm'], 2.5/(19.5*.0980665))
         leg = next(n for n in configure.body if isinstance(n, ast.Assign) and
                    any(isinstance(t, ast.Attribute) and t.attr == 'estimated_leg_current_excess' for t in n.targets))
         ns['estimated_leg_current_excess'] = mod.estimated_leg_current_excess
         exec(compile(ast.Module(body=[leg],type_ignores=[]),str(path),'exec'),ns)
-        self.assertEqual(rewards.estimated_leg_current_excess.weight, -.1)
+        self.assertEqual(rewards.estimated_leg_current_excess.weight, -.3)
         self.assertEqual(rewards.estimated_leg_current_excess.params['threshold_a'], 3.)
         self.assertFalse(any(isinstance(t, ast.Attribute) and t.attr == 'estimated_total_current_severe_excess'
                              for n in configure.body if isinstance(n, ast.Assign) for t in n.targets))

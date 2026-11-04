@@ -26,7 +26,7 @@ class BodyHeightTests(unittest.TestCase):
         def term(**kw):return NS(**kw)
         ns=dict(scope,rewards=rewards,RewTerm=term,SceneEntityCfg=lambda name:NS(name=name))
         exec(compile(ast.Module(body=[node],type_ignores=[]),str(SOURCE),'exec'),ns)
-        self.assertEqual(rewards.body_height_barrier.weight,-.10)
+        self.assertEqual(rewards.body_height_barrier.weight,-.03)
         self.assertEqual({k:v for k,v in rewards.body_height_barrier.params.items() if k!='asset_cfg'},dict(lower_m=.08,upper_m=.12,transition_m=.02))
 
 if __name__=='__main__':unittest.main()
