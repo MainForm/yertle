@@ -137,6 +137,11 @@ class FlatEnvState:
         view = robot.root_physx_view
         physics = {name: getattr(view, 'get_' + name)().cpu().clone()
                    for name in ('masses', 'inertias', 'coms', 'material_properties')}
+        actuator_pid_states = {
+            name: {key: cpu_tree(getattr(actuator, key)) for key in
+                   ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard')}
+            for name, actuator in robot.actuators.items() if hasattr(actuator, 'integral_pwm')
+        }
         return dict(schema=SCHEMA, config_digest=self.digest, num_envs=e.num_envs,
                     joint_names=list(robot.joint_names), body_names=list(robot.body_names),
                     scene=cpu_tree(e.scene.get_state()), physics=physics,
@@ -144,6 +149,7 @@ class FlatEnvState:
                     common_step_counter=e.common_step_counter,
                     sim_step_counter=e._sim_step_counter,
                     robot_previous_joint_vel=cpu_tree(robot.data._previous_joint_vel),
+                    actuator_pid_states=actuator_pid_states,
                     joint_targets={k: cpu_tree(getattr(robot.data, k)) for k in
                                    ('joint_pos_target', 'joint_vel_target', 'joint_effort_target')})
 
@@ -155,6 +161,11 @@ class FlatEnvState:
             state['body_names'] != list(robot.body_names)):
             raise ValueError('Environment continuation configuration/model/layout mismatch; use --resume-env-state off for an intentional reset')
         objects = self.objects()
+        current_pid = {name: actuator for name, actuator in robot.actuators.items()
+                       if hasattr(actuator, 'integral_pwm')}
+        saved_pid = state.get('actuator_pid_states', {})
+        if set(current_pid) != set(saved_pid):
+            raise ValueError('Actuator PID checkpoint state differs; use --resume-env-state off for an intentional reset')
         if objects.keys() != state['objects'].keys():
             raise ValueError('Environment continuation term layout differs')
         # restore_to writes the saved poses/velocities, without simulating a step.
@@ -171,6 +182,13 @@ class FlatEnvState:
         for key, saved in state['objects'].items():
             restore_attrs(objects[key], saved)
         robot.data._previous_joint_vel.copy_(state['robot_previous_joint_vel'].to(e.device))
+        for name, actuator in current_pid.items():
+            for key in ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard'):
+                restore_value(getattr(actuator, key), saved_pid[name][key], f'actuator/{name}/{key}')
+            actuator._pid_last_step.fill_(-1)
+            actuator._refresh_mask.zero_()
+            actuator._refresh_pending = False
+            actuator._clock_origin = actuator._sim.current_time_step_index
         e.common_step_counter = state['common_step_counter']
         e._sim_step_counter = state['sim_step_counter']
         # Cached raw contact points belong to the new PhysX scene, not the old one.

@@ -47,6 +47,7 @@ parser.add_argument("--body-tilt-termination-deg", type=float, default=None, hel
 parser.add_argument("--base-contact-termination", action="store_true", help="Terminate on base_link contact force >1 N, with no roll/pitch threshold (v6.19).")
 parser.add_argument("--velocity-limit-sim", type=float, default=None, help="Override PhysX actuator velocity limit (rad/s).")
 parser.add_argument("--effort-limit-sim", type=float, default=None, help="Override PhysX actuator effort limit (N.m).")
+parser.add_argument('--explicit-linked-motor', action='store_true', help='Use linked motor PID approximation with 20ms torque hold, 1ms physics, solver 64, and motor-space penalties (flat task).')
 parser.add_argument("--reset-pose-json", action="append", default=[], help="Repeatable pose JSON; sample standing + these poses uniformly on every episode reset.")
 parser.add_argument("--reset-standing-pose-json", help="Replace only pool index 0's standing reset pose; preserve trained observation/action reference angles.")
 parser.add_argument("--extend-reset-pose-limits", action="store_true", help="Explicitly expand simulation joint limits to include all reset poses for the entire run.")
@@ -64,6 +65,10 @@ if args_cli.body_tilt_termination_deg is not None and not 0 < args_cli.body_tilt
     parser.error("--body-tilt-termination-deg must be in (0,90].")
 if args_cli.extend_reset_pose_limits and not args_cli.reset_pose_json and not args_cli.reset_standing_pose_json:
     parser.error("--extend-reset-pose-limits requires --reset-pose-json or --reset-standing-pose-json.")
+if args_cli.explicit_linked_motor and (args_cli.task != 'flat' or not args_cli.signed_joint_reference):
+    parser.error('--explicit-linked-motor requires --task flat and --signed-joint-reference')
+if args_cli.explicit_linked_motor and (args_cli.velocity_limit_sim is not None or args_cli.effort_limit_sim is not None):
+    parser.error('--explicit-linked-motor uses motor limits; do not combine with joint --effort-limit-sim/--velocity-limit-sim')
 # Validate saved poses before launching Kit. Direct script and -m both supported.
 if __package__:
     from .play_start_pose import load_pose_json
@@ -106,6 +111,11 @@ _TASKS = {
 def main():
     TASK, EnvCfg, RunnerCfg = _TASKS[args_cli.task]
     env_cfg = EnvCfg()
+    if args_cli.explicit_linked_motor:
+        from isaac_lab.linked_motor_training import configure_linked_motor_actuator
+        configure_linked_motor_actuator(env_cfg)
+        drive = env_cfg.scene.robot.actuators['legs']
+        print(f'TRAIN_EXPLICIT_LINKED_MOTOR torque_Nm=1.024 speed_cutoff_rad_s=4.6 physics_dt=0.001 solver_position=64 control_period=0.020 pid_pwm={drive.kp_pwm},{drive.ki_pwm},{drive.kd_pwm} integral_limit_pwm={drive.integral_limit_pwm} speed_is_not_hard_limit=True', flush=True)
     if args_cli.trot_frequency_hz is not None:
         env_cfg.trot_frequency_hz = args_cli.trot_frequency_hz
     if args_cli.trot_duty_factor is not None:
