@@ -68,6 +68,16 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         weight=0.75,
         params={"command_name": "base_velocity", "min_scale": 0.10, "relative_scale": 0.50},
     )
+    # A Cauchy penalty is zero at perfect tracking and approaches its weight
+    # as the error grows; match the original tracking terms' scales and axes.
+    rewards.lin_vel_xy_tracking_error_cauchy = RewTerm(
+        func=lin_vel_xy_tracking_error_cauchy, weight=-1.0,
+        params={"command_name": "base_velocity", "min_scale": 0.05, "relative_scale": 0.50, "components": (0, 1)},
+    )
+    rewards.ang_vel_z_tracking_error_cauchy = RewTerm(
+        func=ang_vel_z_tracking_error_cauchy, weight=-0.1,
+        params={"command_name": "base_velocity", "min_scale": 0.10, "relative_scale": 0.50},
+    )
     rewards.action_rate_l2.weight = -0.04
     rewards.action_second_difference_l2 = RewTerm(
         func=ActionSecondDifferencePenalty, weight=-0.05, params={"action_name": "joint_pos"})
@@ -336,6 +346,18 @@ def track_ang_vel_z_cauchy(
     command = env.command_manager.get_command(command_name)[:, 2]
     error = asset.data.root_ang_vel_b[:, 2] - command
     return _command_relative_cauchy(error, command, min_scale, relative_scale)
+
+
+def lin_vel_xy_tracking_error_cauchy(env, command_name: str = "base_velocity", min_scale: float = 0.05,
+                                      relative_scale: float = 0.50, components: tuple[int, ...] = (0, 1)):
+    """Complement of the command-relative linear Cauchy tracking score."""
+    return 1.0 - track_lin_vel_xy_cauchy(env, command_name, min_scale, relative_scale, components)
+
+
+def ang_vel_z_tracking_error_cauchy(env, command_name: str = "base_velocity", min_scale: float = 0.10,
+                                     relative_scale: float = 0.50):
+    """Complement of the command-relative yaw-rate Cauchy tracking score."""
+    return 1.0 - track_ang_vel_z_cauchy(env, command_name, min_scale, relative_scale)
 
 
 def _interval_barrier(value: torch.Tensor, lower: float, upper: float, transition: float):

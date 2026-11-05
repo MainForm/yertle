@@ -152,6 +152,7 @@ def main():
         env_cfg.commands.base_velocity.rel_heading_envs = 0.0
         if args_cli.task == "flat":
             env_cfg.rewards.track_lin_vel_xy_cauchy.params["components"] = (0,)
+            env_cfg.rewards.lin_vel_xy_tracking_error_cauchy.params["components"] = (0,)
     if args_cli.base_contact_termination:
         configure_base_contact_termination(env_cfg)
     else:
