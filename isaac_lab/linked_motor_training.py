@@ -49,6 +49,9 @@ class LinkedMotorActuator(IdealPDActuator):
 
     def compute(self, control_action, joint_pos, joint_vel):
         physics_step = self._sim.current_time_step_index
+        acceleration_capture = getattr(self, '_acceleration_capture', None)
+        if acceleration_capture is not None:
+            acceleration_capture.record_physics_velocity(joint_vel)
         if self._clock_origin is None:
             self._clock_origin = physics_step
         periodic = (physics_step - self._clock_origin) % self.cfg.control_decimation == 0

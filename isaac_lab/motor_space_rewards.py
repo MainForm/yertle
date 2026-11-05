@@ -1,6 +1,7 @@
 """Motor-coordinate penalties for the opt-in ideal linked actuator."""
 import torch
 from .motor_drive_math import joint_to_motor_effort, joint_to_motor_velocity
+from .motor_control_acceleration import MotorControlIntervalAcceleration
 
 
 def _coordinates(env, asset_cfg):
@@ -51,8 +52,11 @@ def configure_motor_space_rewards(cfg):
     rewards = cfg.rewards
     rewards.dof_torques_l2.func = motor_torques_l2
     rewards.dof_torques_l2.params = {'asset_cfg': asset}
-    rewards.dof_acc_l2.func = motor_acc_l2
+    rewards.dof_acc_l2.func = MotorControlIntervalAcceleration
     rewards.dof_acc_l2.params = {'asset_cfg': SceneEntityCfg('robot')}
+    # The original 5 ms sensor retained samples at 0, -5, and -10 ms.
+    # At 1 ms retain 0..-10 ms, preserving the elapsed history span.
+    cfg.scene.contact_forces.history_length = 11
     rewards.joint_vel_l2.func = motor_velocity_l2
     rewards.joint_vel_l2.params = {'asset_cfg': SceneEntityCfg('robot')}
     rewards.joint_velocity_excess.func = motor_velocity_excess
