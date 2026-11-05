@@ -33,6 +33,7 @@ parser.add_argument('--effort-limit-sim', type=float, default=None, help='PhysX 
 parser.add_argument('--velocity-limit-sim', type=float, default=None, help='PhysX joint velocity limit in rad/s; match the checkpoint training profile.')
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
+parser.add_argument('--disable-rewards', action='store_true', help='Skip reward term calculations during playback; reward values become zero.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
@@ -230,6 +231,10 @@ def main():
         print(f"PLAY_VIDEO_DIR {video_folder}", flush=True)
 
     base_env = env.unwrapped
+    if args_cli.disable_rewards:
+        for name in base_env.reward_manager.active_terms:
+            base_env.reward_manager.get_term_cfg(name).weight = 0.0
+    print(f"PLAY_REWARDS {'disabled' if args_cli.disable_rewards else 'enabled'}", flush=True)
     env = RslRlVecEnvWrapper(env, clip_actions=getattr(agent_cfg, "clip_actions", None))
 
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
