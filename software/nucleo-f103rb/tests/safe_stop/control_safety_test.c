@@ -188,3 +188,5 @@ int main(void)
     puts("control safety: ordered stop, stale/pending target rejection, RX budgets and per-axis stall passed");
     return 0;
 }
+
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}

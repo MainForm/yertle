@@ -341,3 +341,6 @@ int main(void)
     puts("register GET/SET: wire validation, async completion, exclusive jobs, replay/cache, safety and re-arm gates passed");
     return 0;
 }
+
+void pmw3901_device_init(pmw3901_device_t *d){memset(d,0,sizeof *d);}
+void pmw3901_device_service(pmw3901_device_t *d,uint32_t now){(void)d;(void)now;}

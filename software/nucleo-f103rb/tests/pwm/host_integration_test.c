@@ -232,3 +232,5 @@ int main(void){
  tick+=1000;service_pid_detail(&c);assert(stats_frames>0);
  puts("Host/task transaction, Flash isolation and direct PWM routing passed");return 0;
 }
+
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}

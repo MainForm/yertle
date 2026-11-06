@@ -1,3 +1,4 @@
+#include "optical_flow_wire.h"
 #include "host_protocol.h"
 
 #include <stdbool.h>
@@ -821,9 +822,15 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     case MESSAGE_GET_SENSOR_FEEDBACK: {
         motor_feedback_set_t feedback;
         imu_feedback_t imu;
-        if (!sensor_get_feedback_snapshot(&feedback, &imu) || feedback.sequence == 0U) {
+        pmw3901_feedback_t flow;
+        if (!sensor_get_extended_feedback_snapshot(&feedback, &imu, &flow) || feedback.sequence == 0U) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_FEEDBACK_UNAVAILABLE);
         } else {
+            /* Optional flow precedes the unchanged required frames. Old hosts
+             * ignore this type; new hosts never wait for it separately. */
+            uint8_t optical_payload[OPTICAL_FLOW_PAYLOAD_SIZE];
+            optical_encode(optical_payload,sequence,feedback.sequence,feedback.uptime_ms,&flow);
+            send_frame(context,OPTICAL_FLOW_MESSAGE_TYPE,optical_payload,sizeof optical_payload);
             send_motor_feedback(context, &feedback);
             send_imu_feedback(context, &imu);
         }

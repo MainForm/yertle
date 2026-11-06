@@ -41,7 +41,7 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t tim
  }
  if(p[4]==0x83){assert(p[2]==254);unsigned width=p[6];
   for(size_t k=7;k<n-1;k+=width+1){assert(p[k]>=1&&p[k]<=12&&motor_bus_for_id(p[k])==bus);memcpy(memory[p[k]-1]+p[5],p+k+1,width);}return true;}
- if(p[2]==254){assert(p[4]==3&&p[5]==0x28&&p[6]==0);for(unsigned i=0;i<12;++i)if(motor_bus_for_id(i+1)==bus)memory[i][0x28]=0;return true;}
+ if(p[2]==254){assert(p[4]==3&&p[5]==0x28&&p[6]==0);for(unsigned i=0;i<12;++i)if(motor_bus_for_id((uint8_t)(i+1))==bus)memory[i][0x28]=0;return true;}
  assert(p[2]>=1&&p[2]<=12&&motor_bus_for_id(p[2])==bus);unsigned width=0;
  if(p[4]==2)width=p[6];else {assert(p[4]==3);
   if(!(ignore_relock&&p[5]==55&&p[6]==1))memcpy(memory[p[2]-1]+p[5],p+6,n-7);}
@@ -90,7 +90,7 @@ int main(void){
   assert(motor_device_set_torque(false)==MOTOR_DEVICE_UART_ERROR);
   assert(bus_tx[0]==before1+1);failing_bus=-1;}
  {unsigned before1=bus_tx[0],before3=bus_tx[1];motor_target_set_t goals={0};
-  for(unsigned i=0;i<12;++i){goals.motor[i].position=2048+i;goals.motor[i].speed=200;goals.motor[i].acceleration=10;}
+  for(unsigned i=0;i<12;++i){goals.motor[i].position=(uint16_t)(2048+i);goals.motor[i].speed=200;goals.motor[i].acceleration=10;}
   assert(motor_device_write_targets(&goals)==MOTOR_DEVICE_OK);
   assert(bus_tx[0]==before1+1&&bus_tx[1]==before3+1);
   for(unsigned i=0;i<12;++i)assert(memory[i][0x2a]==(uint8_t)(2048+i));}

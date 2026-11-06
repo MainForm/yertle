@@ -497,3 +497,5 @@ int main(void){uint8_t b[YPWM_STATUS_LENGTH];uint16_t seq;uint8_t result;
  persistent_boot_tests();
  puts("F103 PID service: two-phase register transaction, rollback interlock, host-only current and remaining guards passed");return 0;
 }
+
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}
