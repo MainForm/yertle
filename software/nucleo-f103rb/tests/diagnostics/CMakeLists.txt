@@ -131,3 +131,10 @@ foreach(target firmware_dma_test firmware_register_write_driver_test firmware_pw
   target_sources(${target} PRIVATE ../../firmware/src/calibration_store.c ../pwm/calibration_memory.c)
  endif()
 endforeach()
+
+add_executable(pmw3901_device_test ../pmw3901_device_tests.c ../../firmware/src/pmw3901_device.c)
+target_include_directories(pmw3901_device_test PRIVATE ../../firmware/include)
+add_test(NAME pmw3901_device_state_machine COMMAND pmw3901_device_test)
+add_executable(pmw3901_wire_test ../pmw3901_wire_tests.c)
+target_include_directories(pmw3901_wire_test PRIVATE ../../firmware/include)
+add_test(NAME pmw3901_wire_layout COMMAND pmw3901_wire_test)

@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "pmw3901_device.h"
 #include "pmw3901_spi.h"
 #include <assert.h>
@@ -10,7 +13,8 @@ void pmw3901_spi_select(bool b){(void)b;}
 bool pmw3901_spi_write(uint8_t a,uint8_t v){(void)a;(void)v;++calls;return !fail_spi;}
 bool pmw3901_spi_read(uint8_t a,uint8_t*d,size_t n,bool burst){
  ++calls;if(fail_spi)return false;memset(d,0,n);
- if(a==0)*d=bad_id?0:0x49;if(a==0x5f)*d=0xb6;
+ if(a==0)*d=bad_id?0:0x49;
+ if(a==0x5f)*d=0xb6;
  if(burst){d[0]=0x80;d[2]=0xff;d[3]=0xff;d[6]=40;}return true;
 }
 int main(void){pmw3901_device_t d;pmw3901_device_init(&d);uint32_t now;

@@ -86,6 +86,7 @@ if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
  message(FATAL_ERROR "Cannot determine minimal stack words")
 endif()
 math(EXPR stack_bytes "${host_multiplier} * ${CMAKE_MATCH_1} * 4")
+set(host_stack_bytes ${stack_bytes})
 check_path(host_pid_telemetry host_protocol_task service_pid_detail send_frame send_frame_sequence
     host_uart_write_bytes wait_tx_flag)
 
@@ -97,3 +98,6 @@ check_path(actuator_return_telemetry actuator_task pwm_control_service service_s
 # Optical acquisition uses small fixed bursts, never a full protocol context.
 set(stack_bytes ${sensor_stack_bytes})
 check_path(optical_burst sensor_task pmw3901_device_service pmw3901_spi_read exchange wait_flag)
+
+set(stack_bytes ${host_stack_bytes})
+check_path(host_optical_reply host_protocol_task process_host_rx handle_frame send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
