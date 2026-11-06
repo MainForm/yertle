@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include "uart_diagnostics.h"
+#include "motor_failure.h"
 DWT_Type test_dwt;
 CoreDebug_Type test_debug;
 USART_Type test_usart;
@@ -15,10 +16,19 @@ static uint32_t read32(const uint8_t *p) {
 }
 static void receive_extended(void *context, uint8_t type, const uint8_t *p, uint16_t len) {
     (void)context; assert(type==0x91U); assert(p[0]==1U && p[4]==0x34U && p[5]==0x12U);
-    assert(p[1]==(extended_frames<5U?1U:3U)); assert(p[2]==extended_frames%5U);
+    assert(p[1]==(extended_frames<9U?1U:3U)); assert(p[2]==extended_frames%9U);
     assert(len<=64U); assert(read32(p+8)==1000U);
     if(p[1]==3U && p[2]==0U){assert(read32(p+12)==7U);assert(read32(p+16)==9U);assert(read32(p+40)==0x0fc0U);}
     if(p[1]==3U && p[2]==2U)assert(read32(p+16+DIAG_NO_RESPONSE*4U)==1U);
+    if(p[2]>=5U){
+        assert(len==64U);
+        if(p[1]==1U){
+            assert(read32(p+12)==(p[2]<7U?1U:2U));
+            if(p[2]==5U)assert(read32(p+16)==789U);
+            if(p[2]==7U)assert(read32(p+16)==900U);
+            if(p[2]==6U||p[2]==8U)assert(read32(p+16)==0xc0U);
+        }else assert(read32(p+12)==0U);
+    }
     ++extended_frames;
 }
 static void receive(void *context, uint8_t type, const uint8_t *p, uint16_t len) {
@@ -54,7 +64,12 @@ int main(void) {
     motor_diagnostics_select_bus(2);motor_diagnostics_record(DIAG_NO_RESPONSE);
     uart_diagnostics_send(NULL, receive);
     assert(frames == 6);
+    motor_failure_snapshot_t f={0},saved;
+    f.meta[1]=789U;f.hw[1]=0xc0U;motor_failure_record(0,&f);
+    f.meta[1]=900U;motor_failure_record(0,&f);
+    assert(motor_failure_get(0,true,&saved)&&saved.meta[0]==1U&&saved.meta[1]==789U);
+    assert(motor_failure_get(0,false,&saved)&&saved.meta[0]==2U&&saved.hw[0]==2U);
     uart_diagnostics_send_motor_buses(NULL, receive_extended, 0x1234U);
-    assert(extended_frames==10U);
+    assert(extended_frames==18U);
     puts("firmware diagnostics tests passed (ownership, carry, serialization; no hardware IRQ simulation)");
 }

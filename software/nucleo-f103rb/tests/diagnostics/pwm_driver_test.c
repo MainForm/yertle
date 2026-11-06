@@ -21,6 +21,10 @@ int xSemaphoreGive(SemaphoreHandle_t m){assert(m&&depth==1);--depth;return 1;}
 uint32_t xTaskGetTickCount(void){return clock_ms;}
 void vTaskDelay(uint32_t t){clock_ms+=t;}
 void motor_uart_init(motor_bus_id_t bus){(void)bus;}
+void motor_uart_failure_begin(motor_bus_id_t b,uint8_t a,uint8_t n,uint16_t m){(void)b;(void)a;(void)n;(void)m;}
+void motor_uart_failure_progress(motor_bus_id_t b,uint16_t m){(void)b;(void)m;}
+void motor_uart_failure_note(motor_bus_id_t b,enum motor_diag_reason r){(void)b;(void)r;}
+void motor_uart_failure_end(motor_bus_id_t b){(void)b;}
 void motor_uart_discard_rx(motor_bus_id_t bus){(void)bus;}
 void motor_diagnostics_record(enum motor_diag_reason r){(void)r;}
 void motor_transport_record(enum motor_transport_event e){(void)e;}

@@ -101,3 +101,11 @@ check_path(optical_burst sensor_task pmw3901_device_service pmw3901_spi_read exc
 
 set(stack_bytes ${host_stack_bytes})
 check_path(host_optical_reply host_protocol_task process_host_rx handle_frame send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
+
+set(stack_bytes ${sensor_stack_bytes})
+check_path(feedback_failure_capture sensor_task motor_device_read_feedback read_sync_block
+    motor_uart_read_frame read_byte motor_uart_failure_note motor_dma_failure_snapshot)
+set(stack_bytes ${host_stack_bytes})
+check_path(host_uart_failure_reply host_protocol_task process_host_rx handle_frame
+    uart_diagnostics_send_motor_buses send_diagnostic_frame send_frame send_frame_sequence
+    host_uart_write_bytes wait_tx_flag)

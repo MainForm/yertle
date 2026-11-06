@@ -70,17 +70,18 @@ static uint16_t read_sync_block(motor_bus_id_t bus, uint8_t reg, uint8_t data_le
 {
     const uint8_t start=bus==MOTOR_BUS_USART1?0U:6U;
     const uint8_t count=6U;
+    motor_uart_failure_begin(bus,reg,data_length,motor_bus_mask(bus));
     const int16_t frame_length = STS3215_BuildSyncRead(
         tx_frame, sizeof(tx_frame), reg, data_length, motor_ids+start, count);
     if (frame_length <= 0) {
-        motor_diagnostics_record(DIAG_BUILD_FAILED);
+        motor_diagnostics_record(DIAG_BUILD_FAILED);motor_uart_failure_note(bus,DIAG_BUILD_FAILED);motor_uart_failure_end(bus);
         return 0U;
     }
 
     motor_uart_discard_rx(bus);
     motor_transport_record(TRANSPORT_SYNC_REQUEST);
     if (!motor_uart_write(bus, tx_frame, (size_t) frame_length, MOTOR_UART_TIMEOUT_MS)) {
-        motor_uart_discard_rx(bus);
+        motor_uart_discard_rx(bus);motor_uart_failure_end(bus);
         return 0U;
     }
 
@@ -99,13 +100,14 @@ static uint16_t read_sync_block(motor_bus_id_t bus, uint8_t reg, uint8_t data_le
             (parse_status != STS3215_ERR_SERVO_FAULT)) {
             motor_diagnostics_record(parse_status == STS3215_ERR_BAD_CHECKSUM
                 ? DIAG_BAD_CHECKSUM : DIAG_PARSE_ERROR);
+            motor_uart_failure_note(bus,parse_status==STS3215_ERR_BAD_CHECKSUM?DIAG_BAD_CHECKSUM:DIAG_PARSE_ERROR);
             continue;
         }
 
         const int index = motor_index_from_id(reply.id);
         if ((index < 0) || motor_bus_for_id(reply.id)!=bus || (reply.data_len < data_length) ||
             (received_mask & (uint16_t)(1U << (uint8_t)index))) {
-            motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);
+            motor_diagnostics_record(DIAG_ID_OR_DATA_LENGTH);motor_uart_failure_note(bus,DIAG_ID_OR_DATA_LENGTH);
             continue;
         }
         motor_diagnostics_record(parse_status == STS3215_ERR_SERVO_FAULT
@@ -125,8 +127,9 @@ static uint16_t read_sync_block(motor_bus_id_t bus, uint8_t reg, uint8_t data_le
             motor->temperature = reply.data[7];
         }
         received_mask |= (uint16_t) (1U << (uint8_t) index);
+        motor_uart_failure_progress(bus,received_mask);
     }
-    motor_uart_discard_rx(bus); /* Stop DMA even on partial response/error. */
+    motor_uart_discard_rx(bus);motor_uart_failure_end(bus); /* Failure was captured before cleanup. */
     if (received_mask == motor_bus_mask(bus)) motor_transport_record(TRANSPORT_SYNC_COMPLETE);
     return received_mask;
 }

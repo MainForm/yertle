@@ -134,6 +134,21 @@ bool motor_dma_tx_complete(motor_bus_id_t bus) {
     motor_dma_port_t *p=port(bus);if(!p||!p->initialized||p->failed||!p->tx_finished||!(p->uart->SR&USART_SR_TC))return false;
     if(!p->tx_accounted){account_tx(p);motor_transport_record_bus(p->diagnostic_port,TRANSPORT_TX_COMPLETE);}return true;
 }
+void motor_dma_failure_snapshot(motor_bus_id_t bus, motor_failure_snapshot_t *out) {
+    motor_dma_port_t *p=port(bus);if(!p||!p->initialized||!out)return;
+    /* Advisory hardware tuple: interrupts remain enabled. Copy before stop()
+     * clears flags/buffers; received count can advance during this read. */
+    out->hw[1]=p->uart->SR;out->hw[2]=p->uart->BRR;
+    out->hw[3]=p->uart->CR1;out->hw[4]=p->uart->CR3;
+    out->hw[5]=DMA1->ISR;out->hw[6]=p->tx->CCR;out->hw[7]=p->rx->CCR;
+    out->hw[8]=p->rx->CNDTR;
+    out->hw[9]=(p->active?1U:0U)|(p->tx_finished?2U:0U)|
+               (p->failed?4U:0U)|(p->tx_dma_failed?8U:0U);
+    out->hw[10]=p->stats->last_error_sr;out->hw[11]=p->stats->last_error_cycle;
+    out->hw[12]=SystemCoreClock;
+    out->meta[9]=received(p);out->meta[10]=p->rx_consumed;
+    out->meta[11]=p->tx_length;out->meta[12]=p->tx->CNDTR;
+}
 bool motor_dma_failed(motor_bus_id_t bus){motor_dma_port_t *p=port(bus);return !p||!p->initialized||p->failed;}
 bool motor_dma_tx_failed(motor_bus_id_t bus){motor_dma_port_t *p=port(bus);return !p||!p->initialized||p->tx_dma_failed;}
 bool motor_dma_read_byte(motor_bus_id_t bus,uint8_t *byte){

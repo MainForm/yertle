@@ -1,6 +1,7 @@
 #ifndef MOTOR_DMA_H
 #define MOTOR_DMA_H
 #include "motor_bus_map.h"
+#include "motor_failure.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -12,4 +13,6 @@ bool motor_dma_failed(motor_bus_id_t bus);
 bool motor_dma_tx_failed(motor_bus_id_t bus);
 bool motor_dma_read_byte(motor_bus_id_t bus, uint8_t *byte);
 void motor_dma_stop(motor_bus_id_t bus);
+/* Read-only; never reads DR, clears IRQ flags or stops DMA. */
+void motor_dma_failure_snapshot(motor_bus_id_t bus, motor_failure_snapshot_t *out);
 #endif

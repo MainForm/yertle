@@ -371,5 +371,28 @@ int main(void) {
     uart_diagnostics_get_stats(0U,&after1);uart_diagnostics_get_stats(2U,&after3);
     assert(after1.tx_bytes==before1.tx_bytes && after1.rx_bytes==before1.rx_bytes);
     assert(after3.tx_bytes==before3.tx_bytes+sizeof bus_probe && after3.rx_bytes==before3.rx_bytes+1U);
+    /* Capture BEFORE timeout cleanup; successful traffic must not overwrite.
+     * Query scopes exclude register reads and identify each motor bus. */
+    motor_failure_snapshot_t first,last,after;
+    const bool had_first=motor_failure_get(0,true,&first);
+    motor_uart_failure_begin(MOTOR_BUS_USART1,0x38,8,0x3f);
+    complete_tx=false;
+    assert(!motor_uart_write(MOTOR_BUS_USART1,request,sizeof request,5));
+    motor_uart_failure_end(MOTOR_BUS_USART1);
+    assert(motor_failure_get(0,false,&last));
+    assert(last.meta[5]==DIAG_TX_TIMEOUT&&last.meta[4]==5&&last.meta[6]==0x820838);
+    assert(last.hw[9]&1U); /* was active, though timeout has now stopped DMA */
+    assert(last.hw[6]&DMA_CCR_EN);
+    assert(!(DMA1_Channel4->CCR&DMA_CCR_EN));
+    complete_tx=true;inject_sync=true;omit_id=0;wrong_bus_reply=false;
+    assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_OK);
+    assert(motor_failure_get(0,false,&after)&&after.meta[0]==last.meta[0]);
+    if(had_first){assert(motor_failure_get(0,true,&after));assert(after.meta[0]==first.meta[0]);}
+    omit_id=9;
+    assert(motor_device_read_feedback(&feedback)==MOTOR_DEVICE_PARTIAL_FEEDBACK);
+    assert(motor_failure_get(1,false,&after));
+    assert(after.meta[5]==DIAG_NO_RESPONSE&&after.meta[7]==0xfc0&&!(after.meta[8]&(1U<<8)));
+    assert(after.meta[9]>0&&after.meta[10]>0); /* other five motors did respond */
+    assert(motor_failure_get(0,false,&after)&&after.meta[0]==last.meta[0]);
     puts("DMA driver/offset/register tests passed (mock registers, not board)");
 }

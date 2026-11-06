@@ -27,6 +27,10 @@ int xSemaphoreGive(SemaphoreHandle_t handle)
 uint32_t xTaskGetTickCount(void) { return test_tick; }
 void vTaskDelay(uint32_t ticks) { assert(mutex_depth==1U && (ticks==10U || ticks==2U));test_tick+=ticks; }
 void motor_uart_init(motor_bus_id_t bus) {(void)bus;}
+void motor_uart_failure_begin(motor_bus_id_t b,uint8_t a,uint8_t n,uint16_t m){(void)b;(void)a;(void)n;(void)m;}
+void motor_uart_failure_progress(motor_bus_id_t b,uint16_t m){(void)b;(void)m;}
+void motor_uart_failure_note(motor_bus_id_t b,enum motor_diag_reason r){(void)b;(void)r;}
+void motor_uart_failure_end(motor_bus_id_t b){(void)b;}
 void motor_uart_discard_rx(motor_bus_id_t bus) {(void)bus;}
 static bool allowed(void) { return safe; }
 void motor_diagnostics_record(enum motor_diag_reason reason) { (void)reason; }

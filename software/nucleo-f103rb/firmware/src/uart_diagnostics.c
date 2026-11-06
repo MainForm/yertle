@@ -1,4 +1,5 @@
 #include "uart_diagnostics.h"
+#include "motor_failure.h"
 #include <string.h>
 #include "FreeRTOS.h"
 #include "task.h"
@@ -18,6 +19,28 @@ static volatile uint32_t tx_length, rx_length;
 static uint32_t snapshot_max_cycles;
 /* Motor tasks are serialized by the motor bus mutex; IRQ counters are per bus. */
 static unsigned selected_motor_port;
+/* Bus-mutex-serialized task writer, bounded non-blocking host reader. Never
+ * spin waiting for a preempted lower-priority writer. IRQs remain enabled. */
+static motor_failure_snapshot_t failure_first[2],failure_latest[2];
+static volatile uint32_t failure_version[2],failure_count[2];
+void motor_failure_record(unsigned b,motor_failure_snapshot_t *value){
+    if(b>1U||!value)return;
+    ++failure_version[b];__DMB();
+    uint32_t id=failure_count[b]+1U;if(!id)id=1U;
+    value->meta[0]=id;value->hw[0]=id;
+    if(!failure_count[b])failure_first[b]=*value;
+    failure_latest[b]=*value;failure_count[b]=id;
+    __DMB();++failure_version[b];
+}
+bool motor_failure_get(unsigned b,bool first,motor_failure_snapshot_t *out){
+    if(b>1U||!out)return false;
+    for(unsigned attempt=0;attempt<3U;++attempt){
+        const uint32_t version=failure_version[b];if(version&1U)continue;
+        __DMB();*out=first?failure_first[b]:failure_latest[b];__DMB();
+        if(version==failure_version[b])return out->meta[0]!=0U;
+    }
+    memset(out,0,sizeof *out);return false;
+}
 static volatile uint32_t bus_transport[2][16], bus_reasons[2][DIAG_REASON_COUNT];
 static volatile uint32_t bus_last_reason[2] = {0xffffffffU,0xffffffffU};
 static volatile uint8_t bus_tx_preview[2][16], bus_rx_preview[2][16];
@@ -240,6 +263,16 @@ void uart_diagnostics_send_motor_buses(void *context, uart_diag_sender_t send, u
             else {USART_TypeDef *u=b?USART3:USART1;pack(p+12,u->SR);pack(p+16,u->BRR);pack(p+20,u->CR1);pack(p+24,u->CR3);
                 for(unsigned i=2;i<=9U;++i){pack(p+28U+(i-2U)*4U,bus_transport[b][i]);}length=60U;}
             send(context,0x91U,p,(uint16_t)length);
+        }
+        for(unsigned kind=0;kind<2U;++kind){
+            motor_failure_snapshot_t failure={0};(void)motor_failure_get(b,kind==0U,&failure);
+            for(unsigned half=0;half<2U;++half){
+                memset(p,0,sizeof p);p[0]=1U;p[1]=(uint8_t)(b?3U:1U);
+                p[2]=(uint8_t)(5U+kind*2U+half);p[4]=(uint8_t)request_sequence;p[5]=(uint8_t)(request_sequence>>8U);pack(p+8,now);
+                const uint32_t *words=half?failure.hw:failure.meta;
+                for(unsigned i=0;i<13U;++i)pack(p+12U+i*4U,words[i]);
+                send(context,0x91U,p,64U);
+            }
         }
     }
 }
