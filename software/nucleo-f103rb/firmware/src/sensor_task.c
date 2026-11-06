@@ -13,6 +13,8 @@
 static SemaphoreHandle_t feedback_mutex;
 static motor_feedback_set_t latest_feedback;
 static imu_feedback_t latest_imu_feedback;
+static pmw3901_feedback_t latest_flow_feedback;
+static pmw3901_device_t flow_device;
 static uint32_t feedback_sequence;
 static motor_position_offsets_t position_offsets;
 static bool offsets_pending;
@@ -49,6 +51,13 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
     *imu = latest_imu_feedback;
     (void) xSemaphoreGive(feedback_mutex);
     return true;
+}
+
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow)
+{
+    if(!motor || !imu || !flow || !feedback_mutex || xSemaphoreTake(feedback_mutex,pdMS_TO_TICKS(5U))!=pdTRUE)return false;
+    *motor=latest_feedback;*imu=latest_imu_feedback;*flow=latest_flow_feedback;
+    (void)xSemaphoreGive(feedback_mutex);return true;
 }
 
 bool sensor_request_position_offsets(uint16_t request_sequence)
@@ -214,6 +223,7 @@ void sensor_task(void *argument)
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t next_imu_probe = last_wake;
     bool imu_ready = false;
+    pmw3901_device_init(&flow_device);
 
     for (;;) {
         motor_feedback_set_t sample = { 0 };
@@ -238,7 +248,10 @@ void sensor_task(void *argument)
             }
         }
 
+        /* Independent sample timing; never hold snapshot mutex during SPI I/O. */
+        pmw3901_device_service(&flow_device,(uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS));
         if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
+            latest_flow_feedback = flow_device.feedback;
             latest_feedback = sample;
             latest_imu_feedback = imu;
             (void) xSemaphoreGive(feedback_mutex);

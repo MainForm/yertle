@@ -5,6 +5,7 @@
 
 #include "motor_device.h"
 #include "imu_device.h"
+#include "pmw3901_device.h"
 
 /* Total attempts per ID, including the initial read. */
 #define SENSOR_POSITION_OFFSET_MAX_ATTEMPTS 5U
@@ -37,6 +38,7 @@ typedef struct {
 } motor_register_write_result_t;
 
 bool sensor_task_init(void);
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow);
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu);
 /* One in-flight read-only job; up to five attempts per ID, first valid reply
  * wins. Reject another job until the result is taken. */
