@@ -32,6 +32,8 @@ static bool wait_tx_flag(uint32_t flag, TickType_t started)
 {
     while ((USART2->SR & flag) == 0U) {
         if ((TickType_t)(xTaskGetTickCount() - started) >= pdMS_TO_TICKS(HOST_TX_TIMEOUT_MS)) {
+            /* IRQ/preemption can set TXE/TC after the loop predicate. */
+            if((USART2->SR & flag)!=0U)return true;
             uart_diagnostics_timeout(1U);
             return false;
         }

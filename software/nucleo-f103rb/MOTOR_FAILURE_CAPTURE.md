@@ -59,3 +59,19 @@ failures; check before-cleanup flags, unchanged first/latest records after
 successful queries and old/new wire section bounds. ARM build checks static
 sensor/host stack paths. Board-level failure reproduction still requires
 flashing and a real run; synthetic tests do not establish the hardware cause.
+
+## Timeout boundary completion recheck
+
+Before committing a motor TX timeout, USART1/USART3 recheck DMA completion
+and UART wire TC once. Before a frame byte timeout, recheck DMA failure and
+available RX byte once. USART2 TX rechecks TXE/TC before declaring timeout.
+Start/deadline and configured 5ms/20ms limits are preserved; no timer is
+renewed by unrelated traffic. A late-ready result avoids cleanup discarding
+already buffered responses. Missing data and DMA errors retain failure handling.
+The matching PC API rescans correlated ACK/NACK/sensor history after timed
+wake and mutex reacquisition before throwing. This also preserves the deadline.
+
+Regression: production UART code with deterministic completion/byte/flag changes
+between predicate and deadline check; genuine silence and RX DMA error cases.
+PC regression queues ACK/NACK before deadline while delaying mutex reacquisition
+past it; wrong-request responses must still time out.

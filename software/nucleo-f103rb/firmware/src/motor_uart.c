@@ -52,6 +52,9 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *data, size_t length, ui
             motor_dma_stop(bus); return false;
         }
         if (xTaskGetTickCount()-start>=timeout) {
+            /* IRQ/preemption may complete DMA and wire TC after the loop
+             * predicate. Recheck once before declaring failure/clearing RX. */
+            if(motor_dma_tx_complete(bus))return true;
             uart_diagnostics_timeout(bus==MOTOR_BUS_USART1?0U:2U); motor_diagnostics_record(DIAG_TX_TIMEOUT);motor_uart_failure_note(bus,DIAG_TX_TIMEOUT);
             motor_dma_stop(bus); return false;
         }
@@ -64,6 +67,10 @@ static bool read_byte(motor_bus_id_t bus, uint8_t *byte, TickType_t start, TickT
         if (motor_dma_failed(bus)) { motor_diagnostics_record(DIAG_RX_ERROR);motor_uart_failure_note(bus,DIAG_RX_ERROR); return false; }
         if (motor_dma_read_byte(bus,byte)) { motor_diagnostics_rx_byte(*byte); return true; }
         if (xTaskGetTickCount()-start>=timeout) {
+            /* A byte can arrive between the first buffer check and deadline
+             * check. Consume it once; keep the original frame deadline. */
+            if(motor_dma_failed(bus)){motor_diagnostics_record(DIAG_RX_ERROR);motor_uart_failure_note(bus,DIAG_RX_ERROR);return false;}
+            if(motor_dma_read_byte(bus,byte)){motor_diagnostics_rx_byte(*byte);return true;}
             uart_diagnostics_timeout(bus==MOTOR_BUS_USART1?0U:2U); motor_diagnostics_record(reason);motor_uart_failure_note(bus,reason); return false;
         }
         vTaskDelay(1U);
