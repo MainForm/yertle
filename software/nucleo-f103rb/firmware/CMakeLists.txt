@@ -14,6 +14,8 @@ add_executable(yertle_f103rb
     src/motor_dma.c
     src/uart_diagnostics.c
     src/motor_device.c
+    src/pmw3901_spi.c
+    src/pmw3901_device.c
     src/imu_device.c
     src/actuator_task.c
     src/pwm_control.c
