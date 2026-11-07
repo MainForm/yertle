@@ -33,7 +33,7 @@ class LinkedMotorHoldTests(unittest.TestCase):
     def setUp(self):
         self.drive = object.__new__(load_actuator())
         self.drive.cfg = types.SimpleNamespace(control_decimation=20, control_period_s=0.020,
-            motor_torque_limit=1.024, motor_speed_limit=4.6, kp_pwm=7., ki_pwm=3., kd_pwm=.13,
+            motor_torque_limit=1.024, motor_speed_limit=4.6, motor_free_speed=4.6, kp_pwm=7., ki_pwm=3., kd_pwm=.13,
             integral_limit_pwm=100., duty_limit_pwm=1000., nm_per_pwm=1.024/800.)
         self.drive.thigh = [1, 4, 7, 10]
         self.drive.shin = [2, 5, 8, 11]
@@ -41,6 +41,7 @@ class LinkedMotorHoldTests(unittest.TestCase):
         self.drive.raw_transform = MotorRawTransform(names)
         self.drive.computed_effort = torch.zeros(2, 12)
         self.drive.motor_effort = torch.zeros(2, 12)
+        self.drive.motor_pwm = torch.zeros(2, 12)
         self.drive.integral_pwm = torch.zeros(2, 12)
         self.drive.previous_raw = torch.zeros(2, 12)
         self.drive.pid_initialized = torch.zeros(2, 12, dtype=torch.bool)
@@ -77,12 +78,13 @@ class LinkedMotorHoldTests(unittest.TestCase):
         torch.testing.assert_close(updated[1], first[1])
         self.assertTrue(self.drive.pid_initialized[0].all())
 
-    def test_speed_cutoff_is_sampled_at_controller_update(self):
-        first = self.step(0.02)
-        torch.testing.assert_close(self.step(0.02, speed=10), first)
-        for _ in range(18):
-            self.step(0.02, speed=10)
-        self.assertEqual(self.step(0.02, speed=10).abs().max().item(), 0.0)
+    def test_pwm_held_but_back_emf_responds_each_physics_step(self):
+        self.step(0.02)
+        held_pwm = self.drive.motor_pwm.clone()
+        moving_torque = self.step(0.02, speed=10)
+        torch.testing.assert_close(self.drive.motor_pwm, held_pwm)
+        self.assertTrue(torch.all(moving_torque < 0))
+        self.assertLessEqual(moving_torque.abs().max().item(), 1.024001)
 
     def test_extra_nonphysics_write_does_not_shift_or_double_integrate(self):
         self.step(0.02)

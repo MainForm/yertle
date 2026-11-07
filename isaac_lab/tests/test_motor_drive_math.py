@@ -1,6 +1,6 @@
 import unittest
 import torch
-from isaac_lab.motor_drive_math import joint_to_motor_velocity, joint_to_motor_effort, motor_to_joint_effort, limit_motor_effort
+from isaac_lab.motor_drive_math import joint_to_motor_velocity, joint_to_motor_effort, motor_to_joint_effort, limit_motor_effort, motor_back_emf_effort
 
 
 class MotorDriveMathTests(unittest.TestCase):
@@ -23,6 +23,14 @@ class MotorDriveMathTests(unittest.TestCase):
     def test_coupled_output_can_exceed_single_motor_torque(self):
         result = motor_to_joint_effort(torch.tensor([[1.024, 1.024]]), [0], [1])
         torch.testing.assert_close(result, torch.tensor([[2.048, 1.024]]))
+
+    def test_pwm_back_emf_torque_speed_and_braking(self):
+        pwm = torch.tensor([800., 800., 1000., 1000., 0., -800., 1000.])
+        speed = torch.tensor([0., 3.68, 4.6, 5.0, 1.0, 0., -2.0])
+        result = motor_back_emf_effort(pwm, speed, nm_per_pwm=1.024/800,
+                                      free_speed=4.6, torque_limit=1.024, speed_limit=4.6)
+        expected = torch.tensor([1.024, 0., 0., -1.28*(5/4.6-1), -1.28/4.6, -1.024, 1.024])
+        torch.testing.assert_close(result, expected, atol=2e-6, rtol=2e-6)
 
 
 if __name__ == '__main__':

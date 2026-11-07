@@ -139,7 +139,7 @@ class FlatEnvState:
                    for name in ('masses', 'inertias', 'coms', 'material_properties')}
         actuator_pid_states = {
             name: {key: cpu_tree(getattr(actuator, key)) for key in
-                   ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard')}
+                   ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard', 'motor_pwm')}
             for name, actuator in robot.actuators.items() if hasattr(actuator, 'integral_pwm')
         }
         return dict(schema=SCHEMA, config_digest=self.digest, num_envs=e.num_envs,
@@ -183,7 +183,7 @@ class FlatEnvState:
             restore_attrs(objects[key], saved)
         robot.data._previous_joint_vel.copy_(state['robot_previous_joint_vel'].to(e.device))
         for name, actuator in current_pid.items():
-            for key in ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard'):
+            for key in ('integral_pwm', 'previous_raw', 'pid_initialized', 'pid_guard', 'motor_pwm'):
                 restore_value(getattr(actuator, key), saved_pid[name][key], f'actuator/{name}/{key}')
             actuator._pid_last_step.fill_(-1)
             actuator._refresh_mask.zero_()

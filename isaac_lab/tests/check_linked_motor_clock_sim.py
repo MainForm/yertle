@@ -1,4 +1,4 @@
-"""Run inside Isaac Sim: verify held torque across real physics steps."""
+"""Run inside Isaac Sim: verify held PWM across real physics steps."""
 import argparse
 import sys
 from pathlib import Path
@@ -32,10 +32,10 @@ calls = []
 original = drive.compute
 def record(*values, **kwargs):
     index = drive._sim.current_time_step_index
-    previous = drive.motor_effort.clone()
+    previous = drive.motor_pwm.clone()
     pending = drive._refresh_pending
     result = original(*values, **kwargs)
-    changed = bool(torch.any(drive.motor_effort != previous))
+    changed = bool(torch.any(drive.motor_pwm != previous))
     calls.append((index, pending, changed))
     return result
 drive.compute = record

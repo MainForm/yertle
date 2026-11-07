@@ -34,7 +34,7 @@ parser.add_argument('--velocity-limit-sim', type=float, default=None, help='Phys
 parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"])
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument('--disable-rewards', action='store_true', help='Skip reward term calculations during playback; reward values become zero.')
-parser.add_argument('--explicit-linked-motor', action='store_true', help='Use linked motor PID approximation with 20ms torque hold, 1ms physics, solver 64, and motor-space penalties (flat task).')
+parser.add_argument('--explicit-linked-motor', action='store_true', help='Use linked motor PID with 20ms PWM hold, 1ms back-EMF physics, solver 64, and motor-space penalties (flat task).')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
@@ -191,7 +191,7 @@ def main():
         from isaac_lab.linked_motor_training import configure_linked_motor_actuator
         configure_linked_motor_actuator(env_cfg)
         drive = env_cfg.scene.robot.actuators['legs']
-        print(f'PLAY_EXPLICIT_LINKED_MOTOR torque_Nm=1.024 speed_cutoff_rad_s=4.6 physics_dt=0.001 solver_position=64 control_period=0.020 pid_pwm={drive.kp_pwm},{drive.ki_pwm},{drive.kd_pwm} integral_limit_pwm={drive.integral_limit_pwm} speed_is_not_hard_limit=True', flush=True)
+        print(f'PLAY_EXPLICIT_LINKED_MOTOR torque_Nm=1.024 speed_cutoff_rad_s=4.6 free_speed_rad_s={drive.motor_free_speed} physics_dt=0.001 solver_position=64 control_period=0.020 pid_pwm={drive.kp_pwm},{drive.ki_pwm},{drive.kd_pwm} integral_limit_pwm={drive.integral_limit_pwm} speed_is_not_hard_limit=True', flush=True)
     if args_cli.zero_base_linear_velocity:
         env_cfg.observations.policy.base_lin_vel.func = zero_base_linear_velocity_observation
     print(f"PLAY_BASE_LINEAR_VELOCITY_INPUT {'zero' if args_cli.zero_base_linear_velocity else 'measured'}", flush=True)

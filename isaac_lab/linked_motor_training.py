@@ -4,7 +4,7 @@ from isaaclab.actuators import IdealPDActuator, IdealPDActuatorCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
 
-from .motor_drive_math import joint_to_motor_velocity, motor_to_joint_effort, limit_motor_effort
+from .motor_drive_math import joint_to_motor_velocity, motor_to_joint_effort, motor_back_emf_effort
 from .motor_operating_range import MotorRawTransform
 from .firmware_pid_torch import firmware_pid_step
 
@@ -17,6 +17,8 @@ class LinkedMotorActuator(IdealPDActuator):
         if len(self._joint_names) != 12:
             raise ValueError('Linked drive requires all twelve joints in one actuator group')
         self.motor_effort = self.computed_effort.clone()
+        # Signed motor PWM in articulation order; held between controller ticks.
+        self.motor_pwm = torch.zeros_like(self.motor_effort)
         self.raw_transform = MotorRawTransform(self._joint_names, device=self.motor_effort.device, dtype=self.motor_effort.dtype)
         # PID arrays use physical motor ID order, not articulation joint order.
         self.integral_pwm = torch.zeros_like(self.motor_effort)
@@ -38,6 +40,7 @@ class LinkedMotorActuator(IdealPDActuator):
     def reset(self, env_ids):
         ids = slice(None) if env_ids is None else env_ids
         self.motor_effort[ids] = 0
+        self.motor_pwm[ids] = 0
         self.computed_effort[ids] = 0
         self.integral_pwm[ids] = 0
         self.previous_raw[ids] = 0
@@ -63,7 +66,6 @@ class LinkedMotorActuator(IdealPDActuator):
             # Invalid positions trip an environment-wide stop until episode reset.
             goal = torch.nan_to_num(goal, nan=0.0, posinf=4095.0, neginf=0.0).clamp(0, 4095)
             measured = torch.nan_to_num(measured, nan=0.0, posinf=4095.0, neginf=0.0).clamp(0, 4095)
-            motor_vel = joint_to_motor_velocity(joint_vel, self.thigh, self.shin)
             active = torch.ones_like(self._refresh_mask) if periodic else self._refresh_mask
             same_step = self._pid_last_step == physics_step
             mask = active.unsqueeze(-1)
@@ -85,21 +87,26 @@ class LinkedMotorActuator(IdealPDActuator):
             self._pid_last_step = torch.where(active, torch.full_like(self._pid_last_step, physics_step), self._pid_last_step)
             # F103 polarity is -1 for all motors. Undo that polarity into the
             # calibrated joint-coordinate direction; its sign mapping is unchanged.
-            motor_effort = torch.zeros_like(self.motor_effort)
-            motor_effort[:, self.raw_transform.indices] = pwm * self.raw_transform.signs * self.cfg.nm_per_pwm
-            motor_effort = torch.where(guarded.unsqueeze(-1), torch.zeros_like(motor_effort), motor_effort)
-            requested = motor_to_joint_effort(motor_effort, self.thigh, self.shin)
-            limited = limit_motor_effort(motor_effort, motor_vel, self.cfg.motor_torque_limit, self.cfg.motor_speed_limit)
+            motor_pwm = torch.zeros_like(self.motor_pwm)
+            motor_pwm[:, self.raw_transform.indices] = pwm * self.raw_transform.signs
+            motor_pwm = torch.where(guarded.unsqueeze(-1), torch.zeros_like(motor_pwm), motor_pwm)
             if periodic:
-                self.computed_effort = requested
-                self.motor_effort = limited
+                self.motor_pwm = motor_pwm
             else:
                 mask = self._refresh_mask.unsqueeze(-1)
-                self.computed_effort = torch.where(mask, requested, self.computed_effort)
-                self.motor_effort = torch.where(mask, limited, self.motor_effort)
+                self.motor_pwm = torch.where(mask, motor_pwm, self.motor_pwm)
             self._refresh_mask.zero_()
             self._refresh_pending = False
+        # The command is held for 20 ms; speed-dependent motor response is
+        # evaluated every 1 ms physical step. Invalid-raw guard is torque-free.
+        motor_vel = joint_to_motor_velocity(joint_vel, self.thigh, self.shin)
+        torque = motor_back_emf_effort(self.motor_pwm, motor_vel, nm_per_pwm=self.cfg.nm_per_pwm,
+                                       free_speed=self.cfg.motor_free_speed,
+                                       torque_limit=self.cfg.motor_torque_limit,
+                                       speed_limit=self.cfg.motor_speed_limit)
+        self.motor_effort = torch.where(self.pid_guard.unsqueeze(-1), torch.zeros_like(torque), torque)
         self.applied_effort = motor_to_joint_effort(self.motor_effort, self.thigh, self.shin)
+        self.computed_effort = self.applied_effort.clone()
         control_action.joint_efforts = self.applied_effort
         control_action.joint_positions = None
         control_action.joint_velocities = None
@@ -111,6 +118,7 @@ class LinkedMotorActuatorCfg(IdealPDActuatorCfg):
     class_type: type = LinkedMotorActuator
     motor_torque_limit: float = 1.024
     motor_speed_limit: float = 4.6
+    motor_free_speed: float = 4.6
     control_decimation: int = 20
     control_period_s: float = 0.020
     kp_pwm: float = 7.0
