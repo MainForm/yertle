@@ -1,0 +1,23 @@
+{
+  "version": "v6.22.3",
+  "fresh": false,
+  "source_checkpoint": "isaac_lab/runs/yertle_flat/2026-10-26_05-37-08/model_8200.pt",
+  "source_version": "v6.22.2",
+  "source_iteration": 8200,
+  "next_iteration": 8201,
+  "additional_iterations": 3000,
+  "target_last_iteration": 11200,
+  "environment_reset": true,
+  "baseline": "Only fixed trot frequency changes from 1.7 to 1.0 Hz. Retain policy, critic, optimizer, learning rate and global iteration; initialize a new environment because gait configuration changed. Preserve source data/checkpoints.",
+  "train_args": [
+    "--task", "flat", "--headless", "--num_envs", "1024",
+    "--max_iterations", "3000", "--seed", "0",
+    "--velocity-limit-sim", "2.3", "--effort-limit-sim", "1.024",
+    "--signed-joint-reference", "--yaw-rate-command",
+    "--lin-vel-x-min", "-0.3", "--lin-vel-x-max", "0.5",
+    "--base-contact-termination", "--trot-support-penalties",
+    "--trot-frequency-hz", "1.0", "--trot-duty-factor", "0.6",
+    "--reset-standing-pose-json", "isaac_lab/configs/standing_api_reference.json"
+  ],
+  "compatibility": "55 observations / 12 joint-position actions; joint axes, calibrated motor/API mapping, action reference and scale unchanged. No old 1.7 Hz environment/phase/RNG restoration."
+}
