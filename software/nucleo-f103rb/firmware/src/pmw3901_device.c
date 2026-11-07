@@ -1,5 +1,6 @@
 #include "pmw3901_device.h"
 #include "pmw3901_spi.h"
+#include "pmw3901_spi_diagnostic.h"
 #include <string.h>
 #include "pmw3901_init_sequence.h"
 static void fail(pmw3901_device_t*d,uint32_t now,uint8_t error){
@@ -10,6 +11,7 @@ static void fail(pmw3901_device_t*d,uint32_t now,uint8_t error){
 void pmw3901_device_init(pmw3901_device_t*d){memset(d,0,sizeof *d);pmw3901_spi_init();}
 void pmw3901_device_service(pmw3901_device_t*d,uint32_t now){
     if((int32_t)(now-d->deadline)<0)return;
+    pmw3901_spi_context(d->state,d->config_index);
     uint8_t byte=0;
     switch(d->state){
     case PMW_START: case PMW_RETRY:

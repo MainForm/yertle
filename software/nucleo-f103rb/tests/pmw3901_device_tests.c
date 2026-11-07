@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 static unsigned calls;static bool bad_id,fail_spi;
+void pmw3901_spi_context(uint8_t s,uint16_t i){(void)s;(void)i;}
 void pmw3901_spi_init(void){}
 void pmw3901_spi_reset(bool b){(void)b;}
 void pmw3901_spi_select(bool b){(void)b;}
