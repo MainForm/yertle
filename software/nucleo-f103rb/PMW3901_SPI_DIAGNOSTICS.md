@@ -1,55 +1,89 @@
-# PMW3901 SPI failure capture
+# PMW3901 staged timeout and automatic diagnostics
 
-The SPI1 deadline remains 2000 us for the entire transaction, including
-deliberate protocol delays and preemption. This change records evidence;
-it does not add retries, refresh the deadline or change the failure decision.
+## Timeout ownership
 
-Before CS release or SPI1 reset, preserve the first and latest failure in RAM.
-Successful operations and sensor reinitialization do not clear these records.
-An MCU reset clears them. No Flash writes. The producer is the sensor task;
-bounded versioned readers run with interrupts enabled. Reading the SPI data
-register just for diagnostics is forbidden (could consume data / clear flags).
+The sensor task supplies OPTICAL_CALL_BUDGET_US=20000 for each call to
+pmw3901_device_service. This is one state-machine service operation, not the
+multi-second sensor initialization/retry sequence. The synchronous driver
+cooperatively checks that call budget. The task also checks on return and
+invalidates the optical sample / schedules recovery on a late return.
+This is not an asynchronous task cancellation or a hard real-time guarantee
+while a higher-priority interrupt/task is running. Cleanup can finish later.
 
-Existing disarmed GET_UART_STATS (0x08) additionally returns four optional
-OPTICAL_SPI_DIAGNOSTICS (0x93) frames. Existing periodic 0x92 is unchanged.
-Each 64-byte payload: schema=1 at byte 0, section 0..3 at byte 1, request
-sequence LE16 at 2, retrieval MCU uptime LE32 ms at 4, fourteen LE32 words at 8.
-Sections: first transaction=0, first hardware=1, latest transaction=2,
-latest hardware=3. Match their snapshot ID before interpreting both halves.
-ID 0 means absent or concurrently updating. Older hosts ignore the extension;
-new clients tolerate older firmware in the existing optional 150ms window.
-Four frames add about 300 wire bytes only on idle manual queries.
+The driver independently renews a 500us deadline at each TXE, RXNE and BSY
+wait, for every address/data byte. Deliberate 50/500us protocol delays do not
+consume the next flag wait's budget. The old 2ms transaction deadline is gone.
+At a flag deadline, recheck completion before failing, like the UART path.
+The conservative task budget remains enforceable even if a flag is ready.
+500us is an implementation margin at 1MHz, not a datasheet-mandated maximum;
+both values require validation with the real RTOS workload.
 
-Transaction words (index: meaning/unit):
-0 ID; 1 failure MCU ms; 2 total us; 3 current flag wait us; 4 timeout us;
-5 operation (read=1/write=2/burst=3); 6 register address; 7 requested data length;
-8 byte index (0=address, 1..N=data); 9 actual DR writes; 10 actual DR reads;
-11 stage (TXE=1/RXNE=2/BSY=3/bad_argument=4); 12 device state;
-13 config index in low16 and last successfully selected bank in bits16..23
-(255=unknown after sensor reset).
+Keep SPI mode3/1MHz, pin/DMA ownership, 1s recovery, optical counts/axes and
+motor/IMU behavior unchanged. Preserve pre-cleanup SR/CR1/CR2, GPIO, clock,
+byte progress, last DR values and maximum polling gap without extra DR reads.
 
-Hardware words:
-0 matching ID; 1 DWT cycle; 2 SPI_SR; 3 CR1; 4 CR2; 5 GPIOA_IDR;
-6 GPIOA_ODR; 7 RCC_APB2ENR; 8 RCC_APB2RSTR; 9 AFIO_MAPR;
-10 CPU Hz; 11 last transmitted byte; 12 last received byte
-(256=none); 13 maximum consecutive polling-iteration gap us.
+## Automatic collection without a command
 
-SR bits: RXNE=0, TXE=1, MODF=5, OVR=6, BSY=7. Check operation/byte progress,
-SPE in CR1, pins/clock, and the selected stage. A large polling gap or a flag
-already ready when captured is evidence of possible execution delay/race;
-it does not identify the preempting IRQ/task or prove wiring is correct.
-Register reads are advisory, not one atomic hardware snapshot. Intentional
-50/500us protocol delays are in total elapsed time, not the polling-gap field.
-Wrong sensor product ID after successful SPI transfer is last_error=2 and
-does not produce a SPI timeout record. No firmware/PC timestamp subtraction.
+Each SPI wait timeout, task-call overrun, invalid argument or unexpected chip
+ID records first/latest history and enqueues a snapshot. The sensor/driver
+does not write UART. The host task sends one low-priority 0x93 half at most
+every 20ms after safety/RX/ACK/results/heartbeat work. A failed UART TX retains
+the half and backs off 100ms. PID detail is skipped on an auto-send pass.
+Each error is two ~76-byte wire frames, about 1.52ms wire time at 1Mbps total.
+Disconnected hosts retain queued records for the next connection. No manual
+:uart-stats or PC polling command is needed for automatic JSONL logging.
 
-After flashing, reproduce the issue, release control, then enter :uart-stats
-before resetting the MCU. CLI JSONL kind optical_spi_failure_snapshot keeps
-all raw words, ID, request sequence, MCU time and a formatted explanation.
+The bounded SPSC RAM queue holds four error snapshots. When offline or under
+prolonged TX failure it may fill; additional events update retained latest
+history and increment a dropped-event counter. The counter is reported on
+automatic halves (saturated at65535), and snapshot IDs reveal gaps. First,
+latest, queue and counters reset on MCU reset. No Flash writes. Logs cannot
+be delivered across a physical link outage; pending records need a later
+successful connection, and reboot loses RAM. Manual :uart-stats is optional
+for querying first/latest history, and adds no periodic overhead.
 
-Validation: actual driver with mocked registers/DWT tests stalled TXE/RXNE,
-BSY, ready-after-preemption at deadline, pre-reset registers, byte counts,
-retention and four wire sections. Client tests cover malformed lengths,
-section bounds, request correlation, duplicate rejection and legacy replies.
-CLI mock validates end-to-end JSONL. ARM stack paths include capture/reply.
-These checks do not constitute a hardware reproduction or prove the cause.
+## Wire compatibility
+
+Response 0x93 stays 64 bytes. Byte0=schema, byte1=section; LE16 at2 and LE32
+retrieval MCU uptime ms at4; fourteen LE32 words at8. Schema1 is decoded for
+older firmware; new firmware emits schema2. Old hosts reject schema2 safely.
+Manual sections0/1=first transaction/hardware and2/3=latest; bytes2..3 are
+request sequence. Automatic sections4/5=transaction/hardware and bytes2..3
+are the saturated dropped-event count. Never index the 4-part manual array
+with automatic sections. The receive event stream carries automatic halves
+even during another request, so the CLI logs them independently of queries.
+
+Transaction words, schema2:
+0 snapshot ID; 1 failure MCU ms; 2 transaction elapsed us;
+3 flag elapsed us (or whole call elapsed for stage5); 4 applicable timeout us
+(500 stage,20000 task,0 argument/ID); 5 operation low8 (read1/write2/burst3,
+0=no operation) and call elapsed us in upper24 (saturated);
+6 address (256=no operation); 7 requested length; 8 byte index (0=address);
+9 DR writes; 10 DR reads; 11 reason (TXE1/RXNE2/BSY3/argument4/task_budget5/
+sensor_ID6); 12 device state low8 and last wait stage upper bits;
+13 config index low16, register bank bits16..23 (255=unknown), expected chip
+ID bits24..31 only for stage6. Observed ID is hardware last_rx.
+Schema1 words5/12/13 retain their older un-packed meanings.
+
+Hardware words unchanged:0 matching ID,1 DWT cycle,2 SR,3 CR1,4 CR2,
+5 GPIOA_IDR,6 GPIOA_ODR,7 APB2ENR,8 APB2RSTR,9 AFIO_MAPR,10 CPU Hz,
+11 last TX,12 last RX (256=none),13 maximum polling gap us.
+SR RXNE0/TXE1/MODF5/OVR6/BSY7. Match snapshot IDs between halves.
+Reads are advisory, not atomic hardware tracing. Poll gaps cannot identify
+the exact preempting task/IRQ. No cross-clock PC/MCU timestamp subtraction.
+
+CLI JSONL kind optical_spi_failure_snapshot includes schema, automatic,
+dropped_events, section, raw words, named details and both clock timestamps.
+
+## Validation
+
+Production-driver register/DWT mocks verify renewed flag waits, >2ms successful
+transactions, completion-after-preemption recheck, 20ms call budget, late return,
+ID mismatch, pre-reset capture, queue retention/retry/overflow and history.
+Host frame tests exercise connected/ACK/register/mode priority, 20ms pacing,
+100ms failure backoff and unchanged control state. Client tests cover legacy
+schema1, schema2, malformed lengths/bounds, automatic/manual separation and
+preservation of unsolicited receive events. CLI mock emits automatic halves
+on a sensor poll and verifies logging without manual :uart-stats.
+ARM static stack and Flash/RAM checks are required; hardware timing remains
+to be measured after flashing. Motor mapping and policy semantics unchanged.

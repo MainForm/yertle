@@ -967,6 +967,18 @@ static void service_pid_detail(protocol_context_t *context){
     if(pwm_control_pid_stats(bytes))send_frame(context,MESSAGE_EVENT,bytes,YPWM_PID_STATS_LENGTH);
 }
 
+static bool service_optical_failure(protocol_context_t *context){
+    static TickType_t next;static bool paced;
+    const TickType_t now=xTaskGetTickCount();
+    if(!context->host_connected||context->result_count||context->register_job_active||context->pwm_mode_pending||
+       (paced&&(int32_t)(now-next)<0))return false;
+    uint8_t payload[64];if(!pmw3901_spi_auto_payload(payload))return false;
+    const bool sent=send_frame(context,PMW_SPI_DIAGNOSTIC_TYPE,payload,sizeof payload);
+    pmw3901_spi_auto_result(sent);
+    next=xTaskGetTickCount()+pdMS_TO_TICKS(sent?20U:100U);paced=true;
+    return true;
+}
+
 void host_protocol_task(void *argument)
 {
     /* One host task owns the replay/diagnostic cache. Keep it off the 2 KiB
@@ -1012,7 +1024,7 @@ void host_protocol_task(void *argument)
 
         /* The FSM owns the transition; heartbeat only provides a healthy lease. */
         try_enter_control_ready(&context);
-        service_pid_detail(&context);
+        if(!service_optical_failure(&context))service_pid_detail(&context);
 
         vTaskDelay(pdMS_TO_TICKS(2));
     }

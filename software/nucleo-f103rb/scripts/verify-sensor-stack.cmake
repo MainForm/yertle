@@ -115,3 +115,8 @@ check_path(optical_failure_capture sensor_task pmw3901_device_service pmw3901_sp
 set(stack_bytes ${host_stack_bytes})
 check_path(host_spi_failure_reply host_protocol_task process_host_rx handle_frame
  pmw3901_spi_send_diagnostics send_diagnostic_frame send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
+
+set(stack_bytes ${host_stack_bytes})
+check_path(host_automatic_spi host_protocol_task service_optical_failure send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
+set(stack_bytes ${sensor_stack_bytes})
+check_path(optical_budget_end sensor_task pmw3901_spi_call_end capture_failure)
