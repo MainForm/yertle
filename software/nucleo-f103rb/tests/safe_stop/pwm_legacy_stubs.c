@@ -34,3 +34,12 @@ bool pwm_control_stop_detail(uint8_t b[20]){(void)b;return false;}
 
 #include "pmw3901_spi_diagnostic.h"
 void pmw3901_spi_send_diagnostics(void*c,pmw_spi_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
+
+void pmw3901_spi_call_begin(uint32_t t){(void)t;}
+bool pmw3901_spi_call_end(void){return true;}
+
+#ifndef OPTICAL_HOST_TEST
+bool pmw3901_spi_auto_payload(uint8_t p[64]){(void)p;return false;}
+void pmw3901_spi_auto_result(bool sent){(void)sent;}
+
+#endif /* OPTICAL_HOST_TEST */

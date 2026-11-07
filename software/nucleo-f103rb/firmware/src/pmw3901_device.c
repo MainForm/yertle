@@ -8,10 +8,14 @@ static void fail(pmw3901_device_t*d,uint32_t now,uint8_t error){
     d->feedback.ready=false;d->feedback.interval_valid=false;d->previous_read=false;
     d->state=PMW_RETRY;d->deadline=now+1000U;
 }
+void pmw3901_device_timeout(pmw3901_device_t*d,uint32_t now){
+    if(d->state!=PMW_RETRY)fail(d,now,PMW_ERROR_SPI);
+    d->feedback.state=d->state;
+}
 void pmw3901_device_init(pmw3901_device_t*d){memset(d,0,sizeof *d);pmw3901_spi_init();}
 void pmw3901_device_service(pmw3901_device_t*d,uint32_t now){
-    if((int32_t)(now-d->deadline)<0)return;
     pmw3901_spi_context(d->state,d->config_index);
+    if((int32_t)(now-d->deadline)<0)return;
     uint8_t byte=0;
     switch(d->state){
     case PMW_START: case PMW_RETRY:
@@ -24,7 +28,7 @@ void pmw3901_device_service(pmw3901_device_t*d,uint32_t now){
     case PMW_CS_HIGH:pmw3901_spi_select(false);d->state=PMW_ID;d->deadline=now+2U;d->clear_address=0;break;
     case PMW_ID:
         if(!pmw3901_spi_read(d->clear_address?0x5f:0,&byte,1,false))fail(d,now,PMW_ERROR_SPI);
-        else if(byte!=(d->clear_address?0xb6:0x49))fail(d,now,PMW_ERROR_ID);
+        else if(byte!=(d->clear_address?0xb6:0x49)){pmw3901_spi_id_error(d->clear_address?0xb6:0x49);fail(d,now,PMW_ERROR_ID);}
         else if(d->clear_address)d->state=PMW_RESET;else d->clear_address=1;
         break;
     case PMW_RESET:
@@ -44,7 +48,7 @@ void pmw3901_device_service(pmw3901_device_t*d,uint32_t now){
         if(d->state==PMW_READY&&(uint32_t)(now-d->last_health_ms)>=1000U){
             d->last_health_ms=now;
             if(!pmw3901_spi_read(0,&byte,1,false))fail(d,now,PMW_ERROR_SPI);
-            else if(byte!=0x49)fail(d,now,PMW_ERROR_ID);
+            else if(byte!=0x49){pmw3901_spi_id_error(0x49);fail(d,now,PMW_ERROR_ID);}
             break;
         }
         if(!pmw3901_spi_read(0x16,d->feedback.raw,12,true))fail(d,now,PMW_ERROR_SPI);

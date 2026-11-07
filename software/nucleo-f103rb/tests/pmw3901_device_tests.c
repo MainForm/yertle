@@ -8,6 +8,7 @@
 #include <string.h>
 static unsigned calls;static bool bad_id,fail_spi;
 void pmw3901_spi_context(uint8_t s,uint16_t i){(void)s;(void)i;}
+void pmw3901_spi_id_error(uint8_t expected){(void)expected;}
 void pmw3901_spi_init(void){}
 void pmw3901_spi_reset(bool b){(void)b;}
 void pmw3901_spi_select(bool b){(void)b;}
@@ -27,4 +28,6 @@ int main(void){pmw3901_device_t d;pmw3901_device_init(&d);uint32_t now;
  assert(!d.feedback.ready&&d.feedback.errors>=2);
  bad_id=false;for(unsigned i=0;i<250&&!d.feedback.valid;i++){now+=20;pmw3901_device_service(&d,now);}
  assert(d.feedback.valid&&d.feedback.epoch>=3&&d.feedback.sequence>seq);
+ unsigned errors=d.feedback.errors;pmw3901_device_timeout(&d,now);assert(!d.feedback.valid&&d.state==PMW_RETRY&&d.feedback.errors==errors+1);
+ pmw3901_device_timeout(&d,now);assert(d.feedback.errors==errors+1);
  puts("PASS: bounded step initialization, invalid first interval, SPI failure, absent ID, recovery epoch");}

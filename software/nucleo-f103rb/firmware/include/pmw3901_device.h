@@ -21,6 +21,7 @@ typedef struct {
     bool previous_read;
 } pmw3901_device_t;
 void pmw3901_device_init(pmw3901_device_t *device);
+void pmw3901_device_timeout(pmw3901_device_t *device,uint32_t now_ms);
 /* One bounded SPI operation per service call, no multi-tick sleeps. */
 void pmw3901_device_service(pmw3901_device_t *device,uint32_t now_ms);
 #endif

@@ -1,6 +1,7 @@
 #include "sensor_task.h"
 #include "host_protocol.h"
 #include "pwm_control.h"
+#include "pmw3901_spi_diagnostic.h"
 
 #include <string.h>
 
@@ -9,6 +10,7 @@
 #include "task.h"
 
 #define SENSOR_PERIOD_MS 20U
+#define OPTICAL_CALL_BUDGET_US 20000U
 
 static SemaphoreHandle_t feedback_mutex;
 static motor_feedback_set_t latest_feedback;
@@ -249,7 +251,10 @@ void sensor_task(void *argument)
         }
 
         /* Independent sample timing; never hold snapshot mutex during SPI I/O. */
+        pmw3901_spi_call_begin(OPTICAL_CALL_BUDGET_US);
         pmw3901_device_service(&flow_device,(uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS));
+        if(!pmw3901_spi_call_end())
+            pmw3901_device_timeout(&flow_device,(uint32_t)(xTaskGetTickCount()*portTICK_PERIOD_MS));
         if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
             latest_flow_feedback = flow_device.feedback;
             latest_feedback = sample;
