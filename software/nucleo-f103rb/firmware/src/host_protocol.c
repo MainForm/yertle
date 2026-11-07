@@ -14,6 +14,7 @@
 #include "sensor_task.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
+#include "pmw3901_spi_diagnostic.h"
 #include "register_write_diagnostics.h"
 #include "pwm_control.h"
 
@@ -868,7 +869,10 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         uart_diagnostics_send(context, send_diagnostic_frame);
         /* Extra diagnostic frames are restricted to disarmed operation: a
          * legacy host can issue GET_UART_STATS while control is active. */
-        if(!host_protocol_is_armed())uart_diagnostics_send_motor_buses(context, send_diagnostic_frame, sequence);
+        if(!host_protocol_is_armed()){
+            uart_diagnostics_send_motor_buses(context, send_diagnostic_frame, sequence);
+            pmw3901_spi_send_diagnostics(context, send_diagnostic_frame, sequence);
+        }
         if(context->has_write_diagnostic)
             (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,context->last_write_diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
         send_pwm_mode_diagnostics(context,true);

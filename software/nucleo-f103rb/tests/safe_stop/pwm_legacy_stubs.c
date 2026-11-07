@@ -31,3 +31,6 @@ void pwm_control_pid_detail_result(bool sent){(void)sent;}
 bool pwm_control_pid_stats(uint8_t b[YPWM_PID_STATS_LENGTH]){(void)b;return false;}
 
 bool pwm_control_stop_detail(uint8_t b[20]){(void)b;return false;}
+
+#include "pmw3901_spi_diagnostic.h"
+void pmw3901_spi_send_diagnostics(void*c,pmw_spi_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}

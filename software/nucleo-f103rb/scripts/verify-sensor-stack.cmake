@@ -109,3 +109,9 @@ set(stack_bytes ${host_stack_bytes})
 check_path(host_uart_failure_reply host_protocol_task process_host_rx handle_frame
     uart_diagnostics_send_motor_buses send_diagnostic_frame send_frame send_frame_sequence
     host_uart_write_bytes wait_tx_flag)
+
+set(stack_bytes ${sensor_stack_bytes})
+check_path(optical_failure_capture sensor_task pmw3901_device_service pmw3901_spi_read exchange wait_flag capture_failure)
+set(stack_bytes ${host_stack_bytes})
+check_path(host_spi_failure_reply host_protocol_task process_host_rx handle_frame
+ pmw3901_spi_send_diagnostics send_diagnostic_frame send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
