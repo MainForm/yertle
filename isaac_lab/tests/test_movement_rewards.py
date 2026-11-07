@@ -131,9 +131,10 @@ class MovementRewardTests(unittest.TestCase):
         main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
         block=next(n for n in main.body if isinstance(n,ast.If) and ast.unparse(n.test)=='args_cli.vx_only')
         for task,enabled,expected in [('flat',True,(0,)),('flat',False,(0,1)),('rough',True,(0,1))]:
-            cfg=NS(commands=NS(base_velocity=NS(ranges=NS())),rewards=NS(track_lin_vel_xy_cauchy=NS(params={'components':(0,1)})))
+            cfg=NS(commands=NS(base_velocity=NS(ranges=NS())),rewards=NS(track_lin_vel_xy_cauchy=NS(params={'components':(0,1)}),lin_vel_xy_tracking_error_cauchy=NS(params={'components':(0,1)})))
             exec(compile(ast.Module(body=[block],type_ignores=[]),'<train vx-only>','exec'),{'env_cfg':cfg,'args_cli':NS(task=task,vx_only=enabled)})
             self.assertEqual(cfg.rewards.track_lin_vel_xy_cauchy.params['components'],expected)
+            self.assertEqual(cfg.rewards.lin_vel_xy_tracking_error_cauchy.params['components'],expected)
 
 
 if __name__ == '__main__':
