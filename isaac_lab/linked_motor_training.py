@@ -4,7 +4,7 @@ from isaaclab.actuators import IdealPDActuator, IdealPDActuatorCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
 
-from .motor_drive_math import joint_to_motor_velocity, motor_to_joint_effort, motor_back_emf_effort
+from .motor_drive_math import MotorSupplySag, joint_to_motor_velocity, limit_motor_effort, motor_to_joint_effort
 from .motor_operating_range import MotorRawTransform
 from .firmware_pid_torch import firmware_pid_step
 
@@ -20,6 +20,8 @@ class LinkedMotorActuator(IdealPDActuator):
         # Signed motor PWM in articulation order; held between controller ticks.
         self.motor_pwm = torch.zeros_like(self.motor_effort)
         self.raw_transform = MotorRawTransform(self._joint_names, device=self.motor_effort.device, dtype=self.motor_effort.dtype)
+        self.motor_supply = MotorSupplySag(device=self.motor_effort.device, dtype=self.motor_effort.dtype)
+        self.motor_terminal_voltage = self.motor_supply.baseline_v.expand_as(self.motor_pwm).clone()
         # PID arrays use physical motor ID order, not articulation joint order.
         self.integral_pwm = torch.zeros_like(self.motor_effort)
         self.previous_raw = torch.zeros_like(self.motor_effort)
@@ -41,6 +43,7 @@ class LinkedMotorActuator(IdealPDActuator):
         ids = slice(None) if env_ids is None else env_ids
         self.motor_effort[ids] = 0
         self.motor_pwm[ids] = 0
+        self.motor_terminal_voltage[ids] = self.motor_supply.baseline_v
         self.computed_effort[ids] = 0
         self.integral_pwm[ids] = 0
         self.previous_raw[ids] = 0
@@ -100,10 +103,16 @@ class LinkedMotorActuator(IdealPDActuator):
         # The command is held for 20 ms; speed-dependent motor response is
         # evaluated every 1 ms physical step. Invalid-raw guard is torque-free.
         motor_vel = joint_to_motor_velocity(joint_vel, self.thigh, self.shin)
-        torque = motor_back_emf_effort(self.motor_pwm, motor_vel, nm_per_pwm=self.cfg.nm_per_pwm,
-                                       free_speed=self.cfg.motor_free_speed,
-                                       torque_limit=self.cfg.motor_torque_limit,
-                                       speed_limit=self.cfg.motor_speed_limit)
+        ids = self.raw_transform.indices
+        motor_id_vel = motor_vel[:, ids]
+        powered_vel = torch.where(self.pid_guard.unsqueeze(-1), 0.0, motor_id_vel)
+        self.motor_terminal_voltage, effective_voltage = self.motor_supply.solve(self.motor_pwm[:, ids], powered_vel)
+        # Keep the original no-sag, standstill torque per unit duty.
+        torque_id = (1000.0 * self.cfg.nm_per_pwm / self.motor_supply.baseline_v) * effective_voltage
+        torque = torch.empty_like(self.motor_pwm)
+        torque[:, ids] = limit_motor_effort(
+            torque_id, motor_id_vel, self.cfg.motor_torque_limit, self.cfg.motor_speed_limit
+        )
         self.motor_effort = torch.where(self.pid_guard.unsqueeze(-1), torch.zeros_like(torque), torque)
         self.applied_effort = motor_to_joint_effort(self.motor_effort, self.thigh, self.shin)
         self.computed_effort = self.applied_effort.clone()
@@ -118,7 +127,8 @@ class LinkedMotorActuatorCfg(IdealPDActuatorCfg):
     class_type: type = LinkedMotorActuator
     motor_torque_limit: float = 1.024
     motor_speed_limit: float = 4.6
-    motor_free_speed: float = 4.6
+    # Nominal no-load speed at 6.8 V, retained for existing diagnostic entry points.
+    motor_free_speed: float = 6.8 / MotorSupplySag.back_emf_v_per_rad_s
     control_decimation: int = 20
     control_period_s: float = 0.020
     kp_pwm: float = 7.0

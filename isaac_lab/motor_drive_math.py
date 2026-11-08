@@ -2,6 +2,41 @@
 import torch
 
 
+class MotorSupplySag:
+    """Fit from six post-rewire runs, in physical motor ID order (1 through 12)."""
+
+    iterations = 64
+    back_emf_v_per_rad_s = 0.6066835477641482
+    current_gain_a_per_v = 0.14495003179806865
+
+    def __init__(self, *, device, dtype):
+        # Per-motor median low-load voltage of the calibration runs.
+        self.baseline_v = torch.tensor(
+            [6.8, 6.7, 6.8, 6.75, 6.7, 6.7, 6.7, 6.8, 6.7, 6.8, 6.8, 6.8],
+            device=device, dtype=dtype,
+        )
+        motor = torch.arange(12, device=device)
+        same_leg = motor[:, None] // 3 == motor[None, :] // 3
+        downstream = motor % 3 != 1  # shin and shoulder
+        shoulder = motor % 3 == 2
+        self.volt_per_amp = (
+            0.13278422110981158
+            + 0.07974482168163084 * same_leg.to(dtype)
+            + 0.005565311525132275 * (same_leg & downstream[:, None] & downstream[None, :]).to(dtype)
+            + 0.12365145069863535 * (shoulder[:, None] & (motor[:, None] == motor[None, :])).to(dtype)
+        )
+
+    def solve(self, pwm, motor_velocity):
+        """Hold duty and speed fixed for all 64 updates within one physics step."""
+        duty = pwm / 1000.0
+        back_emf = self.back_emf_v_per_rad_s * motor_velocity
+        voltage = self.baseline_v.expand_as(pwm)
+        for _ in range(self.iterations):
+            current = self.current_gain_a_per_v * (duty * voltage - back_emf).abs()
+            voltage = (self.baseline_v - current @ self.volt_per_amp.T).clamp_min(0)
+        return voltage, duty * voltage - back_emf
+
+
 def joint_to_motor_velocity(velocity, thigh, shin):
     result = velocity.clone()
     result[..., shin] = velocity[..., thigh] + velocity[..., shin]

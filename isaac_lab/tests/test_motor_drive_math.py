@@ -1,9 +1,24 @@
 import unittest
 import torch
-from isaac_lab.motor_drive_math import joint_to_motor_velocity, joint_to_motor_effort, motor_to_joint_effort, limit_motor_effort, motor_back_emf_effort
+from isaac_lab.motor_drive_math import MotorSupplySag, joint_to_motor_velocity, joint_to_motor_effort, motor_to_joint_effort, limit_motor_effort, motor_back_emf_effort
 
 
 class MotorDriveMathTests(unittest.TestCase):
+    def test_supply_chain_and_fixed_point(self):
+        model = MotorSupplySag(device='cpu', dtype=torch.float64)
+        pwm = torch.zeros(2, 12, dtype=torch.float64)
+        pwm[1, 2] = 800
+        voltage, effective = model.solve(pwm, torch.zeros_like(pwm))
+        torch.testing.assert_close(voltage[0], model.baseline_v)
+        resistance = torch.tensor(
+            [0.2180943541552051, 0.2125290427914424, 0.3417458048538405] + [0.13278422110981158] * 9,
+            dtype=torch.float64,
+        )
+        load = (model.current_gain_a_per_v * 0.8 * model.baseline_v[2]
+                / (1 + model.current_gain_a_per_v * 0.8 * resistance[2]))
+        torch.testing.assert_close(voltage[1], model.baseline_v - resistance * load)
+        torch.testing.assert_close(effective, pwm / 1000 * voltage)
+
     def test_mapping_and_virtual_work(self):
         qd = torch.tensor([[0.5, 1.0, -0.25]])
         tau = torch.tensor([[0.2, 0.7, -0.4]])

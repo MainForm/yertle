@@ -9,6 +9,7 @@ from unittest.mock import patch
 import torch
 from isaac_lab.motor_operating_range import MotorRawTransform
 from isaac_lab.firmware_pid_torch import firmware_pid_step
+from isaac_lab.motor_drive_math import MotorSupplySag
 
 
 def load_actuator():
@@ -33,7 +34,7 @@ class LinkedMotorHoldTests(unittest.TestCase):
     def setUp(self):
         self.drive = object.__new__(load_actuator())
         self.drive.cfg = types.SimpleNamespace(control_decimation=20, control_period_s=0.020,
-            motor_torque_limit=1.024, motor_speed_limit=4.6, motor_free_speed=4.6, kp_pwm=7., ki_pwm=3., kd_pwm=.13,
+            motor_torque_limit=1.024, motor_speed_limit=4.6, kp_pwm=7., ki_pwm=3., kd_pwm=.13,
             integral_limit_pwm=100., duty_limit_pwm=1000., nm_per_pwm=1.024/800.)
         self.drive.thigh = [1, 4, 7, 10]
         self.drive.shin = [2, 5, 8, 11]
@@ -42,6 +43,8 @@ class LinkedMotorHoldTests(unittest.TestCase):
         self.drive.computed_effort = torch.zeros(2, 12)
         self.drive.motor_effort = torch.zeros(2, 12)
         self.drive.motor_pwm = torch.zeros(2, 12)
+        self.drive.motor_supply = MotorSupplySag(device='cpu', dtype=torch.float32)
+        self.drive.motor_terminal_voltage = self.drive.motor_supply.baseline_v.expand_as(self.drive.motor_pwm).clone()
         self.drive.integral_pwm = torch.zeros(2, 12)
         self.drive.previous_raw = torch.zeros(2, 12)
         self.drive.pid_initialized = torch.zeros(2, 12, dtype=torch.bool)
@@ -69,6 +72,13 @@ class LinkedMotorHoldTests(unittest.TestCase):
         for _ in range(19):
             torch.testing.assert_close(self.step(0.04), first)
         self.assertFalse(torch.equal(self.step(0.04), first))
+
+    def test_first_step_applies_supply_drop_to_torque(self):
+        effort = self.step(0.02)
+        ids = self.drive.raw_transform.indices
+        no_drop_effort = self.drive.cfg.nm_per_pwm * self.drive.motor_pwm[:, ids]
+        self.assertTrue(torch.all(self.drive.motor_terminal_voltage < self.drive.motor_supply.baseline_v))
+        self.assertTrue(torch.all(effort[:, ids].abs() < no_drop_effort.abs()))
 
     def test_partial_reset_updates_only_reset_environment(self):
         first = self.step(0.02)

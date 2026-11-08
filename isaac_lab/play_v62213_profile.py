@@ -302,9 +302,10 @@ def main():
         instrument(obj, method, label)
     if args_cli.explicit_linked_motor:
         import isaac_lab.linked_motor_training as drive_module
-        instrument(base_env.scene['robot'].actuators['legs'], 'compute', 'actuator_nested')
+        drive = base_env.scene['robot'].actuators['legs']
+        instrument(drive, 'compute', 'actuator_nested')
         instrument(drive_module, 'firmware_pid_step', 'firmware_pid_nested')
-        instrument(drive_module, 'motor_back_emf_effort', 'back_emf_nested')
+        instrument(drive.motor_supply, 'solve', 'supply_sag_nested')
     class TimedRewardTerm:
         def __init__(self, original, label): self.original, self.label = original, label
         def __call__(self, *args, **kwargs):
