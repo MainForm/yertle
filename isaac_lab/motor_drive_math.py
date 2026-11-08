@@ -3,11 +3,13 @@ import torch
 
 
 class MotorSupplySag:
-    """Fit from six post-rewire runs, in physical motor ID order (1 through 12)."""
+    """Post-rewire shared wiring and total-current sag, in physical motor ID order."""
 
     iterations = 64
-    back_emf_v_per_rad_s = 0.6066835477641482
-    current_gain_a_per_v = 0.14495003179806865
+    back_emf_v_per_rad_s = 0.56673325231
+    current_gain_a_per_v = 0.14422106232
+    common_drop_onset_a = 1.0
+    common_drop_v_per_a = 0.03420856
 
     def __init__(self, *, device, dtype):
         # Per-motor median low-load voltage of the calibration runs.
@@ -20,20 +22,22 @@ class MotorSupplySag:
         downstream = motor % 3 != 1  # shin and shoulder
         shoulder = motor % 3 == 2
         self.volt_per_amp = (
-            0.13278422110981158
-            + 0.07974482168163084 * same_leg.to(dtype)
-            + 0.005565311525132275 * (same_leg & downstream[:, None] & downstream[None, :]).to(dtype)
-            + 0.12365145069863535 * (shoulder[:, None] & (motor[:, None] == motor[None, :])).to(dtype)
+            0.10429653745608872
+            + 0.09887391913 * same_leg.to(dtype)
+            + 0.02402835834 * (same_leg & downstream[:, None] & downstream[None, :]).to(dtype)
+            + 0.05000679221 * (shoulder[:, None] & (motor[:, None] == motor[None, :])).to(dtype)
         )
 
     def solve(self, pwm, motor_velocity):
-        """Hold duty and speed fixed for all 64 updates within one physics step."""
+        """Use applied PWM and speed to resolve supply voltage and signed drive voltage."""
         duty = pwm / 1000.0
         back_emf = self.back_emf_v_per_rad_s * motor_velocity
         voltage = self.baseline_v.expand_as(pwm)
         for _ in range(self.iterations):
             current = self.current_gain_a_per_v * (duty * voltage - back_emf).abs()
-            voltage = (self.baseline_v - current @ self.volt_per_amp.T).clamp_min(0)
+            excess = (current.sum(dim=-1, keepdim=True) - self.common_drop_onset_a).clamp_min(0)
+            common_drop = self.common_drop_v_per_a * excess
+            voltage = (self.baseline_v - current @ self.volt_per_amp.T - common_drop).clamp_min(0)
         return voltage, duty * voltage - back_emf
 
 

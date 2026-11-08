@@ -106,6 +106,7 @@ class LinkedMotorActuator(IdealPDActuator):
         ids = self.raw_transform.indices
         motor_id_vel = motor_vel[:, ids]
         powered_vel = torch.where(self.pid_guard.unsqueeze(-1), 0.0, motor_id_vel)
+        # The simulated drive applies this PWM directly, in place of servo duty feedback.
         self.motor_terminal_voltage, effective_voltage = self.motor_supply.solve(self.motor_pwm[:, ids], powered_vel)
         # Keep the original no-sag, standstill torque per unit duty.
         torque_id = (1000.0 * self.cfg.nm_per_pwm / self.motor_supply.baseline_v) * effective_voltage
