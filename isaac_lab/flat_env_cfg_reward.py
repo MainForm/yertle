@@ -141,7 +141,7 @@ def configure_rewards(cfg: LocomotionVelocityRoughEnvCfg) -> None:
         weight=-0.40,
         params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"},
     )
-    rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-1.0, params={"command_name": "base_velocity", "min_height_m": 0.015, "transition_m": 0.015})
+    rewards.phase_swing_clearance = RewTerm(func=phase_generator.phase_swing_clearance, weight=-1.0, params={"command_name": "base_velocity", "min_height_m": 0.0075, "transition_m": 0.015})
     rewards.phase_touchdown_timing = RewTerm(func=phase_generator.phase_touchdown_timing, weight=0.10, params={"sensor_cfg": CONTACT_SENSOR, "command_name": "base_velocity"})
 
 
