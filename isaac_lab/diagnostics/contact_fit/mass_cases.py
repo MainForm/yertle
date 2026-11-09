@@ -31,21 +31,21 @@ CASES = [
 ]
 
 
-def apply_mass_cases(robot):
+def apply_mass_cases(robot, cases=CASES, variants=VARIANTS):
     view = robot.root_physx_view
     index = robot.body_names.index("base_link")
     coms = view.get_coms().clone()
     inertias = view.get_inertias().clone()
     masses = view.get_masses().clone()
-    assert len(coms) == len(CASES)
+    assert len(coms) == len(cases)
     default_com = coms[0, index].clone()
     default_inertia = inertias[0, index].clone().reshape(3, 3)
     torch.testing.assert_close(default_inertia, torch.diag(default_inertia.diag()))
     offsets = []
     applied = {}
-    for row, (_, name, _) in enumerate(CASES):
+    for row, (_, name, _) in enumerate(cases):
         variant = name.split("__", 1)[1]
-        offset_mm, scale = VARIANTS[variant]
+        offset_mm, scale = variants[variant]
         offset = coms.new_tensor(offset_mm) / 1000.0
         inertia = default_inertia.diag() * inertias.new_tensor(scale)
         assert inertia.min() > 0 and 2 * inertia.max() < inertia.sum()
@@ -58,7 +58,7 @@ def apply_mass_cases(robot):
             "inertia_scale_xyz": scale,
             "inertia_diagonal_kg_m2": inertia.tolist(),
         }
-    ids = torch.arange(len(CASES), dtype=torch.int32)
+    ids = torch.arange(len(cases), dtype=torch.int32)
     view.set_coms(coms, ids)
     view.set_inertias(inertias, ids)
     torch.testing.assert_close(view.get_coms(), coms)

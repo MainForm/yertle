@@ -34,6 +34,9 @@ for w in real:
     angles=np.array([r['tilt'] for r in z])[valid]
     height=np.array([r['z'] for r in z])[valid]
     guard=np.array([r['pid_guard'] for r in z])[valid]
+    offsets = None
+    if 'com_offset_mm' in z[0]:
+        offsets = np.asarray([r['com_offset_mm'] for r in z])[valid]
     joint_err=np.abs(actual-raw_ref[:,None,:])
     rows=[]
     for i,(mode,name,friction) in enumerate(cases):
@@ -47,6 +50,10 @@ for w in real:
             tilt_mae_deg=float(np.mean(abs(angles[:,i]-tilt_ref))),
             max_tilt_deg=float(angles[:,i].max()),min_height_m=float(height[:,i].min()),
             pid_guard=bool(guard[:,i].any())))
+        if offsets is not None:
+            xyz = offsets[:, i]
+            rows[-1]['com_mean_xyz_mm'] = xyz.mean(axis=0).tolist()
+            rows[-1]['com_max_radius_mm'] = float(np.linalg.norm(xyz, axis=1).max())
     out[w['name']]=dict(real_yaw_deg=float(np.rad2deg(cum_ref[-1])),real_yaw_abs_mean=float(abs(yaw_ref).mean()),
                         real_max_tilt=float(tilt_ref.max()),duration_s=float(st[-1]-st[0]),samples=len(st),
                         results=sorted(rows,key=lambda a:a['cumulative_yaw_mae_deg']))

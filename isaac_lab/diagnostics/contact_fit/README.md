@@ -31,3 +31,23 @@ body inclination, and motor positions against the recorded feedback. The
 initial foot clearance is estimated from the model because the hardware log
 does not contain absolute body height. The fitted body properties represent
 replay hypotheses, with no direct mass-distribution measurement.
+
+## IMU-driven body-property replay
+
+Prepare a separate output directory using the same inputs. Use the command
+above with `YERTLE_CONTACT_MODE=imu-com`, the new output directory, and
+`--num_envs 12`.
+
+The IMU gravity vector in body coordinates gives the direction of lean.
+Every 20 ms the most recent available sample determines a horizontal
+offset target. Tilt below 3 degrees targets zero offset. The target increases
+linearly to the configured radial limit at 25 degrees. A first-order
+low-pass filter with a 100 ms time constant smooths changes before they are
+applied. Compare lateral-only and planar offsets with 10, 15, and 20 mm caps.
+This is a replay hypothesis for an effective offset, not a measurement of
+the body's center of mass.
+
+The runtime checks that PhysX accepts every update and that the body frame
+does not move discontinuously. It adjusts center-of-mass velocity for the
+frame change and restores the initial offset between windows. Raw telemetry
+and per-step simulator traces remain in the output directory.

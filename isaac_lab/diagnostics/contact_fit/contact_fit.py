@@ -14,15 +14,21 @@ import torch
 from isaac_lab.foot_geometry import foot_sole_heights
 
 STAGE=Path(os.environ['YERTLE_CONTACT_REPLAY_DIR'])
-from mass_cases import CASES, apply_mass_cases
+from mass_cases import CASES, VARIANTS, apply_mass_cases
 PID_PERIOD_MS={'fit_vx025':25,'check_vx020':24}
 LEGS=('rf','lf','rb','lb')
 
 def run_trial(env):
+    cases, variants = CASES, VARIANTS
+    use_imu_com = os.environ.get("YERTLE_CONTACT_MODE") == "imu-com"
+    if use_imu_com:
+        import imu_com
+
+        cases, variants = imu_com.CASES, imu_com.VARIANTS
     torch.set_num_threads(1)
     robot=env.scene['robot']
     drive=robot.actuators['legs']
-    n=len(CASES)
+    n=len(cases)
     assert env.num_envs==n and abs(env.physics_dt-.001)<1e-8
     dev=env.device
     to=lambda values: torch.as_tensor(np.array(values),device=dev,dtype=robot.data.joint_pos.dtype)
@@ -47,7 +53,7 @@ def run_trial(env):
             indices[leg]=slice(int(offsets[j]),int(offsets[j+1]))
             assert sizes[j]>0
         props[:]=torch.tensor([.8,.6,0.],dtype=props.dtype)
-        for i,(_,_,values) in enumerate(CASES):
+        for i,(_,_,values) in enumerate(cases):
             for leg,value in zip(LEGS,values):
                 props[i,indices[leg]]=torch.tensor([.8*value,.6*value,0.],dtype=props.dtype)
         view.set_material_properties(props,torch.arange(n,dtype=torch.int32))
@@ -63,14 +69,22 @@ def run_trial(env):
     namespace=dict(compute.__globals__)
     exec(body.replace(anchor,'    if self.replay_pwm_enabled:\n        self.motor_pwm[self.replay_mask] = self.replay_pwm\n'+anchor),namespace)
     type(drive).compute=namespace['compute']
-    drive.replay_mask=torch.tensor([mode=='pwm' for mode,_,_ in CASES],device=dev)
+    drive.replay_mask=torch.tensor([mode=='pwm' for mode,_,_ in cases],device=dev)
     drive.replay_pwm_enabled=False
     drive.replay_pwm=torch.zeros((1,12),device=dev)
     raw_body_names=[leg+'_shin' for leg in LEGS]
 
     inputs=json.loads((STAGE/'inputs.json').read_text())
-    report=dict(source=inputs['log'],cases=CASES,foot_link_shapes=material(),pid_period_ms=PID_PERIOD_MS,dt_s=env.physics_dt)
-    offsets, report['body_mass_properties'] = apply_mass_cases(robot)
+    report=dict(source=inputs['log'],cases=cases,foot_link_shapes=material(),pid_period_ms=PID_PERIOD_MS,dt_s=env.physics_dt)
+    offsets, report['body_mass_properties'] = apply_mass_cases(robot, cases, variants)
+    if use_imu_com:
+        report['imu_com'] = {
+            'update_s': imu_com.UPDATE_S,
+            'filter_s': imu_com.FILTER_S,
+            'deadband_deg': imu_com.DEADBAND_DEG,
+            'full_offset_deg': imu_com.FULL_OFFSET_DEG,
+            'variants': {name: setting[2:] for name, setting in imu_com.FITTED.items()},
+        }
     (STAGE/'config.json').write_text(json.dumps(report,indent=2))
     with (STAGE/'trials.jsonl').open('w') as stream:
         for window in inputs['windows']:
@@ -113,8 +127,12 @@ def run_trial(env):
             pwm_q=torch.zeros_like(pwm_id)
             pwm_q[:,raw_transform.indices]=-pwm_id*raw_transform.signs
             t_end=min(window['end']-window['start'],window['feedback'][-1]['t'])
+            if use_imu_com:
+                com_replay = imu_com.ImuComReplay(robot, window['feedback'], t_end, offsets)
             for k in range(round(t_end/env.physics_dt)+1):
                 t=k*env.physics_dt
+                if use_imu_com:
+                    com_replay.step(k)
                 g=max(0,bisect.bisect_right(gtimes,t)-1)
                 p=max(0,bisect.bisect_right(ptimes,t)-1)
                 robot.set_joint_position_target(q_goals[g].expand(n,-1))
@@ -129,11 +147,15 @@ def run_trial(env):
                     data=dict(window=window['name'],t=t,raw=raw.tolist(),goal=goals[g],yaw_body=yaw_body.tolist(),
                               yaw_world=yaw_world.tolist(),tilt=torch.rad2deg(torch.acos(up.clamp(-1,1))).tolist(),
                               z=z.tolist(),v=vel.tolist(),pid_guard=drive.pid_guard.tolist())
+                    if use_imu_com:
+                        data['com_offset_mm'] = (1000.0 * com_replay.offsets).tolist()
                     stream.write(json.dumps(data,separators=(',',':'))+'\n')
                     if k%1000==0:print('CONTACT_FIT',window['name'],t,flush=True)
                 env.scene.write_data_to_sim()
                 env.sim.step(render=False)
                 env.scene.update(env.physics_dt)
+            if use_imu_com:
+                com_replay.reset_offsets()
             stream.flush()
             print('CONTACT_WINDOW_COMPLETE',window['name'],flush=True)
     print('CONTACT_FIT_COMPLETE',flush=True)
