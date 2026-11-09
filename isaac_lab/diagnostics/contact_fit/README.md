@@ -51,3 +51,19 @@ The runtime checks that PhysX accepts every update and that the body frame
 does not move discontinuously. It adjusts center-of-mass velocity for the
 frame change and restores the initial offset between windows. Raw telemetry
 and per-step simulator traces remain in the output directory.
+
+## Friction sweep with moving CoM
+
+Use `YERTLE_CONTACT_MODE=imu-friction` with a separate output directory.
+In that directory, provide `inputs.json` and a `friction-cases.json` object
+mapping each candidate name to four foot entries: `rf`, `lf`, `rb`, and `lb`.
+Each entry is an absolute `[static, dynamic]` coefficient pair. Set
+`--num_envs` to the number of candidates. This mode holds the body inertia
+at its original value and uses the same 15 mm planar IMU offset in every
+environment. The collision material on other links stays at the baseline.
+Rank candidates on the 0.25 m/s window, then compare their yaw trajectory,
+peak inclination, and motor-position errors on the 0.20 m/s window.
+The `imu-friction` and `imu-friction-refine` archives contain the effective
+coefficient pairs in `config.cases`, in the order `config.foot_friction_order`.
+The refinement repeats the previous setting and two shortlisted alternatives
+in different simulation environments to check whether the ranking persists.

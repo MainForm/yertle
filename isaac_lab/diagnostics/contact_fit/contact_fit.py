@@ -20,11 +20,23 @@ LEGS=('rf','lf','rb','lb')
 
 def run_trial(env):
     cases, variants = CASES, VARIANTS
-    use_imu_com = os.environ.get("YERTLE_CONTACT_MODE") == "imu-com"
+    mode = os.environ.get("YERTLE_CONTACT_MODE")
+    use_imu_com = mode in ("imu-com", "imu-friction")
     if use_imu_com:
         import imu_com
 
         cases, variants = imu_com.CASES, imu_com.VARIANTS
+    if mode == "imu-friction":
+        with (STAGE / "friction-cases.json").open() as source:
+            coefficients = json.load(source)
+        cases = []
+        for name, feet in coefficients.items():
+            if set(feet) != set(LEGS) or any(
+                not (0 <= dynamic <= static)
+                for static, dynamic in feet.values()
+            ):
+                raise ValueError(f"Invalid friction coefficients for {name}")
+            cases.append(("goal", f"{name}__planar15_default", [feet[leg] for leg in LEGS]))
     torch.set_num_threads(1)
     robot=env.scene['robot']
     drive=robot.actuators['legs']
@@ -55,7 +67,8 @@ def run_trial(env):
         props[:]=torch.tensor([.8,.6,0.],dtype=props.dtype)
         for i,(_,_,values) in enumerate(cases):
             for leg,value in zip(LEGS,values):
-                props[i,indices[leg]]=torch.tensor([.8*value,.6*value,0.],dtype=props.dtype)
+                static, dynamic = value if isinstance(value, list) else (.8 * value, .6 * value)
+                props[i,indices[leg]]=torch.tensor([static,dynamic,0.],dtype=props.dtype)
         view.set_material_properties(props,torch.arange(n,dtype=torch.int32))
         torch.testing.assert_close(view.get_material_properties(),props)
         return {k:[v.start,v.stop] for k,v in indices.items()}
@@ -76,6 +89,9 @@ def run_trial(env):
 
     inputs=json.loads((STAGE/'inputs.json').read_text())
     report=dict(source=inputs['log'],cases=cases,foot_link_shapes=material(),pid_period_ms=PID_PERIOD_MS,dt_s=env.physics_dt)
+    if mode == "imu-friction":
+        report["foot_friction_order"] = LEGS
+        report["foot_friction_units"] = ["static", "dynamic"]
     offsets, report['body_mass_properties'] = apply_mass_cases(robot, cases, variants)
     if use_imu_com:
         report['imu_com'] = {
@@ -128,7 +144,7 @@ def run_trial(env):
             pwm_q[:,raw_transform.indices]=-pwm_id*raw_transform.signs
             t_end=min(window['end']-window['start'],window['feedback'][-1]['t'])
             if use_imu_com:
-                com_replay = imu_com.ImuComReplay(robot, window['feedback'], t_end, offsets)
+                com_replay = imu_com.ImuComReplay(robot, window['feedback'], t_end, offsets, cases)
             for k in range(round(t_end/env.physics_dt)+1):
                 t=k*env.physics_dt
                 if use_imu_com:

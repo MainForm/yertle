@@ -66,7 +66,7 @@ def offset_profile(feedback, count, axes, cap_mm):
 
 
 class ImuComReplay:
-    def __init__(self, robot, feedback, end_time, base_offsets):
+    def __init__(self, robot, feedback, end_time, base_offsets, cases=CASES):
         self.robot = robot
         self.view = robot.root_physx_view
         self.body = robot.body_names.index("base_link")
@@ -74,14 +74,14 @@ class ImuComReplay:
         self.nominal = self.coms[:, self.body, :3].clone()
         self.offsets = base_offsets.clone()
         count = 2 + int(end_time / UPDATE_S)
-        self.dynamic_rows = []
+        dynamic_rows = []
         profiles = []
-        for row, (_, name, _) in enumerate(CASES):
+        for row, (_, name, _) in enumerate(cases):
             _, _, axes, cap = FITTED[name.split("__", 1)[1]]
             if axes is not None:
-                self.dynamic_rows.append(row)
+                dynamic_rows.append(row)
                 profiles.append(offset_profile(feedback, count, axes, cap))
-        self.rows = torch.tensor(self.dynamic_rows, dtype=torch.int32)
+        self.rows = torch.tensor(dynamic_rows, dtype=torch.int32)
         self.profiles = self.coms.new_tensor(np.stack(profiles, axis=1))
         self.update_steps = round(UPDATE_S / 0.001)
 
