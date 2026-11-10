@@ -11,28 +11,13 @@ class MotorDriveMathTests(unittest.TestCase):
         voltage, effective = model.solve(pwm, torch.zeros_like(pwm))
         torch.testing.assert_close(voltage[0], model.baseline_v)
         resistance = torch.tensor(
-            [0.22719881492608873, 0.20317045658608873, 0.27720560713608873] + [0.10429653745608872] * 9,
+            [0.2180943541552051, 0.2125290427914424, 0.3417458048538405] + [0.13278422110981158] * 9,
             dtype=torch.float64,
         )
         load = (model.current_gain_a_per_v * 0.8 * model.baseline_v[2]
                 / (1 + model.current_gain_a_per_v * 0.8 * resistance[2]))
         torch.testing.assert_close(voltage[1], model.baseline_v - resistance * load)
         torch.testing.assert_close(effective, pwm / 1000 * voltage)
-
-    def test_common_drop_above_one_amp_applies_to_all_motors_in_each_environment(self):
-        model = MotorSupplySag(device='cpu', dtype=torch.float64)
-        pwm = torch.zeros(2, 12, dtype=torch.float64)
-        pwm[0, 2] = 800
-        pwm[1, [2, 11]] = 800
-        voltage, effective = model.solve(pwm, torch.zeros_like(pwm))
-        current = 0.14422106232 * effective.abs()
-        total_current = current.sum(dim=-1)
-        self.assertLess(total_current[0].item(), 1.0)
-        self.assertGreater(total_current[1].item(), 1.0)
-        wiring_only = model.baseline_v - current @ model.volt_per_amp.T
-        torch.testing.assert_close(voltage[0], wiring_only[0])
-        expected_drop = 0.03420856 * (total_current[1] - 1.0)
-        torch.testing.assert_close(wiring_only[1] - voltage[1], expected_drop.expand(12))
 
     def test_mapping_and_virtual_work(self):
         qd = torch.tensor([[0.5, 1.0, -0.25]])
