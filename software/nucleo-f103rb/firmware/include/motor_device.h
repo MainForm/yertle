@@ -39,6 +39,8 @@ typedef enum {
     MOTOR_WRITE_SERVO_ERROR = 16, MOTOR_WRITE_LOCK_RESTORE_FAILED = 17
 } motor_register_write_status_t;
 #define MOTOR_REGISTER_ALLOW_EEPROM 1U
+#define MOTOR_REGISTER_CALIBRATION_COMMAND 0x28U
+#define MOTOR_REGISTER_CALIBRATION_VALUE 128U
 typedef struct {
     uint8_t motor_id, address, length, options;
     uint8_t data[MOTOR_REGISTER_MAX_LENGTH];
@@ -57,6 +59,10 @@ static inline motor_register_write_status_t motor_register_validate_write(
     uint8_t width;
     uint16_t maximum;
     switch (request->address) {
+    case MOTOR_REGISTER_CALIBRATION_COMMAND:
+        if (request->length != 1U || request->data[0] != MOTOR_REGISTER_CALIBRATION_VALUE)
+            return MOTOR_WRITE_INVALID_REGISTER;
+        return request->options == MOTOR_REGISTER_ALLOW_EEPROM ? MOTOR_WRITE_OK : MOTOR_WRITE_FORBIDDEN;
     case 0x10U: case 0x30U: width=2U; maximum=1000U; break;
     case 0x15U: case 0x16U: case 0x17U: case 0x18U: case 0x19U: width=1U; maximum=254U; break;
     default: return MOTOR_WRITE_FORBIDDEN;

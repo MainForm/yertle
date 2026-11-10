@@ -289,8 +289,19 @@ int main(void)
         context=reset(); set_payload(&context,9U,invalid_set[i],(uint8_t)(4U+invalid_set[i][2]));
         check_set_result(9U,12U); assert(write_calls==0U && !register_write_pending);
     }
-    context=reset(); uint8_t forbidden[]={1U,40U,1U,0U,1U};
-    set_payload(&context,9U,forbidden,5U); check_set_result(9U,13U);
+    const uint8_t calibration[]={10U,0x28U,1U,1U,128U};
+    context=reset();context.state=published_state=HOST_FSM_ARMED;
+    set_payload(&context,9U,calibration,sizeof(calibration));check_set_result(9U,5U);
+    assert(!register_write_pending);
+    context=reset();
+    set_payload(&context,9U,calibration,sizeof(calibration));
+    assert(register_write_pending && register_write_request.motor_id==10U);
+    collect_motor_register_write();service_motor_register_write(&context);check_set_result(9U,0U);
+    set_payload(&context,9U,calibration,sizeof(calibration));check_set_result(9U,0U);
+    assert(write_calls==1U);
+
+    context=reset();uint8_t forbidden[]={1U,40U,1U,0U,1U};
+    set_payload(&context,9U,forbidden,5U); check_set_result(9U,12U);
     forbidden[1]=21U; set_payload(&context,9U,forbidden,5U); check_set_result(9U,13U);
     context=reset(); set_payload(&context,9U,golden,4U); check_set_result(9U,2U);
     const uint8_t zero_length[]={1U,21U,0U,1U};

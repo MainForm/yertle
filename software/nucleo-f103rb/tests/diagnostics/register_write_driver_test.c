@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "motor_device.h"
+#include "calibration_store.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
 #include "semphr.h"
@@ -54,8 +55,14 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *data, size_t length, ui
         else { assert(address==55U && n==1U); if (data[6]==0U) ++unlock_writes; else ++restore_writes; }
         const bool dropped=address==55U && data[6]==1U && drop_restore_count>0U;
         if(dropped)--drop_restore_count;
-        if (!dropped && !(ignore_restore && address==55U && data[6]==1U) && !(fail && fault==MISMATCH))
-            memcpy(memory+address,data+6U,n);
+        if (!dropped && !(ignore_restore && address==55U && data[6]==1U) && !(fail && fault==MISMATCH)) {
+            if (address==40U && data[6]==128U) {
+                /* PWM position 2500 needs an offset of +452 to become 2048. */
+                memory[31]=196U;memory[32]=1U;
+            } else {
+                memcpy(memory+address,data+6U,n);
+            }
+        }
         n=0U;
     }
     if ((int)operation==cancel_at) safe=false;
@@ -145,7 +152,7 @@ int main(void)
     request.options=1U;
     for (unsigned address=0U;address<256U;++address) {
         request.address=(uint8_t)address;
-        if (address!=16U && address!=21U && address!=22U && address!=23U && address!=24U && address!=25U && address!=48U)
+        if (address!=16U && address!=21U && address!=22U && address!=23U && address!=24U && address!=25U && address!=48U && address!=40U)
             assert(motor_register_validate_write(&request)==MOTOR_WRITE_FORBIDDEN);
     }
     request=setup(48U,500U,false); request.options=0U;
@@ -228,6 +235,29 @@ int main(void)
     ignore_restore=false; request.data[0]=33U;
     result=motor_device_write_register(&request,allowed);
     assert(result.status==0U && memory[55]==1U && memory[21]==33U && motor_device_register_lock_uncertain_mask()==0U);
+    request=setup(40U,128U,true);request.motor_id=10U;
+    memory[33]=2U;memory[56]=196U;memory[57]=9U;
+    const uint8_t old_offset[]={0U,0U};
+    assert(calibration_cache_observe(10U,31U,old_offset,2U));
+    result=motor_device_write_register(&request,allowed);
+    assert(result.status==MOTOR_WRITE_OK && result.target_write_attempted && target_writes==1U);
+    assert(unlock_writes==0U && restore_writes==0U && memory[40]==0U && memory[55]==1U);
+    calibration_cache_init();int16_t calibrated;
+    assert(calibration_cache_position(10U,2500,&calibrated) && calibrated==2048);
+    request=setup(40U,128U,true);request.motor_id=10U;
+    memory[33]=2U;memory[56]=1U;memory[57]=10U;
+    result=motor_device_write_register(&request,allowed);
+    assert(result.status==MOTOR_WRITE_VERIFY_MISMATCH && target_writes==1U);
+    calibration_cache_init();
+    assert(!calibration_cache_position(10U,2561,&calibrated));
+    request=setup(40U,128U,true);memory[40]=1U;
+    assert(motor_device_write_register(&request,allowed).status==MOTOR_WRITE_INVALID_STATE && target_writes==0U);
+    request=setup(40U,128U,true);request.options=0U;
+    assert(motor_register_validate_write(&request)==MOTOR_WRITE_FORBIDDEN);
+    request.options=1U;request.data[0]=1U;
+    assert(motor_register_validate_write(&request)==MOTOR_WRITE_INVALID_REGISTER);
+    request.data[0]=0U;
+    assert(motor_register_validate_write(&request)==MOTOR_WRITE_INVALID_REGISTER);
     puts("register write driver: policy, torque, WRITE/read-back, lock cleanup, all-stage I/O faults and no target retry passed");
     return 0;
 }

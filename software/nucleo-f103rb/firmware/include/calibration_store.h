@@ -10,6 +10,8 @@ typedef enum { CALIBRATION_ABSENT,CALIBRATION_VALID,CALIBRATION_READ_ERROR } cal
 calibration_result_t calibration_store_load(calibration_snapshot_t *snapshot);
 bool calibration_store_save(const calibration_snapshot_t *snapshot);
 void calibration_cache_init(void);
+/* Persist an invalid entry before a command that may change the servo offset. */
+bool calibration_cache_invalidate(uint8_t id);
 bool calibration_cache_observe(uint8_t id,uint8_t address,const uint8_t *data,uint8_t length);
 bool calibration_cache_get(uint8_t id,uint16_t *raw,int16_t *steps);
 /* Pure cached conversion: no Flash/UART access, output unchanged on failure. */

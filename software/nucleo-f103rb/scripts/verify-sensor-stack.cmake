@@ -66,6 +66,11 @@ check_path(calibration_program sensor_task collect_motor_register motor_device_r
     calibration_flash_program flash_operation)
 check_path(calibration_dedicated sensor_task collect_next_position_offset motor_device_read_position_offset
     calibration_cache_observe calibration_store_save calibration_scan checksum)
+set(calibration_write sensor_task collect_motor_register_write motor_device_write_register write_register_transaction)
+check_path(calibration_invalidate ${calibration_write} calibration_cache_invalidate
+    calibration_store_save calibration_scan checksum)
+check_path(calibration_verify ${calibration_write} calibration_cache_observe
+    calibration_store_save calibration_scan checksum)
 
 if(NOT main_source MATCHES "xTaskCreate\\(actuator_task,[^)]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
  message(FATAL_ERROR "Cannot determine actuator stack multiplier")

@@ -8,7 +8,7 @@
 #define RECORD_COMMIT 0xa55aU
 typedef struct { bool found; uint32_t sequence,offset; calibration_snapshot_t setting; } latest_t;
 static bool valid_setting(const calibration_snapshot_t *s){
-    if(!s||(s->valid_mask&~0x0fffU)||!s->valid_mask)return false;
+    if(!s||(s->valid_mask&~0x0fffU))return false;
     for(unsigned i=0;i<12;++i)if((s->valid_mask&(1U<<i))&&s->raw[i]>4095U)return false;
     return true;
 }
@@ -86,6 +86,16 @@ void calibration_cache_init(void){
     memset(&cached,0,sizeof cached);memset(pending_mask,0,sizeof pending_mask);
     if(calibration_store_load(&cached)!=CALIBRATION_VALID)memset(&cached,0,sizeof cached);
 }
+bool calibration_cache_invalidate(uint8_t id){
+    if(id<1||id>12)return false;
+    const unsigned index=id-1U;
+    calibration_snapshot_t updated=cached;
+    updated.valid_mask&=(uint16_t)~(1U<<index);
+    if(!calibration_store_save(&updated))return false;
+    cached=updated;
+    pending_mask[index]=0U;
+    return true;
+}
 bool calibration_cache_get(uint8_t id,uint16_t *raw,int16_t *steps){
     if(id<1||id>12||!raw||!steps||!(cached.valid_mask&(1U<<(id-1U))))return false;
     *raw=cached.raw[id-1U];const int16_t magnitude=(int16_t)(*raw&0x7ffU);
@@ -103,8 +113,11 @@ bool calibration_cache_observe(uint8_t id,uint8_t address,const uint8_t *data,ui
     const uint16_t raw=ypwm_u16(pending[index]);
     /* Match the currently supported servo revision/sign-magnitude contract. */
     if(raw>4095U)return false;
-    cached.raw[index]=raw;cached.valid_mask|=(uint16_t)(1U<<index);
-    return calibration_store_save(&cached);
+    calibration_snapshot_t updated=cached;
+    updated.raw[index]=raw;updated.valid_mask|=(uint16_t)(1U<<index);
+    if(!calibration_store_save(&updated))return false;
+    cached=updated;
+    return true;
 }
 
 bool calibration_cache_position(uint8_t id,int16_t wire_position,int16_t *position){

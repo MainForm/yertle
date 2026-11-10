@@ -268,7 +268,7 @@ motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_positi
 /* Bus mutex owns this detail; capture it into the report before cleanup I/O. */
 static uint8_t register_io_detail;
 static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
-    uint8_t length, motor_register_data_t *result, uint32_t timeout_ms)
+    uint8_t length, motor_register_data_t *result, uint32_t timeout_ms, bool observe_calibration)
 {
     memset(result, 0, sizeof(*result));
     register_io_detail=MOTOR_IO_NONE;
@@ -310,7 +310,7 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
                  * truncated vendor structure, for reads up to 32 bytes. */
                 memcpy(result->data, &rx_frame[5], length);
                 motor_diagnostics_record(DIAG_VALID_REPLY);
-                status = calibration_cache_observe(id,address,result->data,length)
+                status = (!observe_calibration || calibration_cache_observe(id,address,result->data,length))
                     ? MOTOR_REGISTER_OK : MOTOR_REGISTER_STORAGE_ERROR;
             }
         }
@@ -321,7 +321,7 @@ static motor_register_status_t read_register_timed(uint8_t id, uint8_t address,
 
 static motor_register_status_t read_register_locked(uint8_t id, uint8_t address,
     uint8_t length, motor_register_data_t *result)
-{ return read_register_timed(id,address,length,result,MOTOR_UART_TIMEOUT_MS); }
+{ return read_register_timed(id,address,length,result,MOTOR_UART_TIMEOUT_MS,true); }
 
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
                                                   uint8_t length, motor_register_data_t *result)
@@ -444,7 +444,7 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
         uint32_t budget=lock_io_budget(started,r);
         if (budget==0U) { lock_failure(r,5U); break; }
         ++r->lock_attempts;
-        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget,true);
         if(r->lock_read_status!=MOTOR_REGISTER_OK&&!r->io_detail)r->io_detail=register_io_detail;
         r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
         r->lock_read_servo_error=current.servo_error;
@@ -470,7 +470,7 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
         vTaskDelay(pdMS_TO_TICKS(MOTOR_LOCK_SETTLE_MS));
         budget=lock_io_budget(started,r);
         if (budget==0U) { lock_failure(r,5U);break; }
-        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget);
+        r->lock_read_status=(uint8_t)read_register_timed(id,STS3215_REG_LOCK_MARK,1U,&current,budget,true);
         if(r->lock_read_status!=MOTOR_REGISTER_OK&&!r->io_detail)r->io_detail=register_io_detail;
         r->lock_actual=r->lock_read_status==MOTOR_REGISTER_OK ? current.data[0] : 255U;
         r->lock_read_servo_error=current.servo_error;
@@ -526,6 +526,67 @@ static motor_register_write_report_t write_register_transaction(const motor_regi
         if (!restore_register_lock_locked(id,response_level,&report)) {
             report.status=MOTOR_WRITE_LOCK_RESTORE_FAILED; goto done;
         }
+    }
+    if (request->address==MOTOR_REGISTER_CALIBRATION_COMMAND) {
+        /* CalibrationOfs is a command on 0x28. Its readback is the torque
+         * switch, so verify position and the new offset instead of reading 128. */
+        stage=MOTOR_WRITE_STAGE_READ_INITIAL;
+        report.status=write_io_status(read_for_report(id,0x21U,1U,&data,&report));
+        report.servo_error=data.servo_error;
+        if (report.status!=MOTOR_WRITE_OK) goto done;
+        const uint8_t mode=data.data[0];
+        if (mode!=STS3215_MODE_POSITION && mode!=STS3215_MODE_PWM) {
+            report.status=MOTOR_WRITE_INVALID_STATE; goto done;
+        }
+        stage=MOTOR_WRITE_STAGE_TARGET;
+        if (!allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
+        if (!calibration_cache_invalidate(id)) {
+            report.last_read_status=MOTOR_REGISTER_STORAGE_ERROR;
+            report.status=MOTOR_WRITE_IO_ERROR; goto done;
+        }
+        if (!allowed()) { report.status=MOTOR_WRITE_INVALID_STATE; goto done; }
+        report.target_write_attempted=true;
+        report.status=write_io_status(write_for_report(id,request->address,request->data,1U,response_level,&report));
+        vTaskDelay(pdMS_TO_TICKS(10U));
+        const motor_register_status_t torque_status=read_for_report(id,STS3215_REG_TORQUE_SWITCH,1U,&data,&report);
+        if (torque_status==MOTOR_REGISTER_OK && data.data[0]!=0U) {
+            /* Keep this disarmed even if the servo interpreted the special value
+             * as a torque switch write. Never repeat the calibration command. */
+            const uint8_t off=0U;
+            stage=MOTOR_WRITE_STAGE_TORQUE;
+            (void)write_for_report(id,STS3215_REG_TORQUE_SWITCH,&off,1U,response_level,&report);
+            (void)read_for_report(id,STS3215_REG_TORQUE_SWITCH,1U,&data,&report);
+            report.status=MOTOR_WRITE_INVALID_STATE; goto done;
+        }
+        if (report.status!=MOTOR_WRITE_OK) goto done;
+        stage=MOTOR_WRITE_STAGE_VERIFY;
+        report.status=write_io_status(torque_status);
+        report.servo_error=data.servo_error;
+        if (report.status!=MOTOR_WRITE_OK) goto done;
+        report.status=write_io_status(read_for_report(id,STS3215_REG_CURRENT_POS,2U,&data,&report));
+        report.servo_error=data.servo_error;
+        if (report.status!=MOTOR_WRITE_OK) goto done;
+        const unsigned position=(unsigned)data.data[0]|((unsigned)data.data[1]<<8U);
+        const motor_register_status_t offset_status=read_register_timed(
+            id,0x1fU,2U,&data,MOTOR_UART_TIMEOUT_MS,false);
+        report.last_read_status=(uint8_t)offset_status;report.last_read_address=0x1fU;
+        report.last_read_value=offset_status==MOTOR_REGISTER_OK?data.data[0]:255U;
+        report.servo_error=data.servo_error;
+        report.status=write_io_status(offset_status);
+        if (report.status!=MOTOR_WRITE_OK) { report.io_detail=register_io_detail; goto done; }
+        const unsigned raw=(unsigned)data.data[0]|((unsigned)data.data[1]<<8U);
+        const int magnitude=(int)(raw&0x7ffU);
+        const int offset=(raw&0x800U)?-magnitude:magnitude;
+        const int midpoint=mode==STS3215_MODE_PWM?((int)position-offset+4096)%4096:(int)position;
+        if (raw>4095U || position>4095U || midpoint<2046 || midpoint>2050) {
+            report.status=MOTOR_WRITE_VERIFY_MISMATCH;report.io_detail=MOTOR_IO_VALUE;goto done;
+        }
+        if (!calibration_cache_observe(id,0x1fU,data.data,2U)) {
+            report.last_read_status=MOTOR_REGISTER_STORAGE_ERROR;
+            report.status=MOTOR_WRITE_IO_ERROR;goto done;
+        }
+        report.verified_value=(uint8_t)midpoint;
+        goto done;
     }
     stage=MOTOR_WRITE_STAGE_READ_INITIAL;
     report.status=write_io_status(read_for_report(id,request->address,request->length,&data,&report));
