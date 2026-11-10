@@ -35,6 +35,7 @@ parser.add_argument("--task", type=str, default="flat", choices=["flat", "rough"
 parser.add_argument('--trot-support-penalties', action='store_true', help='Enable v6.20.3 support reward terms for evaluation; does not change policy inputs/actions.')
 parser.add_argument('--disable-rewards', action='store_true', help='Skip reward term calculations during playback; reward values become zero.')
 parser.add_argument('--explicit-linked-motor', action='store_true', help='Use linked motor PID with 20ms PWM hold, 1ms back-EMF physics, solver 64, and motor-space penalties (flat task).')
+parser.add_argument('--sim2real-contact', action='store_true', help='Use the calibrated flat-task foot contact profile.')
 parser.add_argument("--checkpoint", type=str, required=True, help="Path to a saved model_*.pt")
 parser.add_argument("--num_envs", type=int, default=32)
 parser.add_argument("--steps", type=int, default=600)
@@ -67,6 +68,8 @@ if args_cli.explicit_linked_motor and (args_cli.task != 'flat' or not args_cli.s
     parser.error('--explicit-linked-motor requires --task flat and --signed-joint-reference')
 if args_cli.explicit_linked_motor and (args_cli.velocity_limit_sim is not None or args_cli.effort_limit_sim is not None):
     parser.error('--explicit-linked-motor uses motor limits; do not combine with joint --effort-limit-sim/--velocity-limit-sim')
+if args_cli.sim2real_contact and not args_cli.explicit_linked_motor:
+    parser.error('--sim2real-contact requires --explicit-linked-motor')
 for name in ('effort_limit_sim', 'velocity_limit_sim'):
     value = getattr(args_cli, name)
     if value is not None and not 0.0 < value < float('inf'):
@@ -192,6 +195,9 @@ def main():
         configure_linked_motor_actuator(env_cfg)
         drive = env_cfg.scene.robot.actuators['legs']
         print(f'PLAY_EXPLICIT_LINKED_MOTOR torque_Nm=1.024 speed_cutoff_rad_s=4.6 free_speed_rad_s={drive.motor_free_speed} physics_dt=0.001 solver_position=64 control_period=0.020 pid_pwm={drive.kp_pwm},{drive.ki_pwm},{drive.kd_pwm} integral_limit_pwm={drive.integral_limit_pwm} speed_is_not_hard_limit=True', flush=True)
+    if args_cli.sim2real_contact:
+        from isaac_lab.sim2real_contact import configure_sim2real_contact
+        configure_sim2real_contact(env_cfg)
     if args_cli.zero_base_linear_velocity:
         env_cfg.observations.policy.base_lin_vel.func = zero_base_linear_velocity_observation
     print(f"PLAY_BASE_LINEAR_VELOCITY_INPUT {'zero' if args_cli.zero_base_linear_velocity else 'measured'}", flush=True)
