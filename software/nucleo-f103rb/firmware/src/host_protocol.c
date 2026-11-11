@@ -35,6 +35,8 @@
 #define YERTLE_RESULT_MAX_AGE_MS             250U
 #define YERTLE_WRITE_CACHE_CAPACITY            4U
 #define YERTLE_WRITE_CACHE_LIFETIME_MS      60000U
+#define YERTLE_OFFSET_ATTEMPT_PERIOD_MS          20U
+#define YERTLE_OFFSET_MAX_ATTEMPTS                5U
 #define YERTLE_REGISTER_WRITE_PAYLOAD_MAX (4U + MOTOR_REGISTER_MAX_LENGTH)
 
 enum message_type {
@@ -124,6 +126,10 @@ typedef struct {
     bool pwm_mode_pending;
     bool offsets_job_active;
     uint8_t active_write_slot_plus_one; /* zero means GET/no active SET */
+    motor_register_result_t register_read;
+    motor_position_offsets_t offsets;
+    uint8_t offset_index, offset_attempts;
+    TickType_t next_offset_attempt;
     register_write_cache_t write_cache[YERTLE_WRITE_CACHE_CAPACITY];
     bool has_write_diagnostic;
     uint8_t last_write_diagnostic[REGISTER_WRITE_DIAGNOSTICS_LENGTH];
@@ -388,14 +394,61 @@ static void send_motor_register(protocol_context_t *context, const motor_registe
     (void)send_frame(context, MESSAGE_MOTOR_REGISTER, payload, 7U + length);
 }
 
+static bool register_access_allowed(void)
+{
+    return host_protocol_get_state() == HOST_FSM_DISARMED && !host_protocol_is_stop_requested();
+}
+
+static bool start_position_offsets(protocol_context_t *context, uint16_t sequence)
+{
+    if (context->register_job_active || context->offsets_job_active) return false;
+    context->offsets = (motor_position_offsets_t){ .request_sequence = sequence };
+    for (unsigned i = 0; i < YERTLE_MOTOR_COUNT; ++i)
+        context->offsets.status[i] = MOTOR_DEVICE_BUSY;
+    context->offset_index = 0U;
+    context->offset_attempts = 0U;
+    context->next_offset_attempt = xTaskGetTickCount();
+    context->offsets_job_active = true;
+    return true;
+}
+
+static void service_position_offsets(protocol_context_t *context)
+{
+    if (!context->offsets_job_active) return;
+
+    /* A safety change aborts remaining reads. Keep completed IDs and mark
+     * unread IDs busy in the correlated partial result. */
+    if (register_access_allowed() && pwm_control_native_ready()) {
+        const TickType_t now = xTaskGetTickCount();
+        if ((int32_t)(now - context->next_offset_attempt) < 0) return;
+        context->next_offset_attempt = now + pdMS_TO_TICKS(YERTLE_OFFSET_ATTEMPT_PERIOD_MS);
+        const uint8_t index = context->offset_index;
+        motor_position_offset_t *offset = &context->offsets.motor[index];
+        const motor_device_status_t status = motor_device_read_position_offset(index + 1U, offset);
+        context->offsets.status[index] = status;
+        ++context->offset_attempts;
+        if (status == MOTOR_DEVICE_OK) context->offsets.valid_mask |= (uint16_t)(1U << index);
+        if (status == MOTOR_DEVICE_OK || context->offset_attempts >= YERTLE_OFFSET_MAX_ATTEMPTS) {
+            ++context->offset_index;
+            context->offset_attempts = 0U;
+        }
+        if (context->offset_index < YERTLE_MOTOR_COUNT) return;
+    }
+
+    context->offsets.uptime_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    send_position_offsets(context, &context->offsets);
+    context->offsets_job_active = false;
+}
+
 static void service_motor_register(protocol_context_t *context)
 {
-    if (!context->register_job_active || context->active_write_slot_plus_one!=0U) return;
-    motor_register_result_t result;
-    if (sensor_take_motor_register(&result)) {
-        send_motor_register(context, &result);
-        context->register_job_active = false;
-    }
+    if (!context->register_job_active || context->active_write_slot_plus_one != 0U) return;
+    motor_register_result_t *result = &context->register_read;
+    result->status = register_access_allowed() ?
+        motor_device_read_register(result->motor_id, result->address, result->length, &result->reading) :
+        MOTOR_REGISTER_BUSY;
+    send_motor_register(context, result);
+    context->register_job_active = false;
 }
 
 static void send_pwm_mode_diagnostics(protocol_context_t *context,bool force)
@@ -406,30 +459,56 @@ static void send_pwm_mode_diagnostics(protocol_context_t *context,bool force)
         if(has_write)(void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,write,sizeof write);
     }
 }
+static motor_register_write_request_t decode_register_write(const uint8_t *payload)
+{
+    motor_register_write_request_t request = {
+        .motor_id = payload[0], .address = payload[1], .length = payload[2], .options = payload[3]
+    };
+    memcpy(request.data, payload + 4U, request.length);
+    return request;
+}
+
 static void service_motor_register_write(protocol_context_t *context)
 {
-    if (context->active_write_slot_plus_one==0U || context->result_count==YERTLE_RESULT_QUEUE_CAPACITY) return;
-    motor_register_write_result_t result;
-    if (!sensor_take_motor_register_write(&result)) return;
-    register_write_cache_t *cached=&context->write_cache[context->active_write_slot_plus_one-1U];
-    cached->code=(uint8_t)result.report.status;
-    cached->complete=true;
-    cached->completed_tick=xTaskGetTickCount();
-    const motor_register_write_request_t request={
-        .motor_id=cached->payload[0],.address=cached->payload[1],.length=cached->payload[2]
-    };
-    ++context->writes_completed;if(cached->code!=0U)++context->writes_failed;
-    register_write_diag_encode(cached->diagnostic,result.request_sequence,&request,&result.report,
-        context->writes_completed,context->writes_failed);
-    memcpy(context->last_write_diagnostic,cached->diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
-    context->has_write_diagnostic=true;
-    /* Precede the completion result so clients can attach the correlated detail
-     * without extending their ACK wait or requiring a new firmware capability. */
-    (void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,cached->diagnostic,REGISTER_WRITE_DIAGNOSTICS_LENGTH);
-    send_result(context,cached->code==0U ? MESSAGE_ACK : MESSAGE_NACK,
-                MESSAGE_SET_MOTOR_REGISTER,result.request_sequence,cached->code);
-    context->active_write_slot_plus_one=0U;
-    context->register_job_active=false;
+    if (context->active_write_slot_plus_one == 0U ||
+        context->result_count == YERTLE_RESULT_QUEUE_CAPACITY) return;
+
+    register_write_cache_t *cached = &context->write_cache[context->active_write_slot_plus_one - 1U];
+    const motor_register_write_request_t request = decode_register_write(cached->payload);
+    motor_register_write_report_t report = motor_register_initial_report();
+
+    /* No mutation before the final ACK/NACK can be queued. A mode write's
+     * reservation spans the driver call and blocks rollback until it returns. */
+    if (!register_access_allowed()) {
+        report.status = report.primary_status = MOTOR_WRITE_INVALID_STATE;
+    } else if (request.address == 0x21U) {
+        if (pwm_control_begin_mode_write(&request)) {
+            report = motor_device_write_mode(request.motor_id, request.data[0],
+                                             pwm_control_mode_write_current);
+            pwm_control_end_mode_write(&report);
+        } else {
+            report.status = report.primary_status = MOTOR_WRITE_INVALID_STATE;
+        }
+    } else {
+        report = motor_device_write_register(&request, register_access_allowed);
+    }
+
+    cached->code = (uint8_t)report.status;
+    cached->complete = true;
+    cached->completed_tick = xTaskGetTickCount();
+    ++context->writes_completed;
+    if (cached->code != 0U) ++context->writes_failed;
+    register_write_diag_encode(cached->diagnostic, cached->sequence, &request, &report,
+                               context->writes_completed, context->writes_failed);
+    memcpy(context->last_write_diagnostic, cached->diagnostic, REGISTER_WRITE_DIAGNOSTICS_LENGTH);
+    context->has_write_diagnostic = true;
+    /* Send detail before ACK/NACK so clients can correlate the outcome. */
+    (void)send_frame(context, REGISTER_WRITE_DIAGNOSTICS_TYPE, cached->diagnostic,
+                     REGISTER_WRITE_DIAGNOSTICS_LENGTH);
+    send_result(context, cached->code == 0U ? MESSAGE_ACK : MESSAGE_NACK,
+                MESSAGE_SET_MOTOR_REGISTER, cached->sequence, cached->code);
+    context->active_write_slot_plus_one = 0U;
+    context->register_job_active = false;
 }
 
 static void handle_motor_register_write(protocol_context_t *context, uint16_t sequence,
@@ -474,14 +553,7 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
                (TickType_t)(now-context->write_cache[i].completed_tick)>
                (TickType_t)(now-context->write_cache[free_slot].completed_tick)))free_slot=(int)i;
     }
-    motor_register_write_request_t request={
-        .motor_id=payload[0], .address=payload[1], .length=payload[2], .options=payload[3]
-    };
-    if (request.length>MOTOR_REGISTER_MAX_LENGTH) {
-        send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
-        return;
-    }
-    memcpy(request.data,payload+4U,request.length);
+    const motor_register_write_request_t request = decode_register_write(payload);
     const motor_register_write_status_t status=request.address==0x21?
         (motor_register_validate_mode_write(&request)==MOTOR_WRITE_OK&&pwm_control_mode_write_allowed(request.motor_id,request.data[0])?
             MOTOR_WRITE_OK:MOTOR_WRITE_INVALID_STATE):motor_register_validate_write(&request);
@@ -493,7 +565,7 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_STATE);
         return;
     }
-    if (context->register_job_active || context->pwm_mode_pending || free_slot<0 || !sensor_request_motor_register_write(sequence,&request)) {
+    if (context->register_job_active || context->offsets_job_active || context->pwm_mode_pending || free_slot<0) {
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_QUERY_BUSY);
         return;
     }
@@ -608,7 +680,7 @@ static bool can_arm(const protocol_context_t *context)
 {
     return context->host_connected && context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
-           !host_protocol_is_stop_requested() && !context->register_job_active &&
+           !host_protocol_is_stop_requested() && !context->register_job_active && !context->offsets_job_active &&
            !context->pwm_mode_pending && pwm_control_can_arm() &&
            motor_device_register_lock_uncertain_mask()==0U;
 }
@@ -796,13 +868,14 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
             break;
         }
-        const motor_register_result_t busy = {
+        motor_register_result_t request = {
             .request_sequence = sequence, .motor_id = id, .address = address,
             .length = length, .status = MOTOR_REGISTER_BUSY
         };
-        if (context->register_job_active || context->pwm_mode_pending || !sensor_request_motor_register(sequence, id, address, length)) {
-            send_motor_register(context, &busy);
+        if (context->register_job_active || context->offsets_job_active || context->pwm_mode_pending) {
+            send_motor_register(context, &request);
         } else {
+            context->register_read = request;
             context->register_job_active = true;
         }
         break;
@@ -810,8 +883,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     case MESSAGE_GET_POSITION_OFFSETS: {
         /* Motor-read-only; successful values also persist to F103 Flash while DISARMED. */
         const bool accepted = context->state==HOST_FSM_DISARMED && !host_protocol_is_stop_requested() &&
-            !context->pwm_mode_pending && pwm_control_native_ready() && sensor_request_position_offsets(sequence);
-        if(accepted)context->offsets_job_active=true;
+            !context->pwm_mode_pending && pwm_control_native_ready() && start_position_offsets(context, sequence);
         send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
                     type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);
         break;
@@ -1005,10 +1077,11 @@ void host_protocol_task(void *argument)
         service_safety_state(&context);
         expire_host_link(&context);
 
-        motor_position_offsets_t offsets;
-        if (sensor_take_position_offsets(&offsets)) {context.offsets_job_active=false;send_position_offsets(&context, &offsets);}
+        service_position_offsets(&context);
         service_motor_register(&context);
         service_motor_register_write(&context);
+        service_safety_state(&context);
+        expire_host_link(&context);
 
         service_pwm(&context);
 

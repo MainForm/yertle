@@ -17,6 +17,8 @@ void pwm_control_stop(uint8_t reason);
 uint8_t pwm_control_request_mode(const uint8_t *p,size_t n,uint16_t sequence);
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode);
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *request);
+/* Driver callback during the reserved mode write. */
+bool pwm_control_mode_write_current(void);
 void pwm_control_end_mode_write(const motor_register_write_report_t *report);
 uint32_t pwm_control_staged_epoch(void);
 bool pwm_control_preparation_pending(void);

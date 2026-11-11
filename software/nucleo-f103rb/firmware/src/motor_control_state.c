@@ -274,19 +274,31 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
 }
 uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==YPWM_STAGED?s.epoch:0;}
 bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.phase==YPWM_PREPARING||s.phase==YPWM_STAGED;}
+static bool mode_write_window_open(uint32_t started_ms)
+{
+    return host_protocol_get_state() == HOST_FSM_DISARMED &&
+           !host_protocol_is_stop_requested() &&
+           milliseconds() - started_ms < YPWM_PREPARATION_TIMEOUT_MS;
+}
+
+bool pwm_control_mode_write_current(void)
+{
+    taskENTER_CRITICAL();
+    const bool active = p.phase == YPWM_STAGED && p.snapshot_valid && p.mode_busy;
+    const uint32_t started_ms = p.started_ms;
+    taskEXIT_CRITICAL();
+    return active && mode_write_window_open(started_ms);
+}
+
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
     if(id<1||id>12)return false;
-    /* Called with the sensor's register transaction still on the stack.
-     * Copy only the permission fields, never the full goal/control context.
-     * Keep the same atomic state observation and all existing safety gates. */
+    /* Only copy the fields needed to validate the requested motor and mode. */
     taskENTER_CRITICAL();
     const bool staged=p.phase==YPWM_STAGED&&p.snapshot_valid&&
         mode==((p.backend==YPWM_PID&&(p.mask&(1U<<(id-1))))?2:0);
     const uint32_t started_ms=p.started_ms;
     taskEXIT_CRITICAL();
-    return staged&&
-        host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested()&&
-        milliseconds()-started_ms<YPWM_PREPARATION_TIMEOUT_MS;
+    return staged && mode_write_window_open(started_ms);
 }
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *q){
     if(motor_register_validate_mode_write(q)!=MOTOR_WRITE_OK||!pwm_control_mode_write_allowed(q->motor_id,q->data[0]))return false;

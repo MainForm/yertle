@@ -39,6 +39,7 @@ void pwm_control_stop(uint8_t reason){(void)reason;}
 uint8_t pwm_control_request_mode(const uint8_t *b,size_t n,uint16_t s){(void)b;(void)n;(void)s;return YPWM_INVALID_STATE;}
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){(void)id;(void)mode;return false;}
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *q){(void)q;return false;}
+bool pwm_control_mode_write_current(void){return false;}
 void pwm_control_end_mode_write(const motor_register_write_report_t *r){(void)r;}
 uint32_t pwm_control_staged_epoch(void){return 0;}
 bool pwm_control_preparation_pending(void){return false;}

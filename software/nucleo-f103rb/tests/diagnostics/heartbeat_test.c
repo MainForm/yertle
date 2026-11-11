@@ -41,6 +41,12 @@ bool sensor_request_motor_register_write(uint16_t sequence, const motor_register
 { (void)sequence; (void)request; return false; }
 bool sensor_take_motor_register_write(motor_register_write_result_t *result)
 { (void)result; return false; }
+motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset)
+{ (void)id; (void)offset; assert(0); return MOTOR_DEVICE_BUSY; }
+motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, uint8_t length, motor_register_data_t *result)
+{ (void)id; (void)address; (void)length; (void)result; assert(0); return MOTOR_REGISTER_BUSY; }
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request, bool (*allowed)(void))
+{ (void)request; (void)allowed; assert(0); return motor_register_initial_report(); }
 uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 { (void)motor; (void)imu; return false; }

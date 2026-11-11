@@ -13,7 +13,7 @@ static TickType_t tick=100;static unsigned critical,on_count,native_writes;
 static int16_t duty[12];static motor_target_set_t native_target;static uint16_t torque_mask;static uint8_t last_result,last_error;
 static unsigned detail_frames,stats_frames;static bool boot_off_ok=true;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
-static motor_register_write_result_t pending_write;static bool write_ready;
+
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
 TickType_t xTaskGetTickCount(void){return tick;}void vTaskDelay(TickType_t t){tick+=t;}
 void vTaskDelayUntil(TickType_t *p,TickType_t t){tick=*p+t;*p=tick;}
@@ -27,17 +27,19 @@ bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROT
  if(type==MESSAGE_ACK||type==MESSAGE_NACK){last_result=type;last_error=raw[10];result_order=tx_order;}return true;
 }
 bool host_uart_try_read(uint8_t *b,bool *d){(void)b;*d=false;return false;}
-bool sensor_take_position_offsets(motor_position_offsets_t *r){(void)r;return false;}
-bool sensor_request_position_offsets(uint16_t s){(void)s;return false;}
-bool sensor_take_motor_register(motor_register_result_t *r){(void)r;return false;}
-bool sensor_request_motor_register(uint16_t s,uint8_t id,uint8_t a,uint8_t n){(void)s;(void)id;(void)a;(void)n;return false;}
-bool sensor_take_motor_register_write(motor_register_write_result_t *r){if(!write_ready)return false;*r=pending_write;write_ready=false;return true;}
-bool sensor_request_motor_register_write(uint16_t seq,const motor_register_write_request_t *q){
- if(!pwm_control_begin_mode_write(q))return false;
- pending_write.request_sequence=seq;pending_write.report=motor_register_initial_report();
- pending_write.report.status=q->motor_id==mode_fail_id?MOTOR_WRITE_VERIFY_MISMATCH:MOTOR_WRITE_OK;
- if(pending_write.report.status==MOTOR_WRITE_OK)servo_modes[q->motor_id-1]=q->data[0];
- pwm_control_end_mode_write(&pending_write.report);write_ready=true;return true;
+motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset)
+{ (void)id; (void)offset; assert(0); return MOTOR_DEVICE_BUSY; }
+motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, uint8_t length, motor_register_data_t *result)
+{ (void)id; (void)address; (void)length; (void)result; assert(0); return MOTOR_REGISTER_BUSY; }
+motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request, bool (*allowed)(void))
+{ (void)request; (void)allowed; assert(0); return motor_register_initial_report(); }
+motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
+{
+    assert(!critical && allowed());
+    motor_register_write_report_t report = motor_register_initial_report();
+    report.status = id == mode_fail_id ? MOTOR_WRITE_VERIFY_MISMATCH : MOTOR_WRITE_OK;
+    if (report.status == MOTOR_WRITE_OK) servo_modes[id - 1U] = mode;
+    return report;
 }
 uint16_t motor_device_register_lock_uncertain_mask(void){return 0;}
 void uart_diagnostics_send(void *c,uart_diag_sender_t send){(void)c;(void)send;}

@@ -40,38 +40,6 @@ function(check_path label)
     endif()
     message(STATUS "Sensor ${label}: ${total}+256 reserve <= ${stack_bytes} bytes")
 endfunction()
-set(common sensor_task collect_motor_register_write motor_device_write_mode
-    write_mode_once write_register_transaction)
-check_path(permission ${common} register_write_allowed pwm_control_mode_write_allowed)
-check_path(lock_read ${common} restore_register_lock_locked read_register_timed
-    motor_uart_read_frame read_byte)
-check_path(lock_write ${common} restore_register_lock_locked write_register_timed
-    motor_uart_write)
-check_path(target_read ${common} read_for_report read_register_timed
-    motor_uart_read_frame read_byte)
-check_path(target_write ${common} write_for_report write_register_timed motor_uart_write)
-# Catch a full control_context snapshot returning to this hot callback, even
-# when a larger task allocation would otherwise conceal the regression.
-if(frame_pwm_control_mode_write_allowed GREATER 64)
-    message(FATAL_ERROR "Mode-write permission frame exceeds 64bytes; avoid full context copies")
-endif()
-message(STATUS "Sensor ARM stack budget passed (live high-water validation still required)")
-
-# A calibration-covering generic GET persists below the bus-lock read path.
-check_path(calibration_query sensor_task collect_motor_register motor_device_read_register
-    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
-    calibration_scan checksum)
-check_path(calibration_program sensor_task collect_motor_register motor_device_read_register
-    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
-    calibration_flash_program flash_operation)
-check_path(calibration_dedicated sensor_task collect_next_position_offset motor_device_read_position_offset
-    calibration_cache_observe calibration_store_save calibration_scan checksum)
-set(calibration_write sensor_task collect_motor_register_write motor_device_write_register write_register_transaction)
-check_path(calibration_invalidate ${calibration_write} calibration_cache_invalidate
-    calibration_store_save calibration_scan checksum)
-check_path(calibration_verify ${calibration_write} calibration_cache_observe
-    calibration_store_save calibration_scan checksum)
-
 if(NOT main_source MATCHES "xTaskCreate\\(actuator_task,[^)]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
  message(FATAL_ERROR "Cannot determine actuator stack multiplier")
 endif()
@@ -92,6 +60,38 @@ if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
 endif()
 math(EXPR stack_bytes "${host_multiplier} * ${CMAKE_MATCH_1} * 4")
 set(host_stack_bytes ${stack_bytes})
+set(common host_protocol_task service_motor_register_write motor_device_write_mode
+    write_mode_once write_register_transaction)
+check_path(permission ${common} pwm_control_mode_write_current)
+check_path(lock_read ${common} restore_register_lock_locked read_register_timed
+    motor_uart_read_frame read_byte)
+check_path(lock_write ${common} restore_register_lock_locked write_register_timed
+    motor_uart_write)
+check_path(target_read ${common} read_for_report read_register_timed
+    motor_uart_read_frame read_byte)
+check_path(target_write ${common} write_for_report write_register_timed motor_uart_write)
+# Catch a full control_context snapshot returning to this hot callback, even
+# when a larger task allocation would otherwise conceal the regression.
+if(frame_pwm_control_mode_write_current GREATER 64)
+    message(FATAL_ERROR "Mode-write permission frame exceeds 64bytes; avoid full context copies")
+endif()
+
+
+# A calibration-covering generic GET persists below the bus-lock read path.
+check_path(calibration_query host_protocol_task service_motor_register motor_device_read_register
+    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
+    calibration_scan checksum)
+check_path(calibration_program host_protocol_task service_motor_register motor_device_read_register
+    read_register_locked read_register_timed calibration_cache_observe calibration_store_save
+    calibration_flash_program flash_operation)
+check_path(calibration_dedicated host_protocol_task service_position_offsets motor_device_read_position_offset
+    calibration_cache_observe calibration_store_save calibration_scan checksum)
+set(calibration_write host_protocol_task service_motor_register_write motor_device_write_register write_register_transaction)
+check_path(calibration_invalidate ${calibration_write} calibration_cache_invalidate
+    calibration_store_save calibration_scan checksum)
+check_path(calibration_verify ${calibration_write} calibration_cache_observe
+    calibration_store_save calibration_scan checksum)
+
 check_path(host_pid_telemetry host_protocol_task service_pid_detail send_frame send_frame_sequence
     host_uart_write_bytes wait_tx_flag)
 
