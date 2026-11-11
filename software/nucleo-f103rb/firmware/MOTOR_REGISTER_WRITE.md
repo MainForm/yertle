@@ -93,13 +93,14 @@ on a permitted SRAM request has no extra effect.
 
 ## Runtime and failure behavior
 
-1. Host task validates protocol/policy and safe DISARMED state, reserves the
-   exclusive job slot and inhibits automatic ARMED transition. No UART1 I/O
-   occurs in the host request handler and no heartbeat/target deadline renews.
-2. Sensor worker rechecks state. Under the existing bus mutex it reads the
-   target motor's torque switch (40): only exactly zero permits writing.
-   A missing/corrupt/error reply or nonzero torque value returns code 5 and
-   performs no target or unlock write. It never turns torque OFF automatically.
+1. The host task validates protocol/policy and DISARMED, then reserves the
+   exclusive maintenance slot. The frame handler stages the request without
+   motor I/O or heartbeat/target deadline renewal.
+2. After processing incoming frames, the host task waits for space in the
+   result FIFO, rechecks state, and calls the driver directly. Under the
+   motor-bus mutex the driver reads the target motor's torque switch (40).
+   Only a valid zero allows a write. A missing/corrupt/error reply or nonzero
+   torque returns code 5 before unlock or target write.
 3. Read response level (8) without modifying it. Level 0 expects no WRITE
    response; level 1 requires a valid zero-data response from the matching ID.
    Both require a separate fresh read-back. Other values are rejected.
@@ -120,11 +121,11 @@ on a permitted SRAM request has no extra effect.
    valid matching read-back can confirm restoration even if its WRITE ACK was
    lost. Servo error bits are retained and cannot be silently converted into
    a successful cleanup. Preserve an originally open lock as open, not locked.
-8. Worker publishes the final report, without holding the snapshot mutex
-   during UART waits. Host task queues the final ACK/NACK in the existing result
-   TX FIFO. Result-TX retry never runs the job again. Normal host safety
-   processing and IMU/feedback remain active; the short maintenance transaction
-   holds the bus and can delay a feedback cycle. It is not for ARMED operation.
+8. The host task caches the final report and sends the correlated diagnostic
+   before ACK/NACK through the existing result TX path. TX retry reuses the
+   result. A maintenance transaction can delay host frame handling until its
+   bounded driver call returns. Sensor acquisition runs in its own task and
+   shares the motor bus for motor feedback.
 
 Driver uses private `_locked` reads/writes, never recursively calls the public
 read API while holding the nonrecursive bus mutex. Bus acquisition waits at

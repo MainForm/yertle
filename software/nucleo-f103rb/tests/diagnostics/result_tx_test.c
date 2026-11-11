@@ -20,18 +20,6 @@ bool host_uart_write_bytes(const uint8_t *data, size_t size)
 }
 bool host_uart_try_read(uint8_t *byte, bool *discontinuity)
 { (void)byte; *discontinuity = false; ++rx_reads; return false; }
-bool sensor_take_position_offsets(motor_position_offsets_t *value)
-{ (void)value; return false; }
-bool sensor_request_position_offsets(uint16_t sequence)
-{ (void)sequence; return false; }
-bool sensor_request_motor_register(uint16_t sequence, uint8_t id, uint8_t address, uint8_t length)
-{ (void)sequence; (void)id; (void)address; (void)length; return false; }
-bool sensor_take_motor_register(motor_register_result_t *result)
-{ (void)result; return false; }
-bool sensor_request_motor_register_write(uint16_t sequence, const motor_register_write_request_t *request)
-{ (void)sequence; (void)request; return false; }
-bool sensor_take_motor_register_write(motor_register_write_result_t *result)
-{ (void)result; return false; }
 motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset)
 { (void)id; (void)offset; assert(0); return MOTOR_DEVICE_BUSY; }
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, uint8_t length, motor_register_data_t *result)

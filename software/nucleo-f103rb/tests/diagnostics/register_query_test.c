@@ -191,6 +191,20 @@ static void check_position_offsets(void)
     assert(!context.offsets_job_active && ypwm_u16(response + 6U) == 0U);
     for (unsigned i = 0; i < YERTLE_MOTOR_COUNT; ++i)
         assert(offset_calls[i] == YERTLE_OFFSET_MAX_ATTEMPTS);
+
+    /* A second job in the same context starts from ID 1 and accepts the
+     * fifth attempt as valid. Previous failures do not leak into its reply. */
+    memset(offset_calls, 0, sizeof offset_calls);
+    memset(offset_failures, 0, sizeof offset_failures);
+    offset_failures[0] = YERTLE_OFFSET_MAX_ATTEMPTS - 1U;
+    assert(start_position_offsets(&context, 50U));
+    for (unsigned i = 0; i < YERTLE_MOTOR_COUNT + YERTLE_OFFSET_MAX_ATTEMPTS - 1U; ++i) {
+        service_position_offsets(&context);
+        tick += YERTLE_OFFSET_ATTEMPT_PERIOD_MS;
+    }
+    assert(!context.offsets_job_active && ypwm_u16(response) == 50U);
+    assert(ypwm_u16(response + 6U) == YPWM_ALL_MASK && offset_calls[0] == YERTLE_OFFSET_MAX_ATTEMPTS);
+    assert(offset_calls[11] == 1U && ypwm_u16(response + 52U) == 12U);
 }
 
 int main(void)

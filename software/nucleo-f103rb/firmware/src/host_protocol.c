@@ -74,12 +74,7 @@ enum error_code {
     ERROR_TARGET_BUSY = 9U,
     ERROR_FEEDBACK_UNAVAILABLE = 10U,
     ERROR_QUERY_BUSY = 11U,
-    ERROR_INVALID_REGISTER = 12U,
-    ERROR_REGISTER_WRITE_FORBIDDEN = 13U,
-    ERROR_REGISTER_IO_ERROR = 14U,
-    ERROR_REGISTER_VERIFY_MISMATCH = 15U,
-    ERROR_REGISTER_SERVO_ERROR = 16U,
-    ERROR_REGISTER_LOCK_RESTORE_FAILED = 17U
+    ERROR_INVALID_REGISTER = 12U
 };
 
 enum event_code {
@@ -115,6 +110,21 @@ typedef struct {
     uint8_t diagnostic[REGISTER_WRITE_DIAGNOSTICS_LENGTH];
     TickType_t completed_tick;
 } register_write_cache_t;
+
+typedef struct {
+    uint16_t request_sequence;
+    uint32_t uptime_ms;
+    uint16_t valid_mask;
+    motor_position_offset_t motor[YERTLE_MOTOR_COUNT];
+    motor_device_status_t status[YERTLE_MOTOR_COUNT];
+} motor_position_offsets_t;
+
+typedef struct {
+    uint16_t request_sequence;
+    uint8_t motor_id, address, length;
+    motor_register_status_t status;
+    motor_register_data_t reading;
+} motor_register_result_t;
 
 typedef struct {
     uint8_t encoded[YERTLE_PROTOCOL_MAX_ENCODED];
@@ -1077,11 +1087,13 @@ void host_protocol_task(void *argument)
         service_safety_state(&context);
         expire_host_link(&context);
 
-        service_position_offsets(&context);
-        service_motor_register(&context);
-        service_motor_register_write(&context);
-        service_safety_state(&context);
-        expire_host_link(&context);
+        if (context.offsets_job_active || context.register_job_active) {
+            service_position_offsets(&context);
+            service_motor_register(&context);
+            service_motor_register_write(&context);
+            service_safety_state(&context);
+            expire_host_link(&context);
+        }
 
         service_pwm(&context);
 

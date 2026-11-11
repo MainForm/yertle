@@ -196,29 +196,26 @@ Current/voltage/load automatic limit checks are intentionally not enabled.
 These values remain PC telemetry for host-side measurement and decisions; no
 new unsafe trigger or motor cutoff based on their thresholds is added here.
 
-## Read-only EEPROM offset jobs
+## PC-requested motor register access
 
-`host_protocol_task` accepts `GET_POSITION_OFFSETS` and calls
-`sensor_request_position_offsets(request_sequence)`; it never performs the
-UART transactions itself. `sensor_task` makes one attempt after each regular
-feedback/IMU iteration, calling `motor_device_read_position_offset(id, &offset)`.
-The driver serializes READ 0x1F/2 bytes with the existing bus mutex and DMA,
-checks the reply and decodes bit-11 sign/magnitude. No write/calibration or
-torque operation is involved.
-The sensor job retries a failing ID on later iterations, with up to five total
-attempts, and accepts the first valid reply. Success or five failures advances
-to the next ID. Normal feedback is collected between retries. The single-ID
-driver API remains a single transaction; only the batch job adds retries.
+The host task validates and schedules `GET_MOTOR_REGISTER` (0x0C),
+`SET_MOTOR_REGISTER` (0x0D) and `GET_POSITION_OFFSETS` (0x0B) in one exclusive
+maintenance slot. After servicing incoming PC frames, it calls `motor_device`
+directly. The device driver selects USART1 or USART3 by motor ID and serializes
+access with the motor-bus mutex. The sensor task continues to publish periodic
+feedback, IMU and optical-flow snapshots using its own cache mutex.
 
-The job/result cache and its pending/ready flags share the existing feedback
-mutex. UART I/O is outside that cache lock; no interrupt masking is added.
-The host consumes a completed result with `sensor_take_position_offsets()` and
-sends one `POSITION_OFFSETS` frame, including a validity bit and driver/servo
-error per motor. Duplicate requests cannot overwrite a pending/unconsumed job.
-Failed IDs do not discard successful IDs. This is on-demand EEPROM reading,
-not an addition to every host feedback response. One extra transaction per
-sensor iteration can add bus/CPU time while the query is active; 50 Hz is a
-nominal period, not a guaranteed rate under contention or errors.
+The maintenance slot inhibits re-arming. Before I/O the host rechecks DISARMED
+and the stop/fault gate. A verified write checks servo torque, performs the
+driver's read-back and lock recovery, and caches the result for duplicate
+requests before issuing the final ACK/NACK. Mode-register writes additionally
+require an active staged transition.
+
+The offset batch issues one read attempt per host service pass, spaced at least
+20 ms apart, with up to five attempts per ID. Success or five failures advances
+to the next ID. Its 0x8E response retains successful IDs and includes each
+motor's validity and status. If a safety change interrupts the batch, remaining
+unread IDs are reported busy.
 
 ## Clocking
 

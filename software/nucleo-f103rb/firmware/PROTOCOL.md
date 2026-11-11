@@ -222,20 +222,20 @@ I2C address 0x68. It is probed again once per second after a failure.
 
 ## EEPROM position-offset query
 
-`GET_POSITION_OFFSETS` (`0x0B`) is read-only in every FSM state. It does not
-connect the host, refresh a control lease, submit a target, change torque, or
-unlock/write EEPROM. `ACK` means the query was scheduled, not completed.
-Only one query/result may be pending; another request gets `NACK` code 11
-(query busy). The sensor task makes one attempt per iteration, interleaved with
-normal feedback; the host task continues processing the FSM and host traffic.
-Each transaction uses the existing motor-bus mutex and DMA. Healthy completion
-normally takes about 240 ms, but bus contention/failures can take longer.
+`GET_POSITION_OFFSETS` (`0x0B`) is a read-only request accepted in DISARMED
+with the position backend ready and no pending safety action. ACK confirms
+scheduling. A busy or unavailable offset request returns NACK code 11.
+The host task makes one attempt per service pass, at least 20 ms apart.
+The driver uses the shared motor-bus mutex and the DMA bus for the selected ID.
+Healthy completion normally takes about 240 ms, with contention adding delay.
+Re-arming waits for completion. If a stop/fault interrupts the batch,
+completed IDs are retained and unread IDs report BUSY.
 Each ID gets up to five total attempts (initial attempt included), stopping
 at its first valid reply. Failed attempts do not advance to the next ID until
 the fifth failure. On exhaustion the last attempt's raw/servo error/status is
 returned with that ID invalid; other IDs are still read. Normal all-success
 queries still use just 12 attempts; worst case uses 60 attempts (nominally
-1.2 s at the 20 ms sensor period, not a guaranteed bound with contention/errors).
+1.2 s at the 20 ms attempt spacing, not a guaranteed bound with contention/errors).
 Retry counters reset at each ID and each new job. No prior query's values are
 reused. The valid-value criteria below are unchanged. The PC default wait is
 5 s with early completion; an explicit positive `--listen-ms` overrides it.
@@ -302,7 +302,7 @@ u8  data[length]       # present ONLY when status=0
 | status | Meaning |
 |---:|---|
 | 0 | OK: matching ID, exact data length, valid checksum, no servo error |
-| 1 | BUSY: another query/result occupies the slot, snapshot/bus mutex unavailable, or a safety/state change cancels the accepted job before I/O |
+| 1 | BUSY: the maintenance slot or motor-bus mutex is unavailable, or a safety/state change cancels the accepted job before I/O |
 | 2 | COMMUNICATION_ERROR: driver not initialized, TX/RX failure or timeout |
 | 3 | REPLY_ERROR: invalid complete reply, checksum, ID or data-length mismatch |
 | 4 | SERVO_ERROR: valid reply from the requested ID with nonzero error bits |
@@ -311,17 +311,16 @@ Successful payloads are `7 + length` bytes (maximum 39); failures are exactly
 7 bytes, not padded with fake data. These status numbers are specific to this
 message and are NOT the existing POSITION_OFFSETS driver-status enum.
 
-The host task validates/enqueues; the sensor task performs one bounded READ
-using the existing USART1 DMA/bus mutex, outside the feedback-snapshot mutex;
-the host task sends the result over USART2. Regular feedback and IMU collection
-remain enabled. Offset and register queries share one exclusive pending/result
-slot: a concurrent valid register request gets status 1 without overwriting the
-first request; an offset request retains its existing NACK code 11 behavior.
-Re-arming is inhibited from acceptance through result collection. A fault/stop
-before the worker starts skips the READ and yields status 1. A query never
-refreshes heartbeat/target timers, establishes a lease, submits targets, changes
-torque, calibrates, or unlocks/writes registers. Normal FSM processing remains
-active; a separate valid heartbeat can permit re-arming after the query finishes.
+The host task validates and stages the request, then directly calls the driver
+for one bounded READ after processing incoming PC frames. The driver uses the
+motor-bus mutex and DMA on USART1 for IDs 1..6 or USART3 for IDs 7..12. The host
+sends the result over USART2. Regular feedback and IMU collection continue in
+the sensor task, with motor feedback sharing the bus. Offset and register
+requests share one exclusive maintenance slot. A second valid register request
+gets status 1; a busy offset request gets NACK 11. Re-arming waits for the
+pending operation to finish. A fault/stop before execution skips the READ
+and yields status 1. The query does not establish a control lease or refresh
+heartbeat/target deadlines.
 
 The vendor parser validates the entire servo frame but only copies eight data
 bytes to its reply structure. The driver therefore uses a 38-byte RX buffer
@@ -345,9 +344,9 @@ retry FIFO. There is no new response type. See
 [MOTOR_REGISTER_WRITE.md](MOTOR_REGISTER_WRITE.md) for the exact payload,
 allow-list, failure codes 13..17, bounded lock recovery, diagnostics and the
 four-entry/60-second duplicate-suppression contract. GET/SET/offset work shares
-one exclusive job slot. Register jobs inhibit re-arm until their result has
-been collected; an unverified EEPROM lock restore additionally inhibits re-arm
-until verified recovery. Existing wire values/layouts are unchanged.
+one exclusive maintenance slot. The host task executes each job directly
+through the driver and inhibits re-arming through completion. An unverified
+EEPROM lock restore inhibits re-arming until verified recovery. Existing wire values/layouts are unchanged.
 
 ## Implemented responses
 
