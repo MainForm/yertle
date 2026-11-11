@@ -6,7 +6,9 @@ bool calibration_read_ok=true,calibration_allowed=true;
 void calibration_memory_reset(void){memset(calibration_memory,255,sizeof calibration_memory);
  calibration_budget=-1;calibration_programs=calibration_erases=0;calibration_read_ok=calibration_allowed=true;}
 static bool allowed(void){if(!calibration_allowed||!calibration_budget)return false;
- if(calibration_budget>0)--calibration_budget;return true;}
+ if(calibration_budget>0)--calibration_budget;
+ return true;
+}
 bool calibration_flash_read(uint32_t offset,uint16_t *value){
  if(!calibration_read_ok||!value||(offset&1U)||offset>=sizeof calibration_memory)return false;
  *value=(uint16_t)(calibration_memory[offset]|(uint16_t)calibration_memory[offset+1]<<8);return true;}

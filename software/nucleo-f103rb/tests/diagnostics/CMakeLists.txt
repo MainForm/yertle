@@ -21,7 +21,7 @@ else()
 endif()
 add_test(NAME firmware_dma_test COMMAND firmware_dma_test)
 add_executable(firmware_safe_stop_test ../safe_stop/actuator_safe_stop_test.c
-    ../../firmware/src/actuator_task.c)
+    ../../firmware/src/actuator_task.c ../../firmware/src/motor_control.c)
 target_include_directories(firmware_safe_stop_test PRIVATE ../safe_stop ../../firmware/include)
 if(MSVC)
     target_compile_options(firmware_safe_stop_test PRIVATE /W4 /WX /UNDEBUG)
@@ -120,6 +120,10 @@ else()
     target_compile_options(firmware_pwm_driver_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME firmware_pwm_driver_test COMMAND firmware_pwm_driver_test)
+
+foreach(native firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test)
+ target_compile_definitions(${native} PRIVATE NATIVE_POSITION_TEST=1)
+endforeach()
 
 foreach(legacy firmware_offset_job_test firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test
  firmware_heartbeat_test firmware_result_tx_test firmware_register_query_test)

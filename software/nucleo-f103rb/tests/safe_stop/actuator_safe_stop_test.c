@@ -7,16 +7,13 @@
 #include "actuator_task.h"
 #include "host_protocol.h"
 #include "sensor_task.h"
-#include "queue.h"
+#include "motor_control.h"
 #include "task.h"
 
 static jmp_buf finished;
 static TickType_t tick;
 static host_safety_action_t safety_action;
 static host_fsm_state_t state;
-static uint8_t queued_targets[256];
-static unsigned queue_item_size;
-static bool queued;
 static bool stuck;
 static bool fault_on_stop;
 static bool fail_center_writes;
@@ -32,37 +29,6 @@ static unsigned faults;
 static TickType_t torque_off_tick;
 static TickType_t last_center_write_tick;
 static unsigned writes_at_first_successful_off;
-
-QueueHandle_t xQueueCreate(unsigned length, unsigned item_size)
-{
-    assert(length == 1U && item_size <= sizeof(queued_targets));
-    queue_item_size = item_size;
-    return &queued_targets;
-}
-
-BaseType_t xQueueOverwrite(QueueHandle_t queue, const void *item)
-{
-    assert(queue == &queued_targets);
-    memcpy(queued_targets, item, queue_item_size);
-    queued = true;
-    return pdPASS;
-}
-
-BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t timeout)
-{
-    assert(queue == &queued_targets && timeout == 0U);
-    if (!queued) return 0;
-    memcpy(item, queued_targets, queue_item_size);
-    queued = false;
-    return pdTRUE;
-}
-
-BaseType_t xQueueReset(QueueHandle_t queue)
-{
-    assert(queue == &queued_targets);
-    queued = false;
-    return pdPASS;
-}
 
 TickType_t xTaskGetTickCount(void) { return tick; }
 
@@ -150,7 +116,6 @@ static void run_case(bool start_with_target, bool force_stall, bool stop_on_faul
     tick = 0U;
     safety_action = start_with_target ? HOST_SAFETY_ACTION_NONE : HOST_SAFETY_ACTION_SAFE_STOP;
     state = HOST_FSM_ARMED;
-    queued = false;
     stuck = force_stall;
     fault_on_stop = stop_on_fault;
     fail_center_writes = write_failure;
@@ -162,12 +127,12 @@ static void run_case(bool start_with_target, bool force_stall, bool stop_on_faul
     torque_off_tick = 0U;
     last_center_write_tick = 0U;
     writes_at_first_successful_off = 0U;
-    assert(actuator_task_init());
+    motor_control_init();
     if (start_with_target) {
         motor_target_set_t targets = { 0 };
         for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i)
             targets.motor[i].position = 2200U;
-        assert(actuator_submit_targets(&targets));
+        assert(motor_control_submit_targets(&targets));
     }
     if (setjmp(finished) == 0) actuator_task(NULL);
 }

@@ -71,7 +71,7 @@ motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
 }
 bool motor_device_validate_targets(const motor_target_set_t *targets)
 { (void)targets; return true; }
-bool actuator_submit_targets(const motor_target_set_t *targets)
+bool motor_control_submit_targets(const motor_target_set_t *targets)
 { (void)targets; assert(0); return false; }
 void uart_diagnostics_send(void *context, uart_diag_sender_t send)
 { (void)context; (void)send; }

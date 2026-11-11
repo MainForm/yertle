@@ -1,10 +1,36 @@
 /* Legacy task tests isolate the unchanged position path. Production PWM state
  * machine and its host integration are tested separately in tests/pwm. */
 #include "pwm_control.h"
+#include "motor_control.h"
+#ifdef NATIVE_POSITION_TEST
+#include "../../firmware/src/motor_control_state.h"
+#include "host_protocol.h"
+#include "task.h"
+
+static motor_position_target_t latest;
+static bool available;
+
+bool motor_control_submit_targets(const motor_target_set_t *targets)
+{
+    if (!host_protocol_is_armed() || host_protocol_is_stop_requested() ||
+        !motor_device_validate_targets(targets)) return false;
+    latest = (motor_position_target_t){ *targets, xTaskGetTickCount() };
+    available = true;
+    return true;
+}
+bool motor_control_read_targets(motor_position_target_t *target)
+{
+    if (available) *target = latest;
+    return available;
+}
+void motor_control_discard_targets(void){available = false;}
+void pwm_control_init(void){motor_control_discard_targets();}
+#else
 void pwm_control_init(void){}
+#endif
 bool pwm_control_service(void){return false;}
 bool pwm_control_native_ready(void){return true;}
-bool pwm_control_accepts_positions(void){return true;}
+bool motor_control_accepts_targets(void){return true;}
 bool pwm_control_can_arm(void){return true;}
 void pwm_control_on_armed(void){}
 void pwm_control_connection_reset(void){}
@@ -19,7 +45,6 @@ bool pwm_control_preparation_pending(void){return false;}
 motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void)){
  (void)id;(void)mode;(void)allowed;motor_register_write_report_t r=motor_register_initial_report();r.status=MOTOR_WRITE_INVALID_STATE;return r;
 }
-bool pwm_control_submit_positions(const motor_target_set_t *g){(void)g;return false;}
 uint8_t pwm_control_submit_raw(const int16_t d[12],uint16_t s){(void)d;(void)s;return YPWM_PWM_MODE_REQUIRED;}
 bool pwm_control_take_raw_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_take_mode_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}

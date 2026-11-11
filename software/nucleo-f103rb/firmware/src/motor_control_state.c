@@ -1,4 +1,6 @@
 #include "pwm_control.h"
+#include "motor_control.h"
+#include "motor_control_state.h"
 #include "position_pid.h"
 #include "mode_store.h"
 #include "calibration_store.h"
@@ -11,8 +13,8 @@
 typedef struct {
     uint8_t backend,phase,reason,result,operation,mode_write_id;
     uint16_t mask,verified,unknown,torque,request,feedback_age;
-    uint32_t epoch,retired_epoch,command_count,accepted_ms,status_ms,started_ms;
-    motor_target_set_t goal;
+    uint32_t epoch,retired_epoch,command_count,raw_accepted_ms,status_ms,started_ms;
+    motor_position_target_t position_target;
     int16_t sent[12];
     int16_t raw[12];uint16_t raw_request;uint8_t raw_result;
     bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart,return_eligible;
@@ -88,7 +90,7 @@ static void publish_pid_trace(const control_context *s,const motor_feedback_set_
     if(trace_pending)++trace_coalesced;
     for(unsigned pair=0;pair<6;++pair){uint8_t *b=trace_latest.frame[pair];memset(b,0,64);
         b[0]=YPWM_PID_DETAIL_EVENT;b[1]=YPWM_PID_DETAIL_SCHEMA;ypwm_put32(b+2,f->sequence);
-        ypwm_put32(b+6,now);ypwm_put16(b+10,(uint16_t)s->goal.sequence);
+        ypwm_put32(b+6,now);ypwm_put16(b+10,(uint16_t)s->position_target.targets.sequence);
         b[12]=(uint8_t)(pair*2U+1U);b[13]=2;ypwm_put32(b+14,dt);
         for(unsigned j=0;j<2;++j){const unsigned i=pair*2U+j;if(!(s->mask&(1U<<i)))continue;
             uint8_t *r=b+18+j*23;const position_pid_t *a=&axes[i];
@@ -147,12 +149,44 @@ void pwm_control_init(void){
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;taskEXIT_CRITICAL();
 }
 void pwm_control_on_armed(void){
-    taskENTER_CRITICAL();if(p.phase==YPWM_READY||p.phase==YPWM_NATIVE_READY){p.snapshot_valid=false;p.boot_restored=false;}taskEXIT_CRITICAL();
+    taskENTER_CRITICAL();
+    if(p.phase==YPWM_NATIVE_READY)p.ever_command=false;
+    if(p.phase==YPWM_READY||p.phase==YPWM_NATIVE_READY){p.snapshot_valid=false;p.boot_restored=false;}taskEXIT_CRITICAL();
 }
 bool pwm_control_native_ready(void){const control_context s=snapshot();return s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY;}
-bool pwm_control_accepts_positions(void){const control_context s=snapshot();return
-    (s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY)||
-    (s.backend==YPWM_PID&&s.arm_allowed&&(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE));}
+/* Caller holds the critical section. */
+static bool accepts_targets(void)
+{
+    return (p.backend == YPWM_POSITION && p.phase == YPWM_NATIVE_READY) ||
+           (p.backend == YPWM_PID && p.arm_allowed &&
+            (p.phase == YPWM_READY || p.phase == YPWM_ACTIVE));
+}
+
+bool motor_control_accepts_targets(void)
+{
+    taskENTER_CRITICAL();
+    const bool accepted = accepts_targets();
+    taskEXIT_CRITICAL();
+    return accepted;
+}
+
+bool motor_control_read_targets(motor_position_target_t *target)
+{
+    taskENTER_CRITICAL();
+    const bool available = p.phase == YPWM_NATIVE_READY && p.ever_command;
+    if (available) *target = p.position_target;
+    taskEXIT_CRITICAL();
+    return available;
+}
+
+void motor_control_discard_targets(void)
+{
+    taskENTER_CRITICAL();
+    if (p.phase == YPWM_NATIVE_READY &&
+        (!host_protocol_is_armed() || host_protocol_is_stop_requested())) p.ever_command = false;
+    taskEXIT_CRITICAL();
+}
+
 static bool calibration_ready(uint16_t mask){
     uint16_t raw;int16_t steps;
     for(unsigned i=0;i<12;++i)if((mask&(1U<<i))&&!calibration_cache_get((uint8_t)(i+1U),&raw,&steps))return false;
@@ -234,7 +268,7 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;p.return_eligible=false;
     p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;p.boot_restored=false;
     p.direct=p.raw_preview=p.pid_restart=false;
-    memset(&p.goal,0,sizeof p.goal);memset(p.sent,0,sizeof p.sent);p.dirty=true;
+    memset(&p.position_target,0,sizeof p.position_target);memset(p.sent,0,sizeof p.sent);p.dirty=true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;
     taskEXIT_CRITICAL();return YPWM_OK;
 }
@@ -299,16 +333,31 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
     }
     taskEXIT_CRITICAL();
 }
-bool pwm_control_submit_positions(const motor_target_set_t *goal){
-    if(!goal||!motor_device_validate_targets(goal)||!host_protocol_is_armed()||host_protocol_is_stop_requested())return false;
+bool motor_control_submit_targets(const motor_target_set_t *targets)
+{
+    if (!targets || !motor_device_validate_targets(targets)) return false;
+
     taskENTER_CRITICAL();
-    if(p.backend!=YPWM_PID||!p.arm_allowed||p.raw_pending||p.raw_result_pending||(p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)){taskEXIT_CRITICAL();return false;}
-    /* New position goals do not reset the integrator or derivative history. */
-    if(p.direct)p.pid_restart=true;
-    p.direct=false;
-    p.goal=*goal;p.accepted_ms=milliseconds();++p.command_count;p.ever_command=true;p.dirty=true;
-    taskEXIT_CRITICAL();return true;
+    if (!host_protocol_is_armed() || host_protocol_is_stop_requested() ||
+        !accepts_targets() || p.raw_pending || p.raw_result_pending) {
+        taskEXIT_CRITICAL();
+        return false;
+    }
+
+    /* Only switching back from direct PWM resets the PID history. */
+    if (p.direct) p.pid_restart = true;
+    p.direct = false;
+    p.position_target.targets = *targets;
+    p.position_target.accepted_ms = milliseconds();
+    p.ever_command = true;
+    if (p.backend == YPWM_PID) {
+        ++p.command_count;
+        p.dirty = true;
+    }
+    taskEXIT_CRITICAL();
+    return true;
 }
+
 uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
     if(!duty)return YPWM_INVALID_PAYLOAD;
     const bool armed=host_protocol_is_armed();bool zero=true;
@@ -326,7 +375,7 @@ uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
         (p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
     memcpy(p.raw,duty,sizeof p.raw);p.raw_request=sequence;p.raw_pending=true;p.raw_preview=preview;
     if(preview)p.arm_allowed=false; /* PWM0 is not proof that torque stayed OFF. */
-    else{p.direct=true;p.ever_command=true;p.accepted_ms=milliseconds();}
+    else{p.direct=true;p.ever_command=true;p.raw_accepted_ms=milliseconds();}
     p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
 }
 bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result){
@@ -609,7 +658,7 @@ static bool feedback_safe(const motor_feedback_set_t *f){
 }
 static void service_pid(const control_context *s,uint32_t now){
     if(!s->ever_command)return;
-    if(now-s->accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
+    if(now-s->position_target.accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
     motor_feedback_set_t f;imu_feedback_t imu;
     if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     if(!feedback_safe(&f))return;
@@ -627,7 +676,7 @@ static void service_pid(const control_context *s,uint32_t now){
         }
         position_pid_config_t config=position_pid_default_config();
         config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
-        if(!position_pid_step(&axes[i],&config,s->goal.motor[i].position,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
+        if(!position_pid_step(&axes[i],&config,s->position_target.targets.motor[i].position,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
     }
     if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
@@ -648,7 +697,7 @@ static void service_pid(const control_context *s,uint32_t now){
 static void service_raw(const control_context *s,uint32_t now){
     if(!s->raw_preview){
         if(!host_protocol_is_armed()||host_protocol_is_stop_requested()){pwm_control_stop(YPWM_REASON_LINK);return;}
-        if(now-s->accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
+        if(now-s->raw_accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
         motor_feedback_set_t f;imu_feedback_t imu;
         if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
         if(!feedback_safe(&f))return;

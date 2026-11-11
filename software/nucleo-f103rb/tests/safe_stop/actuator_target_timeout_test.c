@@ -3,14 +3,12 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Real queue item and actuator loop; mocked scheduling and device I/O. */
+/* Real actuator loop and native-position service; mocked scheduling and I/O. */
 #include "../../firmware/src/actuator_task.c"
+#include "../../firmware/src/motor_control.c"
 
 static jmp_buf finished;
 static TickType_t tick;
-static queued_target_t queue_item;
-static bool queued;
-static bool accept_queue;
 static bool valid_targets;
 static bool armed;
 static bool inject_target;
@@ -19,29 +17,6 @@ static unsigned writes;
 static unsigned torque_on_calls;
 static motor_target_set_t targets;
 
-QueueHandle_t xQueueCreate(unsigned length, unsigned item_size)
-{
-    assert(length == 1U && item_size == sizeof(queued_target_t));
-    return &queue_item;
-}
-BaseType_t xQueueOverwrite(QueueHandle_t queue, const void *item)
-{
-    assert(queue == &queue_item);
-    if (!accept_queue) return 0;
-    queue_item = *(const queued_target_t *)item;
-    queued = true;
-    return pdPASS;
-}
-BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t timeout)
-{
-    assert(queue == &queue_item && timeout == 0U);
-    if (!queued) return 0;
-    *(queued_target_t *)item = queue_item;
-    queued = false;
-    return pdPASS;
-}
-BaseType_t xQueueReset(QueueHandle_t queue)
-{ assert(queue == &queue_item); queued = false; return pdPASS; }
 TickType_t xTaskGetTickCount(void) { return tick; }
 void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
 {
@@ -49,8 +24,8 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     *previous = tick;
     if (inject_target && tick == inject_at) {
         /* Equal positions still constitute a new host command. */
-        const bool accepted = actuator_submit_targets(&targets);
-        assert(accepted == (armed && accept_queue && valid_targets));
+        const bool accepted = motor_control_submit_targets(&targets);
+        assert(accepted == (armed && valid_targets));
         inject_target = false;
     }
     assert(writes < 200U); /* Prevent a broken watchdog hanging the test. */
@@ -80,18 +55,17 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
 
 static void reset(void)
 {
-    target_queue = NULL;
     tick = 100U;
-    queued = false;
-    accept_queue = valid_targets = armed = true;
+    valid_targets = armed = true;
     inject_target = false;
     writes = torque_on_calls = 0U;
     memset(&targets, 0, sizeof(targets));
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i)
         targets.motor[i].position = 2200U;
-    assert(actuator_task_init());
-    assert(actuator_submit_targets(&targets));
-    assert(queue_item.accepted_tick == 100U);
+    motor_control_init();
+    assert(motor_control_submit_targets(&targets));
+    motor_position_target_t saved_target;
+    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 }
 static void run_until_timeout(TickType_t start, TickType_t expected)
 {
@@ -102,50 +76,44 @@ static void run_until_timeout(TickType_t start, TickType_t expected)
 
 int main(void)
 {
+    motor_position_target_t saved_target;
     reset();
     run_until_timeout(400U, 600U);
-    assert(writes == 20U); /* Deadline stays at enqueue+500, not dequeue+500. */
+    assert(writes == 20U); /* Deadline stays at reception+500, not first service+500. */
 
     reset();
     run_until_timeout(700U, 700U);
-    assert(writes == 0U && torque_on_calls == 0U); /* Stale queued command. */
+    assert(writes == 0U && torque_on_calls == 0U); /* Stale accepted command. */
 
     reset();
     inject_target = true;
     inject_at = 590U;
     run_until_timeout(400U, 1090U);
-    assert(queue_item.accepted_tick == 590U);
+    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 590U);
 
     reset();
     tick = 350U;
-    assert(actuator_submit_targets(&targets)); /* Latest-only queue overwrite. */
+    assert(motor_control_submit_targets(&targets)); /* Latest-target overwrite. */
     run_until_timeout(400U, 850U);
-
-    reset();
-    inject_target = true;
-    inject_at = 590U;
-    accept_queue = false;
-    run_until_timeout(400U, 600U);
-    assert(queue_item.accepted_tick == 100U);
 
     reset();
     inject_target = true;
     inject_at = 590U;
     valid_targets = false;
     run_until_timeout(400U, 600U);
-    assert(queue_item.accepted_tick == 100U);
+    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 
     reset();
     armed = false;
     tick = 590U;
-    assert(!actuator_submit_targets(&targets));
-    assert(queue_item.accepted_tick == 100U);
+    assert(!motor_control_submit_targets(&targets));
+    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 
     reset();
     tick = UINT32_MAX - 199U;
-    assert(actuator_submit_targets(&targets));
+    assert(motor_control_submit_targets(&targets));
     run_until_timeout(100U, 300U); /* Deadline crosses the tick-counter wrap. */
-    puts("targets: enqueue timestamp, delayed dequeue, expiry, overwrite, rejection and tick wrap passed");
+    puts("targets: reception timestamp, delayed service, expiry, overwrite, rejection and tick wrap passed");
     return 0;
 }
 

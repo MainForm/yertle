@@ -6,12 +6,12 @@
 /* Exercise both production tasks and their shared safety gate. */
 #include "../../firmware/src/host_protocol.c"
 #include "../../firmware/src/actuator_task.c"
+#include "../../firmware/src/motor_control.c"
 
 static jmp_buf finished;
 static TickType_t tick, tx_elapsed, stop_at;
-static queued_target_t queue_item;
-static bool queued, flood, garbage, fault_on_read, expire_during_motion;
-static unsigned enqueue_calls, torque_on_calls, torque_off_calls, center_writes;
+static bool flood, garbage, fault_on_read, expire_during_motion;
+static unsigned torque_on_calls, torque_off_calls, center_writes;
 static unsigned rx_reads, tx_calls, delay_calls;
 static uint8_t rx_wire[80];
 static size_t rx_length, rx_index;
@@ -19,14 +19,6 @@ static protocol_context_t context;
 static unsigned stalled_id;
 static bool changing_feedback, invalid_feedback;
 
-QueueHandle_t xQueueCreate(unsigned length, unsigned size)
-{ assert(length == 1U && size == sizeof(queued_target_t)); return &queue_item; }
-BaseType_t xQueueOverwrite(QueueHandle_t queue, const void *item)
-{ assert(queue == &queue_item); queue_item = *(const queued_target_t *)item; queued = true; ++enqueue_calls; return pdPASS; }
-BaseType_t xQueueReceive(QueueHandle_t queue, void *item, TickType_t timeout)
-{ assert(queue == &queue_item && timeout == 0U); if (!queued) return 0; *(queued_target_t *)item = queue_item; queued = false; return pdPASS; }
-BaseType_t xQueueReset(QueueHandle_t queue)
-{ assert(queue == &queue_item); queued = false; return pdPASS; }
 TickType_t xTaskGetTickCount(void) { return tick; }
 void vTaskDelay(TickType_t ticks)
 { tick += ticks; ++delay_calls; longjmp(finished, 1); }
@@ -120,11 +112,11 @@ static void reset(void)
     requested_fault_reason = HOST_FAULT_NONE; requested_target_timeout = false;
     requested_unsafe_reason = HOST_UNSAFE_NONE; safe_stop_completed = false;
     pending_safety_action = HOST_SAFETY_ACTION_NONE;
-    tick = tx_elapsed = 0U; queued = flood = garbage = fault_on_read = expire_during_motion = false;
-    enqueue_calls = torque_on_calls = torque_off_calls = center_writes = 0U;
+    tick = tx_elapsed = 0U; flood = garbage = fault_on_read = expire_during_motion = false;
+    torque_on_calls = torque_off_calls = center_writes = 0U;
     rx_reads = tx_calls = delay_calls = 0U;
     rx_index = 0U; stalled_id = 0U; changing_feedback = invalid_feedback = false;
-    target_queue = NULL; assert(actuator_task_init());
+    motor_control_init();
     uint8_t raw[YERTLE_PROTOCOL_MAX_RAW];
     const size_t size = make_request(raw, MESSAGE_GET_FSM_STATE, 0U);
     rx_wire[0] = 0U; rx_length = cobs_encode(raw, size, rx_wire + 1U) + 2U;
@@ -133,23 +125,24 @@ static void reset(void)
 int main(void)
 {
     uint8_t raw[YERTLE_PROTOCOL_MAX_RAW];
+    motor_position_target_t saved_target;
     reset(); tick = 1500U;
     size_t size = make_request(raw, MESSAGE_SET_JOINT_TARGETS, YERTLE_MOTOR_COUNT * 5U);
     handle_frame(&context, raw, size);
-    assert(enqueue_calls == 0U && !context.host_connected && context.state == HOST_FSM_DISARMED);
+    assert(!motor_control_read_targets(&saved_target) && !context.host_connected && context.state == HOST_FSM_DISARMED);
 
     reset(); host_protocol_request_target_timeout();
     motor_target_set_t targets = { 0 }; targets.motor[0].position = 2200U;
-    assert(!actuator_submit_targets(&targets));
+    assert(!motor_control_submit_targets(&targets));
     handle_frame(&context, raw, size);
-    assert(enqueue_calls == 0U && context.state == HOST_FSM_DISARMED && host_protocol_is_stop_requested());
+    assert(!motor_control_read_targets(&saved_target) && context.state == HOST_FSM_DISARMED && host_protocol_is_stop_requested());
     reset(); host_protocol_latch_fault(HOST_FAULT_SERVO);
-    assert(!actuator_submit_targets(&targets));
+    assert(!motor_control_submit_targets(&targets));
     handle_frame(&context, raw, size);
-    assert(enqueue_calls == 0U && context.state == HOST_FSM_FAULT);
+    assert(!motor_control_read_targets(&saved_target) && context.state == HOST_FSM_FAULT);
 
     /* Actual actuator keeps torque on through center return on heartbeat expiry. */
-    reset(); assert(actuator_submit_targets(&targets));
+    reset(); assert(motor_control_submit_targets(&targets));
     expire_during_motion = true; stop_at = 200U;
     if (setjmp(finished) == 0) actuator_task(NULL);
     assert(torque_on_calls == 1U && center_writes > 0U && torque_off_calls == 1U);

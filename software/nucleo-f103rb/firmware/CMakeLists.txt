@@ -18,7 +18,8 @@ add_executable(yertle_f103rb
     src/pmw3901_device.c
     src/imu_device.c
     src/actuator_task.c
-    src/pwm_control.c
+    src/motor_control.c
+    src/motor_control_state.c
     src/position_pid.c
     src/calibration_store.c
     src/mode_store.c

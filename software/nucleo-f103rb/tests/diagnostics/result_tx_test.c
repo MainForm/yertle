@@ -37,7 +37,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
 { (void)motor; (void)imu; return false; }
 bool motor_device_validate_targets(const motor_target_set_t *targets)
 { (void)targets; return true; }
-bool actuator_submit_targets(const motor_target_set_t *targets)
+bool motor_control_submit_targets(const motor_target_set_t *targets)
 { (void)targets; ++submitted; accepted_tick = tick; return true; }
 void uart_diagnostics_send(void *context, uart_diag_sender_t send)
 { (void)context; (void)send; }

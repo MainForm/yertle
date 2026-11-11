@@ -10,7 +10,7 @@
 #include "task.h"
 
 #include "host_uart.h"
-#include "actuator_task.h"
+#include "motor_control.h"
 #include "sensor_task.h"
 #include "motor_uart.h"
 #include "uart_diagnostics.h"
@@ -842,7 +842,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
             break;
         }
-        if (!pwm_control_accepts_positions() || !context->host_connected || context->state != HOST_FSM_ARMED ||
+        if (!motor_control_accepts_targets() || !context->host_connected || context->state != HOST_FSM_ARMED ||
             host_protocol_is_stop_requested()) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_STATE);
             break;
@@ -857,7 +857,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         }
         if (!motor_device_validate_targets(&targets)) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_TARGET);
-        } else if (!actuator_submit_targets(&targets)) {
+        } else if (!motor_control_submit_targets(&targets)) {
             send_result(context, MESSAGE_NACK, type, sequence, ERROR_TARGET_BUSY);
         } else {
             send_result(context, MESSAGE_ACK, type, sequence, 0U);

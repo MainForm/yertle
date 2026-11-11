@@ -4,11 +4,10 @@
 #include "motor_device.h"
 #include "pwm_mode_diagnostics.h"
 /* Host functions only copy bounded state under a critical section; no motor I/O.
- * service() is exclusively called by actuator_task and owns all PWM writes. */
+ * service() runs from motor_control_service() and owns all PWM writes. */
 void pwm_control_init(void);
 bool pwm_control_service(void);
 bool pwm_control_native_ready(void);
-bool pwm_control_accepts_positions(void);
 bool pwm_control_can_arm(void);
 void pwm_control_on_armed(void);
 void pwm_control_connection_reset(void);
@@ -21,7 +20,6 @@ bool pwm_control_begin_mode_write(const motor_register_write_request_t *request)
 void pwm_control_end_mode_write(const motor_register_write_report_t *report);
 uint32_t pwm_control_staged_epoch(void);
 bool pwm_control_preparation_pending(void);
-bool pwm_control_submit_positions(const motor_target_set_t *goal);
 /* Signed host duties, ID1..12. ACK is deferred until actuator TX completes.
  * Only all-zero diagnostics may run DISARMED; their ACK does not prove
  * torque OFF (PWM0 can activate servo torque without a global ARM). */

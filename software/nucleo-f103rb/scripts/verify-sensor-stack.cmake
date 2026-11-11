@@ -80,9 +80,9 @@ if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
  message(FATAL_ERROR "Cannot determine minimal stack words")
 endif()
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
-check_path(actuator_calibrated_position actuator_task pwm_control_service service_pid
+check_path(actuator_calibrated_position actuator_task motor_control_service pwm_control_service service_pid
     calibration_cache_position calibration_cache_get)
-check_path(actuator_pid_publish actuator_task pwm_control_service service_pid publish_pid_trace trace_float)
+check_path(actuator_pid_publish actuator_task motor_control_service pwm_control_service service_pid publish_pid_trace trace_float)
 if(NOT main_source MATCHES "xTaskCreate\\(host_protocol_task,[^)]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
  message(FATAL_ERROR "Cannot determine host stack multiplier")
 endif()
@@ -96,9 +96,9 @@ check_path(host_pid_telemetry host_protocol_task service_pid_detail send_frame s
     host_uart_write_bytes wait_tx_flag)
 
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
-check_path(actuator_return_pid actuator_task pwm_control_service service_stop position_pid_step)
-check_path(actuator_return_calibration actuator_task pwm_control_service service_stop calibration_cache_position calibration_cache_get)
-check_path(actuator_return_telemetry actuator_task pwm_control_service service_stop publish_stop)
+check_path(actuator_return_pid actuator_task motor_control_service pwm_control_service service_stop position_pid_step)
+check_path(actuator_return_calibration actuator_task motor_control_service pwm_control_service service_stop calibration_cache_position calibration_cache_get)
+check_path(actuator_return_telemetry actuator_task motor_control_service pwm_control_service service_stop publish_stop)
 
 # Optical acquisition uses small fixed bursts, never a full protocol context.
 set(stack_bytes ${sensor_stack_bytes})

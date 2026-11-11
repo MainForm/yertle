@@ -4,6 +4,7 @@
 #include "host_uart.h"
 #include "host_protocol.h"
 #include "actuator_task.h"
+#include "motor_control.h"
 #include "board_clock.h"
 #include "motor_device.h"
 #include "sensor_task.h"
@@ -28,7 +29,7 @@ int main(void)
     board_clock_init();
     host_uart_init();
     configASSERT(motor_device_init());
-    configASSERT(actuator_task_init());
+    motor_control_init();
     configASSERT(sensor_task_init());
 
     created = xTaskCreate(host_protocol_task,

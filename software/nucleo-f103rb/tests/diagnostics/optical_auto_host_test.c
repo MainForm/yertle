@@ -3,7 +3,8 @@
 #undef main
 static unsigned halves=2,attempts;
 bool pmw3901_spi_auto_payload(uint8_t p[64]){
- if(!halves)return false;memset(p,0,64);p[0]=2;p[1]=(uint8_t)(6-halves);return true;
+ if(!halves)return false;
+ memset(p,0,64);p[0]=2;p[1]=(uint8_t)(6-halves);return true;
 }
 void pmw3901_spi_auto_result(bool sent){++attempts;if(sent)--halves;}
 int main(void){

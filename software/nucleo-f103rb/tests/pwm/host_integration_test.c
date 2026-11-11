@@ -9,18 +9,14 @@ void calibration_memory_reset(void);
 static void seed_calibration(void){calibration_memory_reset();calibration_cache_init();
  const uint8_t zero[2]={0};for(unsigned id=1;id<=12;++id)assert(calibration_cache_observe((uint8_t)id,31,zero,2));}
 #include "../../firmware/src/host_protocol.c"
-static TickType_t tick=100;static unsigned critical,queues,on_count,native_writes;static int queue;
-static int16_t duty[12];static uint16_t torque_mask;static uint8_t last_result,last_error;
+static TickType_t tick=100;static unsigned critical,on_count,native_writes;
+static int16_t duty[12];static motor_target_set_t native_target;static uint16_t torque_mask;static uint8_t last_result,last_error;
 static unsigned detail_frames,stats_frames;static bool boot_off_ok=true;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
 static motor_register_write_result_t pending_write;static bool write_ready;
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
 TickType_t xTaskGetTickCount(void){return tick;}void vTaskDelay(TickType_t t){tick+=t;}
 void vTaskDelayUntil(TickType_t *p,TickType_t t){tick=*p+t;*p=tick;}
-void *xQueueCreate(unsigned n,unsigned size){assert(n==1&&size);return &queue;}
-BaseType_t xQueueOverwrite(void *q,const void *p){assert(q&&p);++queues;return pdPASS;}
-BaseType_t xQueueReceive(void *q,void *p,TickType_t timeout){(void)q;(void)p;(void)timeout;return 0;}
-BaseType_t xQueueReset(void *q){assert(q);return pdPASS;}
 bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROTOCOL_MAX_RAW],type=0;uint16_t seq=0;size_t length=0;
  assert(cobs_decode(data+1,n-2,raw,&length)&&validate_frame(raw,length,&type,&seq));
  ++tx_order;
@@ -46,11 +42,14 @@ bool sensor_request_motor_register_write(uint16_t seq,const motor_register_write
 uint16_t motor_device_register_lock_uncertain_mask(void){return 0;}
 void uart_diagnostics_send(void *c,uart_diag_sender_t send){(void)c;(void)send;}
 void uart_diagnostics_send_motor_buses(void *c, uart_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
+void pmw3901_spi_send_diagnostics(void *c,pmw_spi_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
+bool pmw3901_spi_auto_payload(uint8_t p[64]){(void)p;return false;}
+void pmw3901_spi_auto_result(bool sent){(void)sent;}
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);memset(f,0,sizeof *f);memset(imu,0,sizeof *imu);
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
-motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){(void)g;++native_writes;return MOTOR_DEVICE_OK;}
-motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);if(!boot_off_ok)return MOTOR_DEVICE_UART_ERROR;torque_mask=0;return MOTOR_DEVICE_OK;}
+motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){assert(!critical);native_target=*g;++native_writes;return MOTOR_DEVICE_OK;}
+motor_device_status_t motor_device_set_torque(bool on){assert(!critical);if(on){torque_mask=YPWM_ALL_MASK;return MOTOR_DEVICE_OK;}if(!boot_off_ok)return MOTOR_DEVICE_UART_ERROR;torque_mask=0;return MOTOR_DEVICE_OK;}
 motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask|=mask;}else torque_mask&=(uint16_t)~mask;return MOTOR_DEVICE_OK;}
 bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=torque_mask;return !torque_mask;}
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){
@@ -90,7 +89,7 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
 int main(void){
  seed_calibration();mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
- assert(actuator_task_init());assert(pwm_control_service());assert(pwm_control_native_ready());
+ motor_control_init();assert(pwm_control_service());assert(pwm_control_native_ready());
  /* Slow DISARMED configuration may outlive5s, but never ARM. A silent
     configuration still disconnects/rolls back at its own bounded20s window. */
  uint8_t slow[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(slow+3,YPWM_ALL_MASK);ypwm_put32(slow+5,118);
@@ -118,11 +117,11 @@ int main(void){
  tick+=1;receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,NULL,0);assert(c.last_host_heartbeat_tick==heartbeat_tick);
  assert(diag_order&&diag_order<result_order&&last_diag[3]==YPWM_DIAG_COMPLETE);
  uint8_t targets[60]={0};for(unsigned i=0;i<12;++i){ypwm_put16(targets+5*i,2200);ypwm_put16(targets+5*i+2,200);}
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==0);
- assert(pwm_control_service());assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&on_count==0&&native_writes==0);
+ motor_control_service();assert(on_count==1&&torque_mask==YPWM_ALL_MASK&&native_writes==0);
  for(unsigned i=0;i<12;++i){const int8_t expected[12]={-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1};
   assert(duty[i]*expected[i]>0&&duty[i]>=-YPWM_DUTY_LIMIT&&duty[i]<=YPWM_DUTY_LIMIT);}
- /* Removed 0x0F must be rejected; ordinary target/heartbeat watchdog stops PID. */
+ /* Malformed 0x0F is rejected; ordinary target/heartbeat watchdog stops PID. */
  receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);
  tick+=501;assert(pwm_control_service());service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
  for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
@@ -142,7 +141,7 @@ int main(void){
  try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED); /* no stale lease */
  receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED);
  assert(on_count==recover_on); /* no torque until an explicit new target */
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(pwm_control_service());
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);motor_control_service();
  assert(on_count==recover_on+1);
  tick+=501;assert(pwm_control_service());service_safety_state(&c);
  /* HELLO during STOPPING is remembered, but cannot ARM or skip OFF. */
@@ -156,7 +155,19 @@ int main(void){
  assert(!pwm_control_can_arm()&&!torque_mask&&on_count==recover_on+1);
  servo_modes[3]=2;
  transition(&c,YPWM_POSITION,124);assert(pwm_control_native_ready());
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&queues==1);
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);
+ assert(last_result==MESSAGE_ACK&&native_writes==0);
+ uint8_t newer[sizeof targets];memcpy(newer,targets,sizeof newer);
+ ypwm_put16(newer,2100);ypwm_put16(newer+2,600);newer[4]=25;
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,newer,sizeof newer);
+ assert(last_result==MESSAGE_ACK&&native_writes==0);
+ motor_control_service();
+ assert(native_writes==1&&native_target.motor[0].position==2100&&
+        native_target.motor[0].speed==600&&native_target.motor[0].acceleration==25);
+ published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;
+ motor_control_service();assert(!torque_mask);
+ receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED);
+ motor_control_service();assert(native_writes==1&&!torque_mask); /* no stale goal after re-arm */
  published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;mode_fail_id=2;
  uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,125);
  receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(pwm_control_service());service_pwm(&c);
@@ -196,8 +207,8 @@ int main(void){
  assert(pwm_control_service());receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);
  assert(c.state==HOST_FSM_DISARMED&&on_count==before_on&&mode_memory_programs==before_program);
  receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED&&on_count==before_on);
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
- assert(on_count==before_on+1&&native_writes==0&&mode_memory_programs==before_program);
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK);motor_control_service();
+ assert(on_count==before_on+1&&native_writes==1&&mode_memory_programs==before_program);
  /* Flash read failure at first boot has its own NACK, with no adopted epoch. */
  memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
  pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
@@ -222,7 +233,7 @@ int main(void){
  receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
  assert(pwm_control_service());service_pwm(&c);
  assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-777&&duty[1]==713);
- receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK&&pwm_control_service());
+ receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK);motor_control_service();
  assert(duty[0]!=-777); /* existing position->PID route resumes */
  /* Host pressure delays diagnostics; never pop a partial set before ACKs. */
  unsigned before_detail=detail_frames;c.result_count=1;service_pid_detail(&c);assert(detail_frames==before_detail);c.result_count=0;
