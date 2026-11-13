@@ -216,9 +216,10 @@ u8 (=0), then signed i16 LE accel X/Y/Z, temperature, gyro X/Y/Z in that
 order. Sequence and uptime match the three motor frames. Raw scale is MPU-6050
 at +/-2 g (16384 LSB/g) and +/-250 deg/s (131 LSB/(deg/s)); temperature in
 degrees C is raw/340 + 36.53. When the IMU is absent or a read fails, valid=0
-and all raw fields are zero; motor feedback remains available. The IMU uses
-PB6=SCL and PB7=SDA with external pull-ups to 3.3 V; AD0 must be low for
-I2C address 0x68. It is probed again once per second after a failure.
+and all raw fields are zero; motor feedback remains available. The IMU uses hardware
+I2C1 at 80 kHz on PB6=SCL and PB7=SDA with external 3.3 V pull-ups. AD0 is low
+for address 0x68. The sensor task retries initialization about one second
+after a failure.
 
 ## EEPROM position-offset query
 

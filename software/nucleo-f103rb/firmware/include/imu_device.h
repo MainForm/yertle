@@ -15,7 +15,7 @@ typedef struct {
     int16_t gyro_z;
 } imu_raw_sample_t;
 
-/* I2C on PB6=SCL, PB7=SDA. Both lines need 3.3 V pull-ups. */
+/* Hardware I2C1 on PB6=SCL, PB7=SDA with 3.3 V pull-ups. */
 bool imu_device_init(void);
 bool imu_device_read(imu_raw_sample_t *sample);
 

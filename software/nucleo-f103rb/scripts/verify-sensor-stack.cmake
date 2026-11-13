@@ -100,8 +100,12 @@ check_path(actuator_return_pid actuator_task motor_control_service pwm_control_s
 check_path(actuator_return_calibration actuator_task motor_control_service pwm_control_service service_stop calibration_cache_position calibration_cache_get)
 check_path(actuator_return_telemetry actuator_task motor_control_service pwm_control_service service_stop publish_stop)
 
-# Optical acquisition uses small fixed bursts, never a full protocol context.
 set(stack_bytes ${sensor_stack_bytes})
+check_path(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines wait_pin us_to_cycles)
+check_path(imu_probe sensor_task imu_device_init imu_i2c_read select_register address_device wait_event wait_status us_to_cycles)
+check_path(imu_sample sensor_task imu_device_read imu_i2c_read receive_multiple wait_event wait_status us_to_cycles)
+
+# Optical acquisition uses small fixed bursts, never a full protocol context.
 check_path(optical_burst sensor_task pmw3901_device_service pmw3901_spi_read exchange wait_flag)
 
 set(stack_bytes ${host_stack_bytes})
