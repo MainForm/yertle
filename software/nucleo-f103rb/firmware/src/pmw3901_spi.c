@@ -7,8 +7,8 @@
 
 /* NUCLEO-F103RB: PA5/6/7 SPI1, PA4 CS, PA0 active-low reset.
  * PB6 is IMU SCL; SPI DMA1 channels 2/3 belong to USART3.
- * Each flag wait has its own deadline. The sensor task supplies a separate
- * conservative call budget, checked cooperatively even when flags are ready.
+ * Each flag wait has its own deadline. The PMW3901 driver supplies a separate
+ * transfer budget, checked cooperatively even when flags are ready.
  * Diagnostic snapshots never read DR or mask interrupts. */
 typedef struct {
     uint32_t begin,wait_begin,max_poll_gap,operation,address,length,byte_index;

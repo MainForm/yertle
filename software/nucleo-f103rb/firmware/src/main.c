@@ -53,10 +53,18 @@ int main(void)
 
     created = xTaskCreate(sensor_task,
                           "sensors",
-                          /* Sensor acquisition, UART/SPI diagnostics and RTOS headroom. */
+                          /* Motor and IMU acquisition, UART diagnostics and RTOS headroom. */
                           configMINIMAL_STACK_SIZE * 3U,
                           NULL,
                           tskIDLE_PRIORITY + 2U,
+                          NULL);
+    configASSERT(created == pdPASS);
+
+    created = xTaskCreate(optical_flow_task,
+                          "optical-flow",
+                          configMINIMAL_STACK_SIZE * 2U,
+                          NULL,
+                          tskIDLE_PRIORITY + 1U,
                           NULL);
     configASSERT(created == pdPASS);
 

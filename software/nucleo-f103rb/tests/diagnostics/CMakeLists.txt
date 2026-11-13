@@ -127,8 +127,9 @@ foreach(target firmware_dma_test firmware_register_write_driver_test firmware_pw
 endforeach()
 
 add_executable(pmw3901_device_test ../pmw3901_device_tests.c ../../firmware/src/pmw3901_device.c)
-target_include_directories(pmw3901_device_test PRIVATE ../../firmware/include)
-add_test(NAME pmw3901_device_state_machine COMMAND pmw3901_device_test)
+target_include_directories(pmw3901_device_test PRIVATE . ../../firmware/include)
+target_compile_definitions(pmw3901_device_test PRIVATE PMW_DEVICE_TEST=1)
+add_test(NAME pmw3901_device_init_and_sampling COMMAND pmw3901_device_test)
 add_executable(pmw3901_wire_test ../pmw3901_wire_tests.c)
 target_include_directories(pmw3901_wire_test PRIVATE ../../firmware/include)
 add_test(NAME pmw3901_wire_layout COMMAND pmw3901_wire_test)

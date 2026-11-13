@@ -8,7 +8,7 @@ enum {PMW_SPI_WAIT_TXE=1,PMW_SPI_WAIT_RXNE,PMW_SPI_WAIT_BSY,
       PMW_SPI_BAD_ARGUMENT,PMW_SPI_CALL_BUDGET,PMW_SPI_SENSOR_ID};
 typedef struct {uint32_t meta[14],hardware[14];} pmw_spi_failure_t;
 typedef void (*pmw_spi_diag_sender_t)(void*,uint8_t,const uint8_t*,uint16_t);
-/* Sensor task supplies its cooperative call budget; no asynchronous kill. */
+/* The caller supplies a cooperative budget for the SPI operation. */
 void pmw3901_spi_call_begin(uint32_t timeout_us);
 bool pmw3901_spi_call_end(void);
 void pmw3901_spi_context(uint8_t device_state,uint16_t config_index);

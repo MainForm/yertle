@@ -12,7 +12,7 @@
 #define configMAX_PRIORITIES                     8
 #define configMINIMAL_STACK_SIZE                 128
 /* F103RB has 20 KB SRAM; leave headroom for the MSP/interrupt stack. */
-#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 8 * 1024 ) )
+#define configTOTAL_HEAP_SIZE                    ( ( size_t ) ( 8 * 1024 + 512 ) )
 #define configMAX_TASK_NAME_LEN                  16
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_PREEMPTION                     1

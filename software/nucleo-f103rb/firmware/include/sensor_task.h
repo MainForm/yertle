@@ -18,5 +18,6 @@ bool sensor_task_init(void);
 bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow);
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu);
 void sensor_task(void *argument);
+void optical_flow_task(void *argument);
 
 #endif /* SENSOR_TASK_H */
