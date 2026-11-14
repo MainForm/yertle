@@ -45,7 +45,9 @@ void sensor_task(void *argument)
     (void) argument;
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t next_imu_probe = last_wake;
+    TickType_t next_flow_probe = last_wake;
     bool imu_ready = false;
+    pmw3901_device_t flow = { 0 };
 
     for (;;) {
         motor_feedback_set_t sample = { 0 };
@@ -75,34 +77,27 @@ void sensor_task(void *argument)
             latest_imu_feedback = imu;
             (void) xSemaphoreGive(feedback_mutex);
         }
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_PERIOD_MS));
-    }
-}
 
-static void publish_optical_feedback(const pmw3901_feedback_t *feedback)
-{
-    if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
-        latest_flow_feedback = *feedback;
-        (void)xSemaphoreGive(feedback_mutex);
-    }
-}
-
-void optical_flow_task(void *argument)
-{
-    (void)argument;
-    pmw3901_device_t device = {0};
-
-    for (;;) {
-        bool ready = pmw3901_device_init(&device);
-        publish_optical_feedback(&device.feedback);
-
-        TickType_t last_wake = xTaskGetTickCount();
-        while (ready) {
-            vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_PERIOD_MS));
-            ready = pmw3901_device_service(&device);
-            publish_optical_feedback(&device.feedback);
+        /* Publish motor and IMU feedback before any blocking optical work. */
+        const TickType_t flow_now = xTaskGetTickCount();
+        if (flow.feedback.ready || (int32_t)(flow_now - next_flow_probe) >= 0) {
+            const bool ready = flow.feedback.ready ? pmw3901_device_service(&flow)
+                                                   : pmw3901_device_init(&flow);
+            if (!ready) {
+                next_flow_probe = xTaskGetTickCount() + pdMS_TO_TICKS(OPTICAL_RETRY_MS);
+            }
+            if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
+                latest_flow_feedback = flow.feedback;
+                (void) xSemaphoreGive(feedback_mutex);
+            }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(OPTICAL_RETRY_MS));
+        /* Keep the periodic schedule but skip missed periods after long I/O. */
+        const TickType_t period = pdMS_TO_TICKS(SENSOR_PERIOD_MS);
+        const TickType_t elapsed = xTaskGetTickCount() - last_wake;
+        if (elapsed > period) {
+            last_wake += (elapsed / period) * period;
+        }
+        vTaskDelayUntil(&last_wake, period);
     }
 }

@@ -105,20 +105,11 @@ check_path(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines w
 check_path(imu_probe sensor_task imu_device_init imu_i2c_read select_register address_device wait_event wait_status us_to_cycles)
 check_path(imu_sample sensor_task imu_device_read imu_i2c_read receive_multiple wait_event wait_status us_to_cycles)
 
-if(NOT main_source MATCHES "xTaskCreate\\(optical_flow_task,[^;]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
-    message(FATAL_ERROR "Cannot determine optical-flow stack multiplier")
-endif()
-set(optical_multiplier "${CMAKE_MATCH_1}")
-if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
-    message(FATAL_ERROR "Cannot determine minimal stack words")
-endif()
-math(EXPR optical_stack_bytes "${optical_multiplier} * ${CMAKE_MATCH_1} * 4")
-set(stack_bytes ${optical_stack_bytes})
-check_path(optical_init_read optical_flow_task pmw3901_device_init check_id read_spi
+check_path(optical_init_read sensor_task pmw3901_device_init check_id read_spi
     pmw3901_spi_read exchange wait_flag capture_failure)
-check_path(optical_init_write optical_flow_task pmw3901_device_init write_spi
+check_path(optical_init_write sensor_task pmw3901_device_init write_spi
     pmw3901_spi_write exchange wait_flag capture_failure)
-check_path(optical_burst optical_flow_task pmw3901_device_service read_spi
+check_path(optical_burst sensor_task pmw3901_device_service read_spi
     pmw3901_spi_read exchange wait_flag)
 
 set(stack_bytes ${host_stack_bytes})
@@ -132,8 +123,8 @@ check_path(host_uart_failure_reply host_protocol_task process_host_rx handle_fra
     uart_diagnostics_send_motor_buses send_diagnostic_frame send_frame send_frame_sequence
     host_uart_write_bytes wait_tx_flag)
 
-set(stack_bytes ${optical_stack_bytes})
-check_path(optical_failure_capture optical_flow_task pmw3901_device_service check_id read_spi
+set(stack_bytes ${sensor_stack_bytes})
+check_path(optical_failure_capture sensor_task pmw3901_device_service check_id read_spi
     pmw3901_spi_read exchange wait_flag capture_failure)
 set(stack_bytes ${host_stack_bytes})
 check_path(host_spi_failure_reply host_protocol_task process_host_rx handle_frame
@@ -141,6 +132,6 @@ check_path(host_spi_failure_reply host_protocol_task process_host_rx handle_fram
 
 set(stack_bytes ${host_stack_bytes})
 check_path(host_automatic_spi host_protocol_task service_optical_failure send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
-set(stack_bytes ${optical_stack_bytes})
-check_path(optical_budget_end optical_flow_task pmw3901_device_init check_id read_spi
+set(stack_bytes ${sensor_stack_bytes})
+check_path(optical_budget_end sensor_task pmw3901_device_init check_id read_spi
     pmw3901_spi_call_end capture_failure)
