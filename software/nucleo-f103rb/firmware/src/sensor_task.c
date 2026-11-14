@@ -13,11 +13,12 @@ static imu_feedback_t latest_imu_feedback;
 static pmw3901_feedback_t latest_flow_feedback;
 static uint32_t feedback_sequence;
 
-bool sensor_task_init(void)
+bool sensor_task_init(const pmw3901_feedback_t *flow_feedback)
 {
     if (feedback_mutex == NULL) {
         feedback_mutex = xSemaphoreCreateMutex();
     }
+    latest_flow_feedback = *flow_feedback;
     return feedback_mutex != NULL;
 }
 
@@ -42,12 +43,11 @@ bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feed
 
 void sensor_task(void *argument)
 {
-    (void) argument;
+    pmw3901_device_t *flow = argument;
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t next_imu_probe = last_wake;
-    TickType_t next_flow_probe = last_wake;
+    TickType_t next_flow_probe = last_wake + pdMS_TO_TICKS(OPTICAL_RETRY_MS);
     bool imu_ready = false;
-    pmw3901_device_t flow = { 0 };
 
     for (;;) {
         motor_feedback_set_t sample = { 0 };
@@ -80,14 +80,14 @@ void sensor_task(void *argument)
 
         /* Publish motor and IMU feedback before any blocking optical work. */
         const TickType_t flow_now = xTaskGetTickCount();
-        if (flow.feedback.ready || (int32_t)(flow_now - next_flow_probe) >= 0) {
-            const bool ready = flow.feedback.ready ? pmw3901_device_service(&flow)
-                                                   : pmw3901_device_init(&flow);
+        if (flow->feedback.ready || (int32_t)(flow_now - next_flow_probe) >= 0) {
+            const bool ready = flow->feedback.ready ? pmw3901_device_service(flow)
+                                                   : pmw3901_device_init(flow);
             if (!ready) {
                 next_flow_probe = xTaskGetTickCount() + pdMS_TO_TICKS(OPTICAL_RETRY_MS);
             }
             if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
-                latest_flow_feedback = flow.feedback;
+                latest_flow_feedback = flow->feedback;
                 (void) xSemaphoreGive(feedback_mutex);
             }
         }

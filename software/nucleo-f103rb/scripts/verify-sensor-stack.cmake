@@ -135,3 +135,15 @@ check_path(host_automatic_spi host_protocol_task service_optical_failure send_fr
 set(stack_bytes ${sensor_stack_bytes})
 check_path(optical_budget_end sensor_task pmw3901_device_init check_id read_spi
     pmw3901_spi_call_end capture_failure)
+
+file(READ "${SOURCE_DIR}/firmware/linker/stm32f103rb_settings.ld" linker_source)
+if(NOT linker_source MATCHES "_Min_Stack_Size = (0x[0-9a-fA-F]+);")
+    message(FATAL_ERROR "Cannot determine startup stack reservation")
+endif()
+math(EXPR stack_bytes "${CMAKE_MATCH_1}")
+check_path(optical_startup_read main pmw3901_device_init check_id read_spi
+    pmw3901_spi_read exchange wait_flag capture_failure)
+check_path(optical_startup_write main pmw3901_device_init write_spi
+    pmw3901_spi_write exchange wait_flag capture_failure)
+check_path(optical_startup_budget main pmw3901_device_init check_id read_spi
+    pmw3901_spi_call_end capture_failure)

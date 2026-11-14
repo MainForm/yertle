@@ -15,10 +15,14 @@ static uint32_t uptime_ms(void)
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-static void wait_ms(uint32_t duration_ms)
+static void wait_ms(uint32_t duration_ms, bool at_startup)
 {
-    /* Tick phase may shorten vTaskDelay by almost one tick. */
-    vTaskDelay(pdMS_TO_TICKS(duration_ms) + 1U);
+    if (at_startup) {
+        pmw3901_spi_delay_us(duration_ms * 1000U);
+    } else {
+        /* Tick phase may shorten vTaskDelay by almost one tick. */
+        vTaskDelay(pdMS_TO_TICKS(duration_ms) + 1U);
+    }
 }
 
 static bool fail(pmw3901_device_t *device, uint8_t error)
@@ -62,6 +66,7 @@ static uint8_t check_id(uint8_t state, uint8_t address, uint8_t expected)
 
 bool pmw3901_device_init(pmw3901_device_t *device)
 {
+    const bool at_startup = xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED;
     pmw3901_feedback_t *feedback = &device->feedback;
     feedback->ready = feedback->valid = feedback->interval_valid = false;
     feedback->interval_ms = 0U;
@@ -69,30 +74,30 @@ bool pmw3901_device_init(pmw3901_device_t *device)
 
     pmw3901_spi_init();
     pmw3901_spi_reset(true);
-    wait_ms(2U);
+    wait_ms(2U, at_startup);
     pmw3901_spi_reset(false);
     pmw3901_spi_select(false);
-    wait_ms(40U);
+    wait_ms(40U, at_startup);
     pmw3901_spi_select(true);
-    wait_ms(2U);
+    wait_ms(2U, at_startup);
     pmw3901_spi_select(false);
-    wait_ms(2U);
+    wait_ms(2U, at_startup);
 
     uint8_t error = check_id(PMW_ID, 0x00U, 0x49U);
     if (error == PMW_ERROR_NONE) error = check_id(PMW_ID, 0x5fU, 0xb6U);
     if (error != PMW_ERROR_NONE) return fail(device, error);
 
     if (!write_spi(PMW_RESET, 0U, 0x3aU, 0x5aU)) return fail(device, PMW_ERROR_SPI);
-    wait_ms(5U);
+    wait_ms(5U, at_startup);
     for (uint8_t address = 0x02U; address <= 0x06U; ++address) {
         uint8_t ignored;
         if (!read_spi(PMW_CLEAR, address, &ignored, 1U, false)) return fail(device, PMW_ERROR_SPI);
     }
-    wait_ms(1U);
+    wait_ms(1U, at_startup);
     for (uint16_t index = 0U; index < sizeof pmw3901_init_sequence / sizeof pmw3901_init_sequence[0]; ++index) {
         const uint8_t *entry = pmw3901_init_sequence[index];
         if (entry[0] == 0xffU) {
-            wait_ms(entry[1]);
+            wait_ms(entry[1], at_startup);
         } else if (!write_spi(PMW_CONFIG, index, entry[0], entry[1])) {
             return fail(device, PMW_ERROR_SPI);
         }
@@ -109,6 +114,7 @@ bool pmw3901_device_init(pmw3901_device_t *device)
     feedback->state = PMW_READY;
     feedback->ready = true;
     device->last_health_ms = now;
+    device->needs_runtime_baseline = at_startup;
     return true;
 }
 
@@ -128,7 +134,9 @@ bool pmw3901_device_service(pmw3901_device_t *device)
         return fail(device, PMW_ERROR_SPI);
 
     ++feedback->sequence;
-    feedback->interval_ms = now - feedback->uptime_ms;
+    /* The startup burst predates the RTOS tick used for displacement timing. */
+    feedback->interval_ms = device->needs_runtime_baseline ? 0U : now - feedback->uptime_ms;
+    device->needs_runtime_baseline = false;
     feedback->uptime_ms = now;
     feedback->interval_valid = feedback->interval_ms > 0U && feedback->interval_ms <= PMW_MAX_INTERVAL_MS;
     feedback->valid = feedback->interval_valid;

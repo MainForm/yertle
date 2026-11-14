@@ -17,8 +17,9 @@ typedef struct {
 typedef struct {
     pmw3901_feedback_t feedback;
     uint32_t last_health_ms;
+    bool needs_runtime_baseline;
 } pmw3901_device_t;
-/* Zero-initialize the device before its first use. Task context only. */
+/* Zero-initialize the device before first use. Call before scheduling or from a task. */
 bool pmw3901_device_init(pmw3901_device_t *device);
 /* Reads motion or checks the ID. False requires a new init call. */
 bool pmw3901_device_service(pmw3901_device_t *device);

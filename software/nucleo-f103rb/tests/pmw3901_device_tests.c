@@ -6,12 +6,14 @@
 #include "pmw3901_init_sequence.h"
 #include "pmw3901_spi.h"
 #include "pmw3901_spi_diagnostic.h"
+#include "task.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
-static uint32_t tick;
+static uint32_t tick, boot_ms;
+static bool scheduler_started = true;
 static uint8_t state;
 static uint16_t config_index;
 static unsigned spi_inits, writes, reads, bursts, id_errors, config_writes;
@@ -20,11 +22,28 @@ static bool bad_id, fail_spi, fail_budget;
 static uint32_t reset_at, release_at, cs_low_at, cs_high_at, power_reset_at, last_clear_at;
 static unsigned config_delay_calls;
 
-uint32_t xTaskGetTickCount(void) { return tick; }
+uint32_t xTaskGetTickCount(void) { return scheduler_started ? tick : 0U; }
+
+int xTaskGetSchedulerState(void)
+{
+    return scheduler_started ? taskSCHEDULER_RUNNING : taskSCHEDULER_NOT_STARTED;
+}
+
+static uint32_t timing_ms(void)
+{
+    return scheduler_started ? tick : boot_ms;
+}
+
+void pmw3901_spi_delay_us(uint32_t us)
+{
+    assert(!scheduler_started && !active_transfer && us > 0U && us % 1000U == 0U);
+    if (state == PMW_CONFIG && us == 10000U) ++config_delay_calls;
+    boot_ms += us / 1000U;
+}
 
 void vTaskDelay(uint32_t ticks)
 {
-    assert(!active_transfer && ticks > 0U);
+    assert(scheduler_started && !active_transfer && ticks > 0U);
     if (state == PMW_CONFIG && ticks == 11U) ++config_delay_calls;
     tick += ticks;
 }
@@ -64,10 +83,10 @@ void pmw3901_spi_init(void)
 void pmw3901_spi_reset(bool asserted)
 {
     reset_asserted = asserted;
-    if (asserted) reset_at = tick;
+    if (asserted) reset_at = timing_ms();
     else {
-        assert(tick - reset_at >= 2U);
-        release_at = tick;
+        assert(timing_ms() - reset_at >= 2U);
+        release_at = timing_ms();
     }
 }
 
@@ -75,11 +94,11 @@ void pmw3901_spi_select(bool selected)
 {
     assert(!reset_asserted);
     if (selected) {
-        assert(tick - release_at >= 40U);
-        cs_low_at = tick;
+        assert(timing_ms() - release_at >= 40U);
+        cs_low_at = timing_ms();
     } else if (chip_selected) {
-        assert(tick - cs_low_at >= 2U);
-        cs_high_at = tick;
+        assert(timing_ms() - cs_low_at >= 2U);
+        cs_high_at = timing_ms();
     }
     chip_selected = selected;
 }
@@ -90,10 +109,10 @@ bool pmw3901_spi_write(uint8_t address, uint8_t value)
     ++writes;
     if (state == PMW_RESET) {
         assert(address == 0x3aU && value == 0x5aU);
-        power_reset_at = tick;
+        power_reset_at = timing_ms();
     } else {
         assert(state == PMW_CONFIG);
-        assert(tick - last_clear_at >= 1U);
+        assert(timing_ms() - last_clear_at >= 1U);
         assert(address == pmw3901_init_sequence[config_index][0]);
         assert(value == pmw3901_init_sequence[config_index][1]);
         ++config_writes;
@@ -115,12 +134,12 @@ bool pmw3901_spi_read(uint8_t address, uint8_t *data, size_t size, bool burst)
         assert(size == 1U);
         if (address == 0x00U || address == 0x5fU) {
             assert(state == PMW_ID || state == PMW_READY);
-            if (state == PMW_ID) assert(tick - cs_high_at >= 2U);
+            if (state == PMW_ID) assert(timing_ms() - cs_high_at >= 2U);
             *data = address == 0x5fU ? 0xb6U : bad_id ? 0U : 0x49U;
         } else {
             assert(state == PMW_CLEAR && address >= 0x02U && address <= 0x06U);
-            assert(tick - power_reset_at >= 5U);
-            last_clear_at = tick;
+            assert(timing_ms() - power_reset_at >= 5U);
+            last_clear_at = timing_ms();
         }
     }
     return true;
@@ -169,6 +188,22 @@ int main(void)
     assert(!pmw3901_device_init(&device));
     assert(device.feedback.last_error == PMW_ERROR_SPI && device.feedback.errors == 3U);
     assert(!device.feedback.ready && !active_transfer);
-    puts("PASS: full init before sampling, timing, health check, diagnostics and reinitialization");
+    fail_spi = false;
+    /* Boot runs before the RTOS clock starts. Establish a fresh baseline in service. */
+    pmw3901_device_t startup_device = {0};
+    scheduler_started = false;
+    assert(pmw3901_device_init(&startup_device));
+    assert(boot_ms == 62U && config_delay_calls == 1U);
+    assert(startup_device.feedback.ready && !startup_device.feedback.valid);
+    assert(startup_device.feedback.uptime_ms == 0U && startup_device.feedback.sequence == 1U);
+    scheduler_started = true;
+    tick = 12U;
+    assert(pmw3901_device_service(&startup_device));
+    assert(!startup_device.feedback.valid && !startup_device.feedback.interval_valid);
+    assert(startup_device.feedback.interval_ms == 0U && startup_device.feedback.sequence == 2U);
+    tick += 20U;
+    assert(pmw3901_device_service(&startup_device));
+    assert(startup_device.feedback.valid && startup_device.feedback.interval_ms == 20U);
+    puts("PASS: startup and runtime init, sampling baseline, health check and recovery");
     return 0;
 }

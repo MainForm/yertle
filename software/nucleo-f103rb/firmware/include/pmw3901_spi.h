@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 void pmw3901_spi_init(void);
+/* Hardware-timed wait, available after SPI initialization. */
+void pmw3901_spi_delay_us(uint32_t us);
 void pmw3901_spi_reset(bool asserted);
 void pmw3901_spi_select(bool selected);
 bool pmw3901_spi_read(uint8_t address, uint8_t *data, size_t length, bool burst);

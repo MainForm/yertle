@@ -24,13 +24,15 @@ void _fini(void)
  */
 int main(void)
 {
+    static pmw3901_device_t optical_flow;
     BaseType_t created;
 
     board_clock_init();
+    (void) pmw3901_device_init(&optical_flow);
     host_uart_init();
     configASSERT(motor_device_init());
     motor_control_init();
-    configASSERT(sensor_task_init());
+    configASSERT(sensor_task_init(&optical_flow.feedback));
 
     created = xTaskCreate(host_protocol_task,
                           "host-proto",
@@ -55,7 +57,7 @@ int main(void)
                           "sensors",
                           /* Motor, IMU and optical acquisition, diagnostics and RTOS headroom. */
                           configMINIMAL_STACK_SIZE * 3U,
-                          NULL,
+                          &optical_flow,
                           tskIDLE_PRIORITY + 2U,
                           NULL);
     configASSERT(created == pdPASS);

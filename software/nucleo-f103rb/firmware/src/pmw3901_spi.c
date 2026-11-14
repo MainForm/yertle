@@ -40,7 +40,13 @@ static uint32_t spi_cycles(void){
 }
 static uint32_t cycles_us(uint32_t us){return (SystemCoreClock/1000000U)*us;}
 static uint32_t as_us(uint32_t cycles){const uint32_t unit=SystemCoreClock/1000000U;return unit?cycles/unit:0U;}
-static void delay_us(uint32_t us){uint32_t begin=spi_cycles();while((uint32_t)(spi_cycles()-begin)<cycles_us(us)){} }
+void pmw3901_spi_delay_us(uint32_t us)
+{
+    const uint32_t begin = spi_cycles();
+    const uint32_t cycles = cycles_us(us);
+    while ((uint32_t)(spi_cycles() - begin) < cycles) {
+    }
+}
 void pmw3901_spi_context(uint8_t state,uint16_t index){device_state=state;config_index=index;}
 static void begin_operation(unsigned operation,unsigned address,size_t length){
     memset(&op,0,sizeof op);op.operation=operation;op.address=address;op.length=(uint32_t)length;op.last_tx=op.last_rx=256U;op.begin=spi_cycles();op.wait_begin=op.begin;
@@ -63,7 +69,7 @@ static void capture_failure(unsigned stage,uint32_t timeout_us){
     if(!failure_count){first_failure=f;}
     latest_failure=f;failure_count=id;__DMB();++failure_version;
     if(call_active)call_failed=true;
-    /* Single sensor producer / single host consumer. A slot is immutable
+    /* One producer (startup, then sensor task) and one host consumer. A slot is immutable
      * until the host acknowledges both halves. Keep UART out of this path. */
     const uint32_t write=auto_write;
     if((uint32_t)(write-auto_read)<AUTO_CAPACITY){automatic[write%AUTO_CAPACITY]=f;__DMB();auto_write=write+1U;}
@@ -129,7 +135,7 @@ static bool exchange(uint8_t value,uint8_t *out){
 }
 static bool finish(bool ok){
     if(ok)ok=wait_flag(SPI_SR_BSY,false,PMW_SPI_WAIT_BSY);
-    delay_us(50);pmw3901_spi_select(false);delay_us(200);
+    pmw3901_spi_delay_us(50);pmw3901_spi_select(false);pmw3901_spi_delay_us(200);
     if(!ok){RCC->APB2RSTR|=RCC_APB2RSTR_SPI1RST;RCC->APB2RSTR&=~RCC_APB2RSTR_SPI1RST;pmw3901_spi_init();}
     return ok;
 }
@@ -137,15 +143,15 @@ bool pmw3901_spi_read(uint8_t address,uint8_t *data,size_t n,bool burst){
     begin_operation(burst?3U:1U,address,n);
     if(!data||!n||n>12){capture_failure(PMW_SPI_BAD_ARGUMENT,0U);return false;}
     uint8_t ignored;
-    pmw3901_spi_select(true);delay_us(50);
-    bool ok=exchange(address&0x7fU,&ignored);delay_us(burst?50U:500U);
+    pmw3901_spi_select(true);pmw3901_spi_delay_us(50);
+    bool ok=exchange(address&0x7fU,&ignored);pmw3901_spi_delay_us(burst?50U:500U);
     for(size_t i=0;ok&&i<n;i++){op.byte_index=(uint32_t)i+1U;ok=exchange(0,&data[i]);}
     return finish(ok);
 }
 bool pmw3901_spi_write(uint8_t address,uint8_t value){
     begin_operation(2U,address,1U);uint8_t ignored;
-    pmw3901_spi_select(true);delay_us(50);
-    bool ok=exchange(address|0x80U,&ignored);delay_us(50);
+    pmw3901_spi_select(true);pmw3901_spi_delay_us(50);
+    bool ok=exchange(address|0x80U,&ignored);pmw3901_spi_delay_us(50);
     if(ok){op.byte_index=1U;ok=exchange(value,&ignored);}
     ok=finish(ok);if(ok&&address==0x7fU)register_bank=value;return ok;
 }
