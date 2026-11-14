@@ -36,6 +36,11 @@ bool imu_device_init(void)
     return initialized;
 }
 
+bool imu_device_is_ready(void)
+{
+    return initialized;
+}
+
 bool imu_device_read(imu_raw_sample_t *sample)
 {
     uint8_t bytes[14];

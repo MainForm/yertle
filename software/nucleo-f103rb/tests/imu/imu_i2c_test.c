@@ -112,10 +112,11 @@ static bool initialize(void)
 
 int main(void)
 {
+    assert(!imu_device_is_ready());
     registers[0x75] = 0x68U;
     gpiob.CRL = 0xABCDEFU;
     gpiob.IDR = SCL | SDA;
-    assert(initialize());
+    assert(initialize() && imu_device_is_ready());
     assert(gpio_scl_low_writes == 1U); /* Only the ES096 idle-bus transition. */
     assert(gpiob.CRL == 0xEEABCDEFU && (rcc.APB1ENR & RCC_APB1ENR_I2C1EN));
     assert(i2c.CR2 == 32U && i2c.CCR == 200U && i2c.TRISE == 33U);
@@ -133,7 +134,7 @@ int main(void)
 
     uint32_t begin = cycles;
     suppress_receive = true;
-    assert(!imu_device_read(&sample));
+    assert(!imu_device_read(&sample) && !imu_device_is_ready());
     assert(sample.gyro_z == 7 && i2c.CR1 == 0U && !primask);
     assert(cycles - begin >= 1000U * 64U && cycles - begin < 2000U * 64U);
     suppress_receive = false;
@@ -173,18 +174,18 @@ int main(void)
     unsigned edges_before = gpio_scl_low_writes;
     unsigned starts_before = starts;
     hold_sda = true;
-    assert(!initialize() && i2c.CR1 == 0U);
+    assert(!initialize() && !imu_device_is_ready() && i2c.CR1 == 0U);
     assert(gpio_scl_low_writes - edges_before == 9U && starts == starts_before);
 
     /* Held-low SCL prevents both bus clear and peripheral transfers. */
     edges_before = gpio_scl_low_writes;
     hold_scl = true;
     begin = cycles;
-    assert(!initialize() && i2c.CR1 == 0U);
+    assert(!initialize() && !imu_device_is_ready() && i2c.CR1 == 0U);
     assert(gpio_scl_low_writes == edges_before && starts == starts_before);
     assert(cycles - begin >= 250U * 64U && cycles - begin < 300U * 64U);
     hold_scl = hold_sda = false;
-    assert(initialize() && imu_device_read(&sample));
+    assert(initialize() && imu_device_is_ready() && imu_device_read(&sample));
     puts("IMU I2C1 setup, receive sequences, register data, deadlines and recovery passed");
     return 0;
 }

@@ -29,6 +29,7 @@ int main(void)
 
     board_clock_init();
     (void) pmw3901_device_init(&optical_flow);
+    (void) imu_device_init();
     host_uart_init();
     configASSERT(motor_device_init());
     motor_control_init();

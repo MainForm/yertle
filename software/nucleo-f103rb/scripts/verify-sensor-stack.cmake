@@ -149,3 +149,11 @@ check_path(optical_startup_write main pmw3901_device_init write_spi
     pmw3901_spi_write exchange wait_flag capture_failure)
 check_path(optical_startup_budget main pmw3901_device_init check_id read_spi
     pmw3901_spi_call_end capture_failure)
+
+set(imu_startup main imu_device_init imu_i2c_init recover_lines)
+check_path(imu_startup_bus_clear ${imu_startup} clear_stuck_sda wait_pin us_to_cycles)
+check_path(imu_startup_busy_workaround ${imu_startup} apply_busy_erratum_workaround wait_pin us_to_cycles)
+check_path(imu_startup_probe main imu_device_init imu_i2c_read select_register address_device wait_event wait_status us_to_cycles)
+check_path(imu_startup_write main imu_device_init imu_i2c_write select_register address_device wait_event wait_status us_to_cycles)
+check_path(imu_startup_read_abort main imu_device_init imu_i2c_read abort_transfer finish_transfer wait_status us_to_cycles)
+check_path(imu_startup_write_abort main imu_device_init imu_i2c_write abort_transfer finish_transfer wait_status us_to_cycles)

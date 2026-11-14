@@ -196,6 +196,15 @@ Current/voltage/load automatic limit checks are intentionally not enabled.
 These values remain PC telemetry for host-side measurement and decisions; no
 new unsafe trigger or motor cutoff based on their thresholds is added here.
 
+## IMU startup and sampling
+
+After setting the board clock, main initializes the MPU-6050 over I2C1 before
+starting FreeRTOS. The sensor task reads the IMU on its nominal 20 ms cycle.
+If startup initialization or a subsequent read fails, IMU feedback remains
+invalid until the sensor task successfully reinitializes and reads it. The
+task waits one second between attempts and continues servicing the other
+sensors during the retry interval.
+
 ## PC-requested motor register access
 
 The host task validates and schedules `GET_MOTOR_REGISTER` (0x0C),

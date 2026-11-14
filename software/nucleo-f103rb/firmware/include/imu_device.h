@@ -16,7 +16,10 @@ typedef struct {
 } imu_raw_sample_t;
 
 /* Hardware I2C1 on PB6=SCL, PB7=SDA with 3.3 V pull-ups. */
+/* Call after board clock setup, before scheduling or from the sensor task. */
 bool imu_device_init(void);
+/* A failed transfer invalidates initialization until the next probe. */
+bool imu_device_is_ready(void);
 bool imu_device_read(imu_raw_sample_t *sample);
 
 #endif /* IMU_DEVICE_H */

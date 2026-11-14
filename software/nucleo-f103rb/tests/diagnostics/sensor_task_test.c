@@ -14,6 +14,8 @@
 static TickType_t tick;
 static unsigned cycles, initializations, services;
 static bool cache_locked, missing_at_boot;
+static bool imu_ready, imu_missing_at_boot, imu_fail_at_runtime;
+static unsigned imu_retries;
 static jmp_buf finished;
 
 TickType_t xTaskGetTickCount(void)
@@ -51,13 +53,27 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *sample)
 
 bool imu_device_init(void)
 {
+    assert(!cache_locked && !imu_ready && imu_retries == 0U);
+    assert(imu_missing_at_boot || imu_fail_at_runtime);
+    assert(tick == (imu_missing_at_boot ? 1000U : 1020U));
+    ++imu_retries;
+    imu_ready = true;
     return true;
+}
+
+bool imu_device_is_ready(void)
+{
+    return imu_ready;
 }
 
 bool imu_device_read(imu_raw_sample_t *sample)
 {
-    (void)sample;
-    assert(!cache_locked);
+    assert(!cache_locked && imu_ready);
+    if (imu_fail_at_runtime && tick == 20U) {
+        imu_ready = false;
+        return false;
+    }
+    sample->gyro_x = 123;
     return true;
 }
 
@@ -104,6 +120,10 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     assert(increment == 20U && *previous + increment > tick);
     assert(sensor_get_extended_feedback_snapshot(&motor, &imu, &flow));
     assert(motor.sequence == cycles && imu.sequence == cycles);
+    const bool imu_expected = (!imu_missing_at_boot || tick >= 1000U) &&
+                              (!imu_fail_at_runtime || tick < 20U || tick >= 1020U);
+    assert(imu.valid == imu_expected);
+    assert(imu.raw.gyro_x == (imu_expected ? 123 : 0));
     if (initializations == 0U) {
         assert(!flow.ready && flow.state == PMW_RETRY);
     }
@@ -119,6 +139,9 @@ int main(int argc, char **argv)
 {
     static pmw3901_device_t device;
     missing_at_boot = argc > 1 && strcmp(argv[1], "missing-at-boot") == 0;
+    imu_missing_at_boot = argc > 1 && strcmp(argv[1], "imu-missing-at-boot") == 0;
+    imu_fail_at_runtime = argc > 1 && strcmp(argv[1], "imu-fail-at-runtime") == 0;
+    imu_ready = !imu_missing_at_boot;
     device.feedback.epoch = 1U;
     device.feedback.ready = !missing_at_boot;
     device.feedback.state = missing_at_boot ? PMW_RETRY : PMW_READY;
@@ -136,5 +159,6 @@ int main(int argc, char **argv)
         assert(0);
     }
     assert(cycles == (missing_at_boot ? 52U : 53U));
+    assert(imu_retries == (imu_missing_at_boot || imu_fail_at_runtime ? 1U : 0U));
     return 0;
 }
