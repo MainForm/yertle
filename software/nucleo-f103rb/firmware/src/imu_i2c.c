@@ -15,6 +15,7 @@
 #define I2C_TRANSFER_TIMEOUT_US 10000U
 #define I2C_RECOVERY_EDGE_TIMEOUT_US 250U
 #define I2C_RECOVERY_HALF_PERIOD_US 5U
+#define I2C_BUS_CLEAR_MAX_PULSES 9U
 #define I2C_OAR1_REQUIRED_BIT (1U << 14U)
 #define I2C_ERROR_FLAGS (I2C_SR1_BERR | I2C_SR1_ARLO | I2C_SR1_AF | I2C_SR1_OVR | I2C_SR1_TIMEOUT)
 
@@ -61,20 +62,27 @@ static bool wait_pin(uint32_t pin, bool high)
     return true;
 }
 
-static bool recover_lines(void)
+static bool clear_stuck_sda(void)
 {
-    /* Only recovery drives the pins as GPIO. Clock out a stranded slave
-     * byte, then apply the SDA/SCL transitions from ST ES096 §2.8.7. */
+    /* UM10204 §3.1.16: leave SDA released and clock the target until it lets
+     * go of SDA. A held-low SCL prevents bus clear. */
     if (!wait_pin(SCL_PIN, true)) return false;
-    for (unsigned pulse = 0; pulse < 9U && !(GPIOB->IDR & SDA_PIN); ++pulse) {
+
+    for (unsigned pulse = 0; pulse < I2C_BUS_CLEAR_MAX_PULSES; ++pulse) {
         GPIOB->BRR = SCL_PIN;
         recovery_delay();
         GPIOB->BSRR = SCL_PIN;
         if (!wait_pin(SCL_PIN, true)) return false;
         recovery_delay();
+        if (GPIOB->IDR & SDA_PIN) return true;
     }
-    if (!wait_pin(SDA_PIN, true)) return false;
+    return false;
+}
 
+static bool apply_busy_erratum_workaround(void)
+{
+    /* ST ES096 §2.8.7: with both wires idle, force a transition on each
+     * before switching back to I2C1 and issuing SWRST. */
     GPIOB->BRR = SDA_PIN;
     if (!wait_pin(SDA_PIN, false)) return false;
     recovery_delay();
@@ -88,6 +96,14 @@ static bool recover_lines(void)
     if (!wait_pin(SDA_PIN, true)) return false;
     recovery_delay();
     return true;
+}
+
+static bool recover_lines(void)
+{
+    if (!wait_pin(SCL_PIN, true)) return false;
+    if (!wait_pin(SDA_PIN, true) && !clear_stuck_sda()) return false;
+    if ((GPIOB->IDR & (SCL_PIN | SDA_PIN)) != (SCL_PIN | SDA_PIN)) return false;
+    return apply_busy_erratum_workaround();
 }
 
 static void reset_peripheral(void)

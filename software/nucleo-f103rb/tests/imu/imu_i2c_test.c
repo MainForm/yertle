@@ -18,7 +18,8 @@ uint32_t SystemCoreClock = 64000000U;
 
 static uint32_t cycles, primask, gpio_output = SCL | SDA;
 static uint8_t registers[128], selected_register;
-static unsigned starts, stops, received, writes, recovery_pulses;
+static unsigned starts, stops, received, writes, gpio_scl_low_writes;
+static unsigned sda_release_after_pulses;
 static bool read_address, expect_register, recovering, hold_sda, hold_scl;
 static bool suppress_start, nack_address, suppress_receive;
 static uint32_t poll_step_us = 1U;
@@ -31,11 +32,12 @@ void __set_PRIMASK(uint32_t value) { primask = value; }
 uint32_t imu_i2c_test_cycles(void)
 {
     cycles += poll_step_us * 64U;
+    if (gpiob.BRR & SCL) ++gpio_scl_low_writes;
     const uint32_t previous_output = gpio_output;
     gpio_output = (gpio_output & ~gpiob.BRR) | gpiob.BSRR;
-    if ((gpio_output & SCL) && !(previous_output & SCL)) {
-        ++recovery_pulses;
-        if (recovery_pulses >= 3U) hold_sda = false;
+    if (hold_sda && !hold_scl && !(previous_output & SCL) && (gpio_output & SCL) &&
+        sda_release_after_pulses > 0U && --sda_release_after_pulses == 0U) {
+        hold_sda = false;
     }
     gpiob.IDR = gpio_output;
     if (hold_sda) gpiob.IDR &= ~SDA;
@@ -112,10 +114,9 @@ int main(void)
 {
     registers[0x75] = 0x68U;
     gpiob.CRL = 0xABCDEFU;
-    gpiob.IDR = SCL;
-    hold_sda = true;
+    gpiob.IDR = SCL | SDA;
     assert(initialize());
-    assert(recovery_pulses >= 3U);
+    assert(gpio_scl_low_writes == 1U); /* Only the ES096 idle-bus transition. */
     assert(gpiob.CRL == 0xEEABCDEFU && (rcc.APB1ENR & RCC_APB1ENR_I2C1EN));
     assert(i2c.CR2 == 32U && i2c.CCR == 200U && i2c.TRISE == 33U);
     assert(starts == 7U && stops == 6U && writes == 5U && !primask);
@@ -158,12 +159,32 @@ int main(void)
     assert(!imu_device_read(&sample) && i2c.CR1 == 0U && starts == starts_before_busy);
     assert(initialize() && imu_device_read(&sample));
 
+    /* Stop clocking as soon as SDA releases, including on the ninth pulse. */
+    const unsigned release_cases[] = {3U, 9U};
+    for (unsigned i = 0; i < sizeof release_cases / sizeof release_cases[0]; ++i) {
+        const unsigned edges_before = gpio_scl_low_writes;
+        hold_sda = true;
+        sda_release_after_pulses = release_cases[i];
+        assert(initialize() && !hold_sda);
+        assert(gpio_scl_low_writes - edges_before == release_cases[i] + 1U);
+    }
+
+    /* Stuck SDA exhausts nine clocks and never enters the ES096 sequence. */
+    unsigned edges_before = gpio_scl_low_writes;
+    unsigned starts_before = starts;
+    hold_sda = true;
+    assert(!initialize() && i2c.CR1 == 0U);
+    assert(gpio_scl_low_writes - edges_before == 9U && starts == starts_before);
+
+    /* Held-low SCL prevents both bus clear and peripheral transfers. */
+    edges_before = gpio_scl_low_writes;
     hold_scl = true;
     begin = cycles;
     assert(!initialize() && i2c.CR1 == 0U);
+    assert(gpio_scl_low_writes == edges_before && starts == starts_before);
     assert(cycles - begin >= 250U * 64U && cycles - begin < 300U * 64U);
-    hold_scl = false;
-    assert(initialize());
+    hold_scl = hold_sda = false;
+    assert(initialize() && imu_device_read(&sample));
     puts("IMU I2C1 setup, receive sequences, register data, deadlines and recovery passed");
     return 0;
 }

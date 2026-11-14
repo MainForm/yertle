@@ -101,7 +101,9 @@ check_path(actuator_return_calibration actuator_task motor_control_service pwm_c
 check_path(actuator_return_telemetry actuator_task motor_control_service pwm_control_service service_stop publish_stop)
 
 set(stack_bytes ${sensor_stack_bytes})
-check_path(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines wait_pin us_to_cycles)
+set(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines)
+check_path(imu_bus_clear ${imu_recovery} clear_stuck_sda wait_pin us_to_cycles)
+check_path(imu_busy_workaround ${imu_recovery} apply_busy_erratum_workaround wait_pin us_to_cycles)
 check_path(imu_probe sensor_task imu_device_init imu_i2c_read select_register address_device wait_event wait_status us_to_cycles)
 check_path(imu_sample sensor_task imu_device_read imu_i2c_read receive_multiple wait_event wait_status us_to_cycles)
 
