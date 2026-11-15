@@ -692,7 +692,9 @@ static bool can_arm(const protocol_context_t *context)
            (context->state == HOST_FSM_DISARMED) &&
            !host_protocol_is_stop_requested() && !context->register_job_active && !context->offsets_job_active &&
            !context->pwm_mode_pending && pwm_control_can_arm() &&
-           motor_device_register_lock_uncertain_mask()==0U;
+           motor_device_register_lock_uncertain_mask() == 0U &&
+           (TickType_t)(xTaskGetTickCount() - context->last_host_heartbeat_tick) <
+               pdMS_TO_TICKS(YERTLE_HOST_TIMEOUT_MS);
 }
 
 static void try_enter_control_ready(protocol_context_t *context)
@@ -1061,6 +1063,21 @@ static bool service_optical_failure(protocol_context_t *context){
     return true;
 }
 
+static void report_host_state(protocol_context_t *context)
+{
+    const host_unsafe_reason_t unsafe_reason = requested_unsafe_reason;
+    if (context->last_reported_unsafe_reason != unsafe_reason) {
+        context->last_reported_unsafe_reason = unsafe_reason;
+        const uint8_t payload[] = { EVENT_UNSAFE_REPORTED, (uint8_t)unsafe_reason };
+        send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
+    }
+
+    service_link_heartbeat(context);
+    if (!service_optical_failure(context)) {
+        service_pid_detail(context);
+    }
+}
+
 void host_protocol_task(void *argument)
 {
     /* One host task owns the replay/diagnostic cache. Keep it off the 2 KiB
@@ -1095,21 +1112,10 @@ void host_protocol_task(void *argument)
             expire_host_link(&context);
         }
 
-        service_pwm(&context);
-
-        if (context.last_reported_unsafe_reason != requested_unsafe_reason) {
-            context.last_reported_unsafe_reason = requested_unsafe_reason;
-            const uint8_t payload[] = {
-                EVENT_UNSAFE_REPORTED, (uint8_t) requested_unsafe_reason
-            };
-            send_frame(&context, MESSAGE_EVENT, payload, sizeof(payload));
-        }
-
-        service_link_heartbeat(&context);
-
-        /* The FSM owns the transition; heartbeat only provides a healthy lease. */
+        /* Safety and link checks above precede the transition and reporting. */
         try_enter_control_ready(&context);
-        if(!service_optical_failure(&context))service_pid_detail(&context);
+        service_pwm(&context);
+        report_host_state(&context);
 
         vTaskDelay(pdMS_TO_TICKS(2));
     }

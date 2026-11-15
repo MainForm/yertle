@@ -50,6 +50,10 @@ Missing PC heartbeat therefore expires the connection even while F103 telemetry
 TX succeeds. Initial arming and recovery still require a valid PC heartbeat.
 After link expiry, a new HELLO is required before a HEARTBEAT can be accepted.
 The independent 500 ms fresh-target watchdog and SAFE_STOP are unchanged.
+The host task checks the PC heartbeat age again at the ARM decision and
+publishes the transition before PWM result and status reporting. The status
+report sends the due F103 heartbeat before attempting automatic SPI/PID
+diagnostics.
 
 ## ACK/NACK transmission recovery
 

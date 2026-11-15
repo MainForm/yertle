@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -9,9 +10,27 @@ static TickType_t tick;
 static bool tx_success;
 static TickType_t tx_elapsed;
 static unsigned heartbeat_attempts;
+static uint8_t heartbeat_state;
+static bool armed_event_sent, armed_event_before_heartbeat;
+
+static jmp_buf task_finished;
+static bool run_task;
+static unsigned task_passes;
+static uint8_t task_rx[2U * (YERTLE_PROTOCOL_MAX_ENCODED + 2U)];
+static size_t task_rx_length, task_rx_offset;
 
 uint32_t xTaskGetTickCount(void) { return tick; }
-void vTaskDelay(uint32_t ticks) { tick += ticks; }
+
+void vTaskDelay(uint32_t ticks)
+{
+    tick += ticks;
+    if (run_task) {
+        if (++task_passes == 2U) longjmp(task_finished, 1);
+        /* Start the next pass with both requests and a due F103 heartbeat. */
+        tick = 1000U;
+        host_protocol_complete_safe_stop();
+    }
+}
 
 bool host_uart_write_bytes(const uint8_t *data, size_t length)
 {
@@ -22,13 +41,26 @@ bool host_uart_write_bytes(const uint8_t *data, size_t length)
     assert(length >= 3U && data[0] == 0U && data[length - 1U] == 0U);
     assert(cobs_decode(data + 1U, length - 2U, raw, &raw_length));
     assert(validate_frame(raw, raw_length, &type, &sequence));
-    if (type == MESSAGE_F103_HEARTBEAT) ++heartbeat_attempts;
+    const uint8_t *payload = raw + YERTLE_PROTOCOL_HEADER_SIZE;
+    if (type == MESSAGE_F103_HEARTBEAT) {
+        ++heartbeat_attempts;
+        heartbeat_state = payload[4];
+        armed_event_before_heartbeat = armed_event_sent;
+    } else if (type == MESSAGE_EVENT && payload[0] == EVENT_STATE_CHANGED &&
+               payload[2] == HOST_FSM_ARMED) {
+        armed_event_sent = true;
+    }
     tick += tx_elapsed;
     return tx_success;
 }
 
 bool host_uart_try_read(uint8_t *byte, bool *discontinuity)
-{ (void)byte; *discontinuity = false; return false; }
+{
+    *discontinuity = false;
+    if (!run_task || task_passes == 0U || task_rx_offset == task_rx_length) return false;
+    *byte = task_rx[task_rx_offset++];
+    return true;
+}
 motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset)
 { (void)id; (void)offset; assert(0); return MOTOR_DEVICE_BUSY; }
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, uint8_t length, motor_register_data_t *result)
@@ -53,6 +85,9 @@ static protocol_context_t reset_context(bool connected, bool armed)
     tx_success = true;
     tx_elapsed = 0U;
     heartbeat_attempts = 0U;
+    heartbeat_state = HOST_FSM_BOOT;
+    armed_event_sent = false;
+    armed_event_before_heartbeat = false;
     published_state = HOST_FSM_DISARMED;
     requested_fault_reason = HOST_FAULT_NONE;
     requested_unsafe_reason = HOST_UNSAFE_NONE;
@@ -75,6 +110,38 @@ static void receive_request(protocol_context_t *context, uint8_t type, bool vali
     raw[8] = (uint8_t)(crc >> 8U);
     if (!valid_crc) raw[7] ^= 1U;
     handle_frame(context, raw, sizeof(raw));
+}
+
+static void append_task_request(uint8_t type, uint8_t sequence)
+{
+    uint8_t raw[YERTLE_PROTOCOL_HEADER_SIZE + YERTLE_PROTOCOL_CRC_SIZE] = {
+        YERTLE_PROTOCOL_VERSION, type, 0U, sequence, 0U, 0U, 0U, 0U, 0U
+    };
+    const uint16_t crc = crc16_ccitt(raw, YERTLE_PROTOCOL_HEADER_SIZE);
+    raw[7] = (uint8_t)crc;
+    raw[8] = (uint8_t)(crc >> 8U);
+    task_rx[task_rx_length++] = 0U;
+    task_rx_length += cobs_encode(raw, sizeof(raw), task_rx + task_rx_length);
+    task_rx[task_rx_length++] = 0U;
+}
+
+static void test_arm_before_status_report(void)
+{
+    (void)reset_context(false, false);
+    published_state = HOST_FSM_BOOT;
+    task_passes = 0U;
+    task_rx_length = 0U;
+    task_rx_offset = 0U;
+    append_task_request(MESSAGE_HELLO, 1U);
+    append_task_request(MESSAGE_HEARTBEAT, 2U);
+
+    run_task = true;
+    if (setjmp(task_finished) == 0) host_protocol_task(NULL);
+    run_task = false;
+    assert(task_rx_offset == task_rx_length);
+    assert(published_state == HOST_FSM_ARMED);
+    assert(heartbeat_attempts == 1U && heartbeat_state == HOST_FSM_ARMED);
+    assert(armed_event_before_heartbeat);
 }
 
 int main(void)
@@ -175,7 +242,23 @@ int main(void)
     service_link_heartbeat(&context);
     assert(!context.host_connected);
 
-    puts("heartbeat: 1000ms telemetry, PC-only timeout, TX independence, lease isolation and tick wrap passed");
+    /* Expiry must block ARM even before the link state has been updated. */
+    context = reset_context(true, false);
+    receive_request(&context, MESSAGE_HEARTBEAT, true);
+    tick = 999U;
+    assert(can_arm(&context));
+    request_safe_stop();
+    assert(!can_arm(&context));
+    host_protocol_complete_safe_stop();
+    service_safety_state(&context);
+    assert(can_arm(&context));
+    tick = 1000U;
+    assert(context.host_connected && context.lease_established);
+    try_enter_control_ready(&context);
+    assert(context.state == HOST_FSM_DISARMED);
+
+    test_arm_before_status_report();
+    puts("heartbeat: link expiry, ARM freshness, tick wrap and state-report order passed");
     return 0;
 }
 

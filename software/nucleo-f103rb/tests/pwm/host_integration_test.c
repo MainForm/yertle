@@ -82,7 +82,10 @@ static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
   service_motor_register_write(c);assert(last_result==MESSAGE_ACK);
  }
  mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
- assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established&&torque_mask==0);
+ receive(c,MESSAGE_HEARTBEAT,NULL,0);assert(c->lease_established);
+ assert(pwm_control_service());try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
+ service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established&&torque_mask==0);
+ try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
 }
 static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  configure(c,backend,epoch);

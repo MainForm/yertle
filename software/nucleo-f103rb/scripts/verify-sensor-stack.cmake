@@ -92,7 +92,7 @@ check_path(calibration_invalidate ${calibration_write} calibration_cache_invalid
 check_path(calibration_verify ${calibration_write} calibration_cache_observe
     calibration_store_save calibration_scan checksum)
 
-check_path(host_pid_telemetry host_protocol_task service_pid_detail send_frame send_frame_sequence
+check_path(host_pid_telemetry host_protocol_task report_host_state service_pid_detail send_frame send_frame_sequence
     host_uart_write_bytes wait_tx_flag)
 
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
@@ -133,7 +133,7 @@ check_path(host_spi_failure_reply host_protocol_task process_host_rx handle_fram
  pmw3901_spi_send_diagnostics send_diagnostic_frame send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
 
 set(stack_bytes ${host_stack_bytes})
-check_path(host_automatic_spi host_protocol_task service_optical_failure send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
+check_path(host_automatic_spi host_protocol_task report_host_state service_optical_failure send_frame send_frame_sequence host_uart_write_bytes wait_tx_flag)
 set(stack_bytes ${sensor_stack_bytes})
 check_path(optical_budget_end sensor_task pmw3901_device_init check_id read_spi
     pmw3901_spi_call_end capture_failure)
