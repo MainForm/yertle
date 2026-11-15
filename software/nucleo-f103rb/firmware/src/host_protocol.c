@@ -688,7 +688,8 @@ static void set_host_connected(protocol_context_t *context, bool connected)
 
 static bool can_arm(const protocol_context_t *context)
 {
-    return context->host_connected && context->lease_established &&
+    /* Only a connected PC can establish a lease; disconnect revokes it. */
+    return context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
            !host_protocol_is_stop_requested() && !context->register_job_active && !context->offsets_job_active &&
            !context->pwm_mode_pending && pwm_control_can_arm() &&

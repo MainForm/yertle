@@ -257,6 +257,15 @@ int main(void)
     try_enter_control_ready(&context);
     assert(context.state == HOST_FSM_DISARMED);
 
+    expire_host_link(&context);
+    assert(!context.host_connected && !context.lease_established);
+    receive_request(&context, MESSAGE_HEARTBEAT, true);
+    assert(!context.lease_established && !can_arm(&context));
+    receive_request(&context, MESSAGE_HELLO, true);
+    assert(context.host_connected && !can_arm(&context));
+    receive_request(&context, MESSAGE_HEARTBEAT, true);
+    assert(can_arm(&context));
+
     test_arm_before_status_report();
     puts("heartbeat: link expiry, ARM freshness, tick wrap and state-report order passed");
     return 0;
