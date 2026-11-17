@@ -118,12 +118,6 @@ static inline motor_register_write_report_t motor_register_initial_report(void)
     return r;
 }
 typedef struct {
-    uint32_t completed, failed;
-    uint8_t motor_id, address;
-    motor_register_write_report_t report;
-} motor_register_write_diagnostics_t;
-
-typedef struct {
     uint16_t position;
     uint16_t speed;
     uint8_t acceleration;
@@ -189,7 +183,6 @@ motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address,
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
                                                         bool (*allowed)(void));
 uint16_t motor_device_register_lock_uncertain_mask(void);
-bool motor_device_get_register_write_diagnostics(motor_register_write_diagnostics_t *result);
 
 /* Dedicated mode transaction. Generic register SET never permits 0x21/0x2c.
  * All motors must remain torqueOFF; callback is rechecked before each write. */

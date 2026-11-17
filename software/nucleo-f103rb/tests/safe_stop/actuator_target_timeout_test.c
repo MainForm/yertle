@@ -31,8 +31,6 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     }
     assert(writes < 200U); /* Prevent a broken watchdog hanging the test. */
 }
-host_safety_action_t host_protocol_get_pending_safety_action(void)
-{ return HOST_SAFETY_ACTION_NONE; }
 host_fsm_state_t host_protocol_get_state(void)
 { return armed ? HOST_FSM_ARMED : HOST_FSM_DISARMED; }
 bool host_protocol_is_armed(void) { return armed; }

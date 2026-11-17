@@ -28,7 +28,6 @@ static volatile uint16_t register_lock_uncertain_mask;
 static uint8_t register_lock_restore_value[YERTLE_MOTOR_COUNT];
 /* Read under bus_mutex via the getter; also inspectable with a debugger.
  * No new diagnostic wire message or IRQ masking is introduced. */
-static motor_register_write_diagnostics_t register_write_diagnostics;
 static const uint8_t motor_ids[YERTLE_MOTOR_COUNT] = {
     1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U
 };
@@ -639,11 +638,6 @@ done:
         report.status=MOTOR_WRITE_LOCK_RESTORE_FAILED;
     }
     report.elapsed_ms=elapsed_ms(started);
-    ++register_write_diagnostics.completed;
-    if (report.status!=MOTOR_WRITE_OK) ++register_write_diagnostics.failed;
-    register_write_diagnostics.motor_id=id;
-    register_write_diagnostics.address=request->address;
-    register_write_diagnostics.report=report;
     motor_uart_discard_rx(motor_bus_for_id(id));
     (void)xSemaphoreGive(bus_mutex);
     return report;
@@ -661,10 +655,6 @@ static motor_register_write_report_t write_mode_once(uint8_t id,uint8_t mode,boo
     motor_register_write_report_t result=write_register_transaction(&r,allowed,true);
     result.mode_attempts=result.mode_attempt_limit=1;
     result.first_mode_status=(uint8_t)result.status;
-    if(bus_mutex!=NULL&&id>=1U&&id<=12U&&take_bus()){
-        register_write_diagnostics.motor_id=id;register_write_diagnostics.address=0x21;
-        register_write_diagnostics.report=result;(void)xSemaphoreGive(bus_mutex);
-    }
     return result;
 }
 motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
@@ -770,14 +760,6 @@ motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t pwm[12]
 
 uint16_t motor_device_register_lock_uncertain_mask(void)
 { return register_lock_uncertain_mask; }
-
-bool motor_device_get_register_write_diagnostics(motor_register_write_diagnostics_t *result)
-{
-    if (result==NULL || !take_bus()) return false;
-    *result=register_write_diagnostics;
-    (void)xSemaphoreGive(bus_mutex);
-    return true;
-}
 
 motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *feedback)
 {

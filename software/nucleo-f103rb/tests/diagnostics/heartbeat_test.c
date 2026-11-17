@@ -43,6 +43,8 @@ bool host_uart_write_bytes(const uint8_t *data, size_t length)
     assert(validate_frame(raw, raw_length, &type, &sequence));
     const uint8_t *payload = raw + YERTLE_PROTOCOL_HEADER_SIZE;
     if (type == MESSAGE_F103_HEARTBEAT) {
+        assert(raw_length == YERTLE_PROTOCOL_HEADER_SIZE + 9U + YERTLE_PROTOCOL_CRC_SIZE);
+        assert(payload[7] == 0U && payload[8] == (uint8_t)requested_fault_reason);
         ++heartbeat_attempts;
         heartbeat_state = payload[4];
         armed_event_before_heartbeat = armed_event_sent;
@@ -90,7 +92,6 @@ static protocol_context_t reset_context(bool connected, bool armed)
     armed_event_before_heartbeat = false;
     published_state = HOST_FSM_DISARMED;
     requested_fault_reason = HOST_FAULT_NONE;
-    requested_unsafe_reason = HOST_UNSAFE_NONE;
     pending_safety_action = HOST_SAFETY_ACTION_NONE;
     safe_stop_completed = false;
     requested_target_timeout = false;

@@ -45,7 +45,6 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     if (tick >= stop_test_tick) longjmp(finished, 1);
 }
 
-host_safety_action_t host_protocol_get_pending_safety_action(void) { return safety_action; }
 host_fsm_state_t host_protocol_get_state(void) { return state; }
 bool host_protocol_is_armed(void) { return state == HOST_FSM_ARMED; }
 bool host_protocol_is_stop_requested(void)

@@ -7,6 +7,5 @@
 typedef struct { uint8_t backend; uint16_t mask; } mode_setting_t;
 typedef enum { MODE_STORE_ABSENT,MODE_STORE_VALID,MODE_STORE_READ_ERROR } mode_store_result_t;
 mode_store_result_t mode_store_read(mode_setting_t *setting);
-bool mode_store_load(mode_setting_t *setting);
 bool mode_store_save(const mode_setting_t *setting);
 #endif

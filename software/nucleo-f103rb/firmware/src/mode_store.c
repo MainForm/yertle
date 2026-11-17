@@ -40,7 +40,6 @@ mode_store_result_t mode_store_read(mode_setting_t *setting){
     if(!latest.found)return MODE_STORE_ABSENT;
     *setting=latest.setting;return MODE_STORE_VALID;
 }
-bool mode_store_load(mode_setting_t *setting){return mode_store_read(setting)==MODE_STORE_VALID;}
 bool mode_store_save(const mode_setting_t *setting){
     if(!valid_setting(setting))return false;
     latest_t latest;if(!scan(&latest))return false;

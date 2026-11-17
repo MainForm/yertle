@@ -5,10 +5,10 @@
 #include "mode_store.h"
 #include "mode_memory.h"
 #include "pwm_contract.h"
-static void expect(uint8_t backend,uint16_t mask){mode_setting_t s={255,0};assert(mode_store_load(&s)&&s.backend==backend&&s.mask==mask);}
+static void expect(uint8_t backend,uint16_t mask){mode_setting_t s={255,0};assert(mode_store_read(&s)==MODE_STORE_VALID&&s.backend==backend&&s.mask==mask);}
 static uint32_t crc(const uint8_t *b){uint32_t c=0xffffffffU;for(unsigned i=0;i<16;++i){c^=b[i];for(unsigned k=0;k<8;++k)c=(c>>1)^((c&1)?0xedb88320U:0);}return ~c;}
 int main(void){
- mode_setting_t s={YPWM_PID,8},read={0};mode_memory_reset();assert(!mode_store_load(&read));
+ mode_setting_t s={YPWM_PID,8},read={0};mode_memory_reset();assert(mode_store_read(&read)==MODE_STORE_ABSENT);
  assert(!mode_store_save(NULL));s.mask=0;assert(!mode_store_save(&s));s.mask=0x1000;assert(!mode_store_save(&s));
  s.backend=2;s.mask=8;assert(!mode_store_save(&s));s.backend=YPWM_POSITION;assert(!mode_store_save(&s));
  s.mask=YPWM_ALL_MASK;assert(mode_store_save(&s));expect(YPWM_POSITION,YPWM_ALL_MASK);
@@ -24,7 +24,7 @@ int main(void){
  ypwm_put32(mode_memory_bytes+32+16,crc(mode_memory_bytes+32));expect(YPWM_POSITION,YPWM_ALL_MASK);
  /* Torn append: old record survives every incomplete halfword sequence. */
  for(int cut=0;cut<=11;++cut){mode_memory_reset();mode_memory_budget=cut;s=(mode_setting_t){YPWM_PID,4};
-  const bool ok=mode_store_save(&s);if(cut<11)assert(!ok&&mode_store_read(&read)==MODE_STORE_ABSENT);else assert(ok&&mode_store_load(&read));}
+  const bool ok=mode_store_save(&s);if(cut<11)assert(!ok&&mode_store_read(&read)==MODE_STORE_ABSENT);else assert(ok&&mode_store_read(&read)==MODE_STORE_VALID);}
  for(int cut=0;cut<=11;++cut){mode_memory_reset();s=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&s));
   mode_memory_budget=cut;s=(mode_setting_t){YPWM_PID,4};const bool ok=mode_store_save(&s);
   if(cut<11){assert(!ok);expect(YPWM_POSITION,YPWM_ALL_MASK);}else{assert(ok);expect(YPWM_PID,4);}}
@@ -44,6 +44,6 @@ int main(void){
  mode_memory_reset();s=(mode_setting_t){YPWM_PID,1};assert(mode_store_save(&s));ypwm_put32(mode_memory_bytes+12,0xfffffffeU);
  ypwm_put32(mode_memory_bytes+16,crc(mode_memory_bytes));s.mask=2;assert(mode_store_save(&s));expect(YPWM_PID,2);
  s.mask=4;assert(mode_store_save(&s));expect(YPWM_PID,4);
- mode_memory_read_ok=false;assert(mode_store_read(&read)==MODE_STORE_READ_ERROR&&!mode_store_load(&read)&&!mode_store_save(&s));
+ mode_memory_read_ok=false;assert(mode_store_read(&read)==MODE_STORE_READ_ERROR&&!mode_store_save(&s));
  puts("Mode journal: CRC/version/mask, no-op writes, torn records/erase, page rotation and sequence wrap passed");return 0;
 }

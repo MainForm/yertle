@@ -39,13 +39,13 @@ timeout despite successful TX, TX failure independence, fresh-PC-lease isolation
 repeated HELLO/query/invalid CRC rejection and tick wrap. It does not verify
 physical UART TC timing or remote receipt.
 
-`firmware_target_timeout_test` runs the real actuator loop with queue/clock
-stubs: enqueue timestamps, delayed dequeue, stale-command rejection before
-motor I/O, equal-target refresh, latest-only overwrite, failed/invalid/unarmed
-submissions and tick wrap. It does not simulate actual RTOS task interleavings.
+`firmware_target_timeout_test` runs the real actuator loop with scheduling and
+clock stubs. It exercises latest-target timestamps, stale-command rejection
+before motor I/O, equal-target refresh, invalid or unarmed submissions, and tick
+wrap. It does not simulate actual RTOS task interleavings.
 
 `firmware_control_safety_test` combines the actual host FSM and actuator source
-with mocked queue/UART/clock/feedback. It covers expired-link target rejection,
+with mocked UART, clock and motor feedback. It covers expired-link target rejection,
 pending fault/timeout target rejection, SAFE_STOP publication before state-event
 TX, return before torque-off during a forced task switch, bounded query/garbage
 RX draining, byte/frame/time budgets, and each of twelve blocked motors while

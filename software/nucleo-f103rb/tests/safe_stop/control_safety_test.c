@@ -107,7 +107,7 @@ static void reset(void)
     context.host_connected = context.lease_established = true;
     published_state = HOST_FSM_ARMED;
     requested_fault_reason = HOST_FAULT_NONE; requested_target_timeout = false;
-    requested_unsafe_reason = HOST_UNSAFE_NONE; safe_stop_completed = false;
+    safe_stop_completed = false;
     pending_safety_action = HOST_SAFETY_ACTION_NONE;
     tick = tx_elapsed = 0U; flood = garbage = fault_on_read = expire_during_motion = false;
     torque_on_calls = torque_off_calls = center_writes = 0U;

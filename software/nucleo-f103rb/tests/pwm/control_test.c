@@ -13,7 +13,7 @@ void calibration_memory_reset(void);
 static void seed_calibration(void){calibration_memory_reset();calibration_cache_init();
  const uint8_t zero[2]={0};for(unsigned id=1;id<=12;++id)assert(calibration_cache_observe((uint8_t)id,31,zero,2));}
 #include "mode_memory.h"
-static uint32_t tick;static unsigned critical,on_count,off_count,write_count,completed,unsafe_count;
+static uint32_t tick;static unsigned critical,on_count,off_count,write_count,completed;
 static bool pwm_auto_enable,fail_off_after_pwm;static uint16_t servo_torque_on;
 static bool stop_requested,armed,off_ok,mode_ok,feedback_ok,write_ok,cancel_mode,cancel_on;
 static uint16_t on_mask;static int16_t sent[12];static motor_feedback_set_t feedback;
@@ -25,7 +25,6 @@ host_fsm_state_t host_protocol_get_state(void){return armed?HOST_FSM_ARMED:HOST_
 bool host_protocol_is_armed(void){return armed;}bool host_protocol_is_stop_requested(void){return stop_requested;}
 void host_protocol_request_pwm_stop(void){stop_requested=true;armed=false;}
 void host_protocol_complete_safe_stop(void){++completed;stop_requested=false;}
-void host_protocol_latch_unsafe(host_unsafe_reason_t r){assert(r==HOST_UNSAFE_CURRENT_LIMIT);++unsafe_count;}
 bool motor_device_validate_targets(const motor_target_set_t *g){if(!g)return false;for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_set_torque(bool on){assert(!critical&&!on);++off_count;if(off_ok)servo_torque_on=0;return off_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
 motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;on_mask=mask;if(cancel_on)pwm_control_stop(YPWM_REASON_RELEASE);}else{++off_count;if(off_ok)servo_torque_on&=(uint16_t)~mask;}return off_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
@@ -55,7 +54,7 @@ static uint8_t phase(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_stat
 static uint8_t reason(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[7];}
 static void reset(void){
  seed_calibration();mode_memory_reset();pwm_auto_enable=fail_off_after_pwm=false;servo_torque_on=0;
- tick=100;critical=on_count=off_count=write_count=completed=unsafe_count=0;on_mask=0;stop_requested=armed=false;
+ tick=100;critical=on_count=off_count=write_count=completed=0;on_mask=0;stop_requested=armed=false;
  off_ok=mode_ok=feedback_ok=write_ok=true;cancel_mode=cancel_on=false;memset(sent,0,sizeof sent);
  mode_fail_id=0;verify_off_calls=fail_off_call=0;verify_modes_ok=true;
  memset(&feedback,0,sizeof feedback);feedback.valid_mask=YPWM_ALL_MASK;feedback.uptime_ms=tick;feedback.sequence=1;
@@ -92,11 +91,11 @@ static void current_is_host_owned(int16_t raw,bool all){
  if(all){for(unsigned i=0;i<12;++i)feedback.motor[i].current=raw;}
  else feedback.motor[3].current=raw;
  const unsigned writes=write_count;advance();assert(pwm_control_service());
- assert(phase()==YPWM_ACTIVE&&armed&&!stop_requested&&unsafe_count==0&&write_count==writes+1);
+ assert(phase()==YPWM_ACTIVE&&armed&&!stop_requested&&write_count==writes+1);
  for(unsigned i=0;i<12;++i)assert(feedback.motor[i].current==((all||i==3)?raw:0));
  /* A PC release still stops PWM and verifies torqueOFF after high telemetry. */
  pwm_control_stop(YPWM_REASON_RELEASE);
- stopped(YPWM_REASON_RELEASE);assert(sent[3]==0&&off_count>0&&unsafe_count==0);
+ stopped(YPWM_REASON_RELEASE);assert(sent[3]==0&&off_count>0);
 }
 static void transaction_tests(void){
  uint8_t result;uint16_t seq;
@@ -165,9 +164,9 @@ static void persistent_boot_tests(void){
  assert(mode_memory_programs==writes_before);armed=false;pwm_control_init();assert(pwm_control_service()&&phase()==YPWM_READY);
  armed=true;pwm_control_on_armed();motor_target_set_t restarted=goals(8);
  assert(motor_control_submit_targets(&restarted)&&pwm_control_service());assert(sent[3]==first); /* no restored I/profile/history */
- reset();stage(321,8);assert(!mode_store_load(&pref));assert(request(YPWM_COMMIT,321,8)==0);
+ reset();stage(321,8);assert(mode_store_read(&pref)==MODE_STORE_ABSENT);assert(request(YPWM_COMMIT,321,8)==0);
  assert(pwm_control_service()&&phase()==YPWM_READY);assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
- assert(mode_store_load(&pref)&&pref.backend==YPWM_PID&&pref.mask==8);
+ assert(mode_store_read(&pref)==MODE_STORE_VALID&&pref.backend==YPWM_PID&&pref.mask==8);
  /* A reboot restores selection only: zero PWM/OFF verified, no goals/torqueON. */
  const unsigned before_on=on_count;pwm_control_init();assert(!pwm_control_can_arm());assert(pwm_control_service());
  assert(phase()==YPWM_READY&&pwm_control_can_arm()&&!armed&&on_count==before_on);
@@ -200,12 +199,12 @@ static void persistent_boot_tests(void){
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
- assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
+ assert(mode_store_read(&pref)==MODE_STORE_VALID&&pref.backend==YPWM_POSITION);
  /* COMMIT storage failure blocks ARM, with verified previous-preference rollback. */
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);mode_memory_budget=0;
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(phase()==YPWM_ROLLING_BACK&&!pwm_control_can_arm());
  assert(pwm_control_service()&&phase()==YPWM_CANCELED);assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_MODE_FAILED);
- assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
+ assert(mode_store_read(&pref)==MODE_STORE_VALID&&pref.backend==YPWM_POSITION);
  /* Failed Flash restore stays blocked until verified recovery. */
  reset();pref=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};assert(mode_store_save(&pref));stage(321,8);
  assert(request(YPWM_COMMIT,321,8)==0&&pwm_control_service());assert(pwm_control_take_mode_result(&seq,&result));mode_memory_budget=0;
@@ -214,7 +213,7 @@ static void persistent_boot_tests(void){
  mode_memory_budget=-1;
  assert(request(YPWM_CANCEL,321,8)==0&&pwm_control_service()&&phase()==YPWM_CANCELED);
  assert(pwm_control_take_mode_result(&seq,&result)&&result==0&&!pwm_control_can_arm());
- assert(mode_store_load(&pref)&&pref.backend==YPWM_POSITION);
+ assert(mode_store_read(&pref)==MODE_STORE_VALID&&pref.backend==YPWM_POSITION);
 }
 /* Real-device observation: writing PWM0 may energize a previously OFF motor. */
 static void zero_then_explicit_off_tests(void){

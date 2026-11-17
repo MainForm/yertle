@@ -130,10 +130,6 @@ int main(void)
     assert(result.status==0U && result.primary_status==0U && result.target_write_attempted);
     assert(memory[21]==32U && memory[55]==1U && target_writes==1U && unlock_writes==1U && restore_writes==1U);
     assert(result.lock_restore_verified && result.lock_restore_attempted && operations==11U);
-    motor_register_write_diagnostics_t diagnostics;
-    assert(motor_device_get_register_write_diagnostics(&diagnostics));
-    assert(diagnostics.motor_id==1U && diagnostics.address==21U && diagnostics.report.status==0U);
-    assert(!motor_device_get_register_write_diagnostics(NULL));
 
     /* Exact-width allow-list and boundaries, unrelated writable registers denied. */
     const uint8_t addresses[]={16U,21U,22U,23U,24U,25U,48U};

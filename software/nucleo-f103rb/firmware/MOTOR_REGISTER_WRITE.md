@@ -149,13 +149,12 @@ transmission cannot clear it. The latch is RAM-only: it does not survive reset
 or power loss and must not be described as crash-safe EEPROM journaling. After
 a power/reset interruption, inspect actual register/lock state before control.
 
-`motor_device_get_register_write_diagnostics()` provides a bus-mutex-protected
-C snapshot of last ID/address, completed/failed counts and the report:
+The motor driver returns the transaction report to the caller. The host task
+uses that report for `MOTOR_REGISTER_WRITE_DIAGNOSTICS` (`0x90`) and keeps the
+latest result and completion counters for `GET_UART_STATS`. The report includes
 final status, primary failure before cleanup, failure stage, target and cleanup
-servo error bits, target-WRITE-attempted and lock-restore-attempted/verified.
-Storage is also debugger-inspectable as `register_write_diagnostics`; no new
-diagnostic wire frame is added. Existing UART diagnostic reason counters still
-record transaction failures. PC obtains actual bytes via a separate GET.
+servo error bits, and whether the target write and lock recovery were attempted
+and verified. The PC can read actual register bytes with a separate GET.
 
 ## Duplicate suppression and bounded storage
 

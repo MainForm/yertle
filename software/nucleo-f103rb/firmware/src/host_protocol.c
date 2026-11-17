@@ -79,8 +79,7 @@ enum error_code {
 
 enum event_code {
     EVENT_STATE_CHANGED = 1U,
-    EVENT_HOST_LINK_CHANGED = 2U,
-    EVENT_UNSAFE_REPORTED = 3U
+    EVENT_HOST_LINK_CHANGED = 2U
 };
 
 enum state_cause {
@@ -149,7 +148,6 @@ typedef struct {
     TickType_t last_idle_monitor_tick;
     bool idle_monitor_seen;
     TickType_t last_f103_heartbeat_tick;
-    host_unsafe_reason_t last_reported_unsafe_reason;
     uint16_t tx_sequence;
     /* Host-task owned: response retries never re-execute a request. */
     pending_result_t results[YERTLE_RESULT_QUEUE_CAPACITY];
@@ -160,7 +158,6 @@ typedef struct {
 
 static volatile host_fsm_state_t published_state = HOST_FSM_BOOT;
 static volatile host_fault_reason_t requested_fault_reason = HOST_FAULT_NONE;
-static volatile host_unsafe_reason_t requested_unsafe_reason = HOST_UNSAFE_NONE;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
 static volatile bool requested_target_timeout = false;
@@ -358,7 +355,7 @@ static void send_f103_heartbeat(protocol_context_t *context)
         (uint8_t) context->state,
         context->host_connected ? 1U : 0U,
         (uint8_t) pending_safety_action,
-        (uint8_t) requested_unsafe_reason,
+        0U, /* Reserved v1 unsafe-reason byte. */
         (uint8_t) requested_fault_reason
     };
     send_frame(context, MESSAGE_F103_HEARTBEAT, payload, sizeof(payload));
@@ -1066,13 +1063,6 @@ static bool service_optical_failure(protocol_context_t *context){
 
 static void report_host_state(protocol_context_t *context)
 {
-    const host_unsafe_reason_t unsafe_reason = requested_unsafe_reason;
-    if (context->last_reported_unsafe_reason != unsafe_reason) {
-        context->last_reported_unsafe_reason = unsafe_reason;
-        const uint8_t payload[] = { EVENT_UNSAFE_REPORTED, (uint8_t)unsafe_reason };
-        send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
-    }
-
     service_link_heartbeat(context);
     if (!service_optical_failure(context)) {
         service_pid_detail(context);
@@ -1122,26 +1112,9 @@ void host_protocol_task(void *argument)
     }
 }
 
-host_safety_action_t host_protocol_get_pending_safety_action(void)
-{
-    return pending_safety_action;
-}
-
 void host_protocol_complete_safe_stop(void)
 {
     safe_stop_completed = true;
-}
-
-void host_protocol_latch_unsafe(host_unsafe_reason_t reason)
-{
-    if (reason != HOST_UNSAFE_NONE) {
-        requested_unsafe_reason = reason;
-    }
-}
-
-void host_protocol_clear_unsafe(void)
-{
-    requested_unsafe_reason = HOST_UNSAFE_NONE;
 }
 
 void host_protocol_latch_fault(host_fault_reason_t reason)

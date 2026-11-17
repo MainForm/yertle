@@ -28,23 +28,11 @@ typedef enum {
     HOST_FAULT_SERVO = 3U
 } host_fault_reason_t;
 
-/* A diagnostic input for the later safety-monitor task, not an FSM state. */
-typedef enum {
-    HOST_UNSAFE_NONE = 0U,
-    HOST_UNSAFE_CURRENT_LIMIT = 1U,
-    HOST_UNSAFE_LOAD_LIMIT = 2U,
-    HOST_UNSAFE_VOLTAGE_LIMIT = 3U,
-    HOST_UNSAFE_SERVO_LIMIT = 4U
-} host_unsafe_reason_t;
-
 void host_protocol_task(void *argument);
 
 /* Task-context interface shared with actuator_task. Never call from ISR. */
-host_safety_action_t host_protocol_get_pending_safety_action(void);
 /* Completion also releases FAULT into DISARMED, requiring a fresh heartbeat. */
 void host_protocol_complete_safe_stop(void);
-void host_protocol_latch_unsafe(host_unsafe_reason_t reason);
-void host_protocol_clear_unsafe(void);
 void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
 /* Enter SAFE_STOP after a PWM release or fault and report the PWM FSM cause. */

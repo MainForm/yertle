@@ -356,8 +356,8 @@ EEPROM lock restore inhibits re-arming until verified recovery. Existing wire va
 | `ACK` | `0x80` | request type, request sequence, result code |
 | `NACK` | `0x81` | request type, request sequence, error code |
 | `HELLO_ACK` | `0x82` | firmware version, protocol version, capability bits |
-| `EVENT` | `0x83` | state transition, host-link change, or unsafe diagnostic report |
-| `F103_HEARTBEAT` | `0x84` | uptime, FSM state, host-link status, requested safety action, unsafe reason, fault reason |
+| `EVENT` | `0x83` | state transition or host-link change |
+| `F103_HEARTBEAT` | `0x84` | uptime, FSM state, host-link status, requested safety action, reserved byte (0), fault reason |
 | `UART_STATS` | `0x85` | 60-byte UART diagnostic snapshot described below |
 | `MOTOR_FEEDBACK` | `0x8B` | One of three four-motor cached feedback blocks described above |
 | `IMU_FEEDBACK` | `0x8C` | Cached IMU sample described above |
@@ -443,12 +443,9 @@ Neither means torque is removed immediately: the F103 first
 attempts to return to 2048. An independent physical emergency stop is needed
 where immediate torque removal is required.
 
-`host_protocol_latch_unsafe()` and `host_protocol_latch_fault()` are integration
-points for the later motor/safety task. An unsafe report sends an `EVENT` and
-appears in F103 heartbeat telemetry, but does not disarm the host or request a
-safe stop; this preserves the RPi policy's ability to issue recovery targets.
-`host_protocol_clear_unsafe()` clears the diagnostic once the later safety task
-has verified recovery. A fault remains an F103-owned hard stop.
+`host_protocol_latch_fault()` requests an F103 safe stop. The v1 heartbeat
+retains its former unsafe-reason byte at offset 7 with value 0. EVENT code 3
+is reserved for compatibility. The PC owns current-threshold handling.
 
 `actuator_task` owns target execution and safe stopping. Both modes discard or
 block further host targets while stopping. With an eligible drive already active,
