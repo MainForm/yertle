@@ -117,7 +117,7 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     assert(motor.sequence == cycles && imu.sequence == cycles);
     const bool imu_expected = (!imu_missing_at_boot || tick >= 1000U) &&
                               (!imu_fail_at_runtime || tick < 20U || tick >= 1020U);
-    assert(imu.valid == imu_expected);
+    assert(imu.ready == imu_expected && imu.valid == imu_expected);
     assert(imu.raw.gyro_x == (imu_expected ? 123 : 0));
     if (initializations == 0U) {
         assert(!flow.ready && flow.state == PMW_RETRY);
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
     devices.optical_flow.feedback.epoch = 1U;
     devices.optical_flow.feedback.ready = !missing_at_boot;
     devices.optical_flow.feedback.state = missing_at_boot ? PMW_RETRY : PMW_READY;
-    assert(sensor_task_init(&devices.optical_flow.feedback));
+    assert(sensor_task_init(&devices));
 
     motor_feedback_set_t motor;
     imu_feedback_t imu;
@@ -148,6 +148,7 @@ int main(int argc, char **argv)
     assert(sensor_get_extended_feedback_snapshot(&motor, &imu, &flow));
     assert(flow.epoch == 1U && flow.ready == devices.optical_flow.feedback.ready);
     assert(flow.state == devices.optical_flow.feedback.state);
+    assert(imu.ready == devices.imu.ready && !imu.valid);
 
     if (setjmp(finished) == 0) {
         sensor_task(&devices);

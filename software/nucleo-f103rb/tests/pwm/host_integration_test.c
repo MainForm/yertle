@@ -12,6 +12,8 @@ static void seed_calibration(void){calibration_memory_reset();calibration_cache_
 static TickType_t tick=100;static unsigned critical,on_count,native_writes;
 static int16_t duty[12];static motor_target_set_t native_target;static uint16_t torque_mask;static uint8_t last_result,last_error;
 static unsigned detail_frames,stats_frames;static bool boot_off_ok=true;
+static uint8_t imu_tx_valid, imu_tx_status;
+static bool imu_ready, imu_valid;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
 
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
@@ -24,6 +26,7 @@ bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROT
  if(type==MESSAGE_EVENT&&raw[7]==8){assert(raw[5]==28);++stats_frames;}
  if(type==MESSAGE_EVENT&&raw[7]==YPWM_DIAG_EVENT){assert(raw[5]==64);diag_order=tx_order;memcpy(last_diag,raw+7,64);}
  if(type==REGISTER_WRITE_DIAGNOSTICS_TYPE){write_diag_order=tx_order;assert(raw[5]==64);}
+ if(type==MESSAGE_IMU_FEEDBACK){assert(raw[5]==24);imu_tx_valid=raw[15];imu_tx_status=raw[16];}
  if(type==MESSAGE_ACK||type==MESSAGE_NACK){last_result=type;last_error=raw[10];result_order=tx_order;}return true;
 }
 bool host_uart_try_read(uint8_t *b,bool *d){(void)b;*d=false;return false;}
@@ -48,6 +51,7 @@ void pmw3901_spi_send_diagnostics(void *c,pmw_spi_diag_sender_t s,uint16_t q){(v
 bool pmw3901_spi_auto_payload(uint8_t p[64]){(void)p;return false;}
 void pmw3901_spi_auto_result(bool sent){(void)sent;}
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);memset(f,0,sizeof *f);memset(imu,0,sizeof *imu);
+ imu->ready=imu_ready;imu->valid=imu_valid;
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){assert(!critical);native_target=*g;++native_writes;return MOTOR_DEVICE_OK;}
@@ -95,6 +99,20 @@ int main(void){
  seed_calibration();mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
  motor_control_init();motor_control_service();assert(motor_control_position_ready());
+ const uint8_t imu_status_request=0x01U, bad_sensor_flag=0x02U;
+ receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,&imu_status_request,1);
+ assert(imu_tx_status==1U&&!imu_tx_valid);
+ imu_ready=true;
+ receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,&imu_status_request,1);
+ assert(imu_tx_status==2U&&!imu_tx_valid);
+ imu_valid=true;
+ receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,&imu_status_request,1);
+ assert(imu_tx_status==2U&&imu_tx_valid);
+ receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,NULL,0);
+ assert(imu_tx_status==0U&&imu_tx_valid);
+ receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,&bad_sensor_flag,1);
+ assert(last_result==MESSAGE_NACK&&last_error==ERROR_INVALID_FLAGS);
+ assert(!c.lease_established);
  /* Slow DISARMED configuration may outlive5s, but never ARM. A silent
     configuration still disconnects/rolls back at its own bounded20s window. */
  uint8_t slow[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(slow+3,YPWM_ALL_MASK);ypwm_put32(slow+5,118);

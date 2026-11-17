@@ -211,8 +211,8 @@ frames share one cached sensor snapshot. A zero bit in valid mask means that
 ID's data must not be used. If no snapshot exists, NACK code 10 is returned.
 
 The same request also returns one `IMU_FEEDBACK` (`0x8C`) frame with a 24-byte
-payload: sample sequence u32 LE, sample uptime_ms u32 LE, valid u8, reserved
-u8 (=0), then signed i16 LE accel X/Y/Z, temperature, gyro X/Y/Z in that
+payload: sample sequence u32 LE, sample uptime_ms u32 LE, valid u8, readiness
+u8, then signed i16 LE accel X/Y/Z, temperature, gyro X/Y/Z in that
 order. Sequence and uptime match the three motor frames. Raw scale is MPU-6050
 at +/-2 g (16384 LSB/g) and +/-250 deg/s (131 LSB/(deg/s)); temperature in
 degrees C is raw/340 + 36.53. When the IMU is absent or a read fails, valid=0
@@ -220,6 +220,13 @@ and all raw fields are zero; motor feedback remains available. The IMU uses hard
 I2C1 at 80 kHz on PB6=SCL and PB7=SDA with external 3.3 V pull-ups. AD0 is low
 for address 0x68. The sensor task retries initialization about one second
 after a failure.
+
+An empty `GET_SENSOR_FEEDBACK` request leaves the readiness byte (offset 9)
+at zero for legacy clients. A one-byte request payload of `0x01` opts in to
+readiness: `1` means not ready and `2` means ready. Readiness describes driver
+initialization; the separate valid byte describes the measurement. Older
+firmware rejects the extended request with NACK code 2 (invalid length), so
+clients can retry with an empty payload. Request and reply types are unchanged.
 
 ## EEPROM position-offset query
 

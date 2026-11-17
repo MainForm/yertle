@@ -33,7 +33,7 @@ int main(void)
     host_uart_init();
     configASSERT(motor_device_init());
     motor_control_init();
-    configASSERT(sensor_task_init(&sensors.optical_flow.feedback));
+    configASSERT(sensor_task_init(&sensors));
 
     created = xTaskCreate(host_protocol_task,
                           "host-proto",

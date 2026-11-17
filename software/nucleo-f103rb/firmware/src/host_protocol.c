@@ -615,7 +615,10 @@ static void send_motor_feedback(protocol_context_t *context, const motor_feedbac
     }
 }
 
-static void send_imu_feedback(protocol_context_t *context, const imu_feedback_t *feedback)
+/* GET_SENSOR_FEEDBACK can opt in to readiness without changing the legacy reply. */
+#define SENSOR_FEEDBACK_REQUEST_IMU_READY 0x01U
+
+static void send_imu_feedback(protocol_context_t *context, const imu_feedback_t *feedback, bool include_ready)
 {
     uint8_t payload[24] = { 0 };
     const int16_t values[7] = {
@@ -628,7 +631,7 @@ static void send_imu_feedback(protocol_context_t *context, const imu_feedback_t 
         payload[4U + b] = (uint8_t)(feedback->uptime_ms >> (8U * b));
     }
     payload[8] = feedback->valid ? 1U : 0U;
-    /* payload[9] is reserved for future status codes. */
+    if (include_ready) payload[9] = feedback->ready ? 2U : 1U;
     if (feedback->valid) {
         for (uint8_t i = 0U; i < 7U; ++i) {
             payload[10U + i * 2U] = (uint8_t)values[i];
@@ -807,10 +810,16 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_FLAGS);
         return;
     }
+    const bool extended_sensor_feedback = type == MESSAGE_GET_SENSOR_FEEDBACK && raw[5] == 1U && raw[6] == 0U;
     if (type != MESSAGE_SET_JOINT_TARGETS && type != MESSAGE_GET_MOTOR_REGISTER && type != MESSAGE_SET_MOTOR_REGISTER &&
-        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_SET_MOTOR_PWM &&
+        type != MESSAGE_SET_CONTROL_MODE && type != MESSAGE_SET_MOTOR_PWM && !extended_sensor_feedback &&
         ((raw[5] != 0U) || (raw[6] != 0U))) {
         send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_LENGTH);
+        return;
+    }
+
+    if (extended_sensor_feedback && raw[YERTLE_PROTOCOL_HEADER_SIZE] != SENSOR_FEEDBACK_REQUEST_IMU_READY) {
+        send_result(context, MESSAGE_NACK, type, sequence, ERROR_INVALID_FLAGS);
         return;
     }
 
@@ -915,7 +924,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             optical_encode(optical_payload,sequence,feedback.sequence,feedback.uptime_ms,&flow);
             send_frame(context,OPTICAL_FLOW_MESSAGE_TYPE,optical_payload,sizeof optical_payload);
             send_motor_feedback(context, &feedback);
-            send_imu_feedback(context, &imu);
+            send_imu_feedback(context, &imu, extended_sensor_feedback);
         }
         break;
     }

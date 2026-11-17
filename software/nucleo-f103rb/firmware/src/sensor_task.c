@@ -13,12 +13,13 @@ static imu_feedback_t latest_imu_feedback;
 static pmw3901_feedback_t latest_flow_feedback;
 static uint32_t feedback_sequence;
 
-bool sensor_task_init(const pmw3901_feedback_t *flow_feedback)
+bool sensor_task_init(const sensor_devices_t *devices)
 {
     if (feedback_mutex == NULL) {
         feedback_mutex = xSemaphoreCreateMutex();
     }
-    latest_flow_feedback = *flow_feedback;
+    latest_imu_feedback = (imu_feedback_t){ .ready = devices->imu.ready };
+    latest_flow_feedback = devices->optical_flow.feedback;
     return feedback_mutex != NULL;
 }
 
@@ -70,6 +71,7 @@ void sensor_task(void *argument)
             }
         }
 
+        imu.ready = imu_device->ready;
         if (xSemaphoreTake(feedback_mutex, portMAX_DELAY) == pdTRUE) {
             latest_feedback = sample;
             latest_imu_feedback = imu;
