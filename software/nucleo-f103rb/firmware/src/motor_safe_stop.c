@@ -7,6 +7,7 @@
 #define RETURN_MIN_PROGRESS 12U
 #define RETURN_SETTLED_SAMPLES 3U
 #define RETURN_FEEDBACK_FAILURE_LIMIT 3U
+#define RETURN_FEEDBACK_MAX_AGE_MS 150U
 
 void motor_safe_stop_begin(motor_safe_stop_t *stop, uint32_t now, bool return_eligible)
 {
@@ -22,25 +23,20 @@ void motor_safe_stop_begin(motor_safe_stop_t *stop, uint32_t now, bool return_el
     }
 }
 
-static bool read_stop_feedback(
-    const motor_safe_stop_t *stop, uint32_t now, uint32_t max_feedback_age_ms,
-    motor_feedback_set_t *feedback, int16_t position[YERTLE_MOTOR_COUNT], bool *servo_fault)
+motor_feedback_status_t motor_feedback_status(const motor_feedback_set_t *feedback)
 {
-    imu_feedback_t imu;
-    if (!sensor_get_feedback_snapshot(feedback, &imu) || !feedback->sequence ||
-        feedback->sequence == stop->last_sequence ||
-        feedback->valid_mask != YERTLE_ALL_MOTORS_MASK ||
-        (max_feedback_age_ms && now - feedback->uptime_ms > max_feedback_age_ms)) {
-        return false;
+    if (!feedback->sequence || feedback->valid_mask != YERTLE_ALL_MOTORS_MASK) {
+        return MOTOR_FEEDBACK_INCOMPLETE;
     }
-    *servo_fault = false;
+    bool servo_error = false;
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
         const motor_feedback_t *motor = &feedback->motor[i];
-        if (!motor->valid || motor->position < 0 || motor->position > 4095) return false;
-        if (motor->servo_error) *servo_fault = true;
-        position[i] = motor->position;
+        if (!motor->valid || motor->position < 0 || motor->position > 4095) {
+            return MOTOR_FEEDBACK_INCOMPLETE;
+        }
+        if (motor->servo_error) servo_error = true;
     }
-    return true;
+    return servo_error ? MOTOR_FEEDBACK_SERVO_ERROR : MOTOR_FEEDBACK_VALID;
 }
 
 static motor_stop_outcome_t check_return_progress(
@@ -74,14 +70,19 @@ static motor_stop_outcome_t service_return(
 
     motor_feedback_set_t feedback;
     int16_t position[YERTLE_MOTOR_COUNT];
-    bool servo_fault = false;
-    const bool complete = read_stop_feedback(stop, now, ops->max_feedback_age_ms, &feedback,
-                                             position, &servo_fault);
-    if (complete && servo_fault) return MOTOR_STOP_FEEDBACK;
-
+    imu_feedback_t imu;
     motor_stop_outcome_t sample = MOTOR_STOP_FEEDBACK;
-    if (complete) {
-        sample = ops->prepare_feedback ? ops->prepare_feedback(mode, &feedback, position) : MOTOR_STOP_NONE;
+    if (sensor_get_feedback_snapshot(&feedback, &imu) &&
+        feedback.sequence != stop->last_sequence &&
+        now - feedback.uptime_ms <= RETURN_FEEDBACK_MAX_AGE_MS) {
+        const motor_feedback_status_t status = motor_feedback_status(&feedback);
+        if (status == MOTOR_FEEDBACK_SERVO_ERROR) return MOTOR_STOP_FEEDBACK;
+        if (status == MOTOR_FEEDBACK_VALID) {
+            for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+                position[i] = feedback.motor[i].position;
+            }
+            sample = ops->prepare_feedback ? ops->prepare_feedback(mode, &feedback, position) : MOTOR_STOP_NONE;
+        }
     }
     const uint32_t dt_ms = sample == MOTOR_STOP_NONE && stop->last_sequence
         ? feedback.uptime_ms - stop->last_stamp : RETURN_PERIOD_MS;
@@ -104,7 +105,7 @@ static motor_stop_outcome_t service_return(
     const motor_stop_outcome_t sent = ops->send_return(mode, position, dt_ms);
     if (sent == MOTOR_STOP_NONE) {
         stop->send_failures = 0U;
-    } else if (sent != MOTOR_STOP_TX || ++stop->send_failures >= ops->return_tx_failure_limit) {
+    } else if (sent != MOTOR_STOP_TX || ++stop->send_failures >= MOTOR_CONTROL_TX_FAILURE_LIMIT) {
         return sent;
     }
     return MOTOR_STOP_RETURNING;

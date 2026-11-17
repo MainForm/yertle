@@ -457,16 +457,18 @@ Return completion requires three consecutive fresh and complete samples with
 all motors within 16 steps of center. Each motor outside tolerance must
 improve its best error by at least 12 steps within 500 ms. The actuator advances
 to torque-off on a stall, three unusable feedback opportunities, a servo fault,
-the backend's transmission failure limit, or the 15 s total return limit. A
+three consecutive return transmission failures, or the 15 s return limit. A
 stop with an ineligible drive goes straight to torque-off. The actuator
 issues no explicit torque-ON command during a stop.
 
 The actuator transmits torque OFF and reads the torque register on all twelve
 motors. A failed write or missing/non-OFF readback keeps the stop pending and
 the actuator only retries OFF and verification. The PWM backend sends its
-final PWM zero once before this stage. On verified OFF the actuator calls
-`host_protocol_complete_safe_stop()`. The host must send a fresh target after
-the F103 re-enters ARMED.
+final PWM zero once before this stage. On verified OFF the actuator
+checks the physical motor mode, returns to READY when that check succeeds,
+and calls `host_protocol_complete_safe_stop()`. A fresh heartbeat and target
+are required for new motion. The v3 status still encodes position READY and
+ACTIVE as 1 for existing clients. PWM READY and ACTIVE are 3 and 4.
 
 The stop request is published before the DISARMED/FAULT state and its EVENT.
 The actuator also observes pending fault and timeout flags before the host
@@ -475,8 +477,9 @@ OR-combined per feedback cycle.
 
 Target and feedback messages are implemented as described above. IMU feedback
 is telemetry only; this version does not use it for actuator safety decisions.
-Current/voltage/load automatic limits are not enabled; their measurements are
-provided to the PC for host-side handling. No numeric unsafe threshold is added.
+Both backends validate motor feedback, including servo errors, voltage at or
+below 4.0 V or above 7.4 V, and three consecutive samples at or above 60 C.
+Current and load telemetry remain available for host-side policies.
 
 ## Persistent calibration capture capability (0x200)
 

@@ -6,7 +6,7 @@
 /* Exercise both production tasks and their shared safety gate. */
 #include "../../firmware/src/host_protocol.c"
 #include "../../firmware/src/actuator_task.c"
-#include "../../firmware/src/motor_control.c"
+#include "../../firmware/src/motor_safe_stop.h"
 
 static jmp_buf finished;
 static TickType_t tick, tx_elapsed, stop_at;
@@ -86,6 +86,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
     motor->sequence = tick / 20U + 1U; motor->uptime_ms = tick;
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
         motor->motor[i].valid = true;
+        motor->motor[i].voltage = 60U;
         motor->motor[i].position = (int16_t)(changing_feedback ? 2200U - tick / 100U * 12U : 2048U);
     }
     if (changing_feedback && !stalled_id) motor->motor[0].position = 2048;
@@ -113,30 +114,44 @@ static void reset(void)
     torque_on_calls = torque_off_calls = center_writes = 0U;
     rx_reads = tx_calls = delay_calls = 0U;
     rx_index = 0U; stalled_id = 0U; changing_feedback = invalid_feedback = false;
+    requested_motor_stop = false;
     motor_control_init();
+    motor_control_service();
+    assert(motor_control_position_ready());
+    torque_off_calls = 0U;
     uint8_t raw[YERTLE_PROTOCOL_MAX_RAW];
     const size_t size = make_request(raw, MESSAGE_GET_FSM_STATE, 0U);
     rx_wire[0] = 0U; rx_length = cobs_encode(raw, size, rx_wire + 1U) + 2U;
     rx_wire[rx_length - 1U] = 0U;
 }
+static motor_stop_outcome_t test_return_output(
+    const void *ctx, const int16_t position[YERTLE_MOTOR_COUNT], uint32_t elapsed)
+{
+    (void)ctx;
+    (void)position;
+    (void)elapsed;
+    ++center_writes;
+    return MOTOR_STOP_NONE;
+}
+static const motor_safe_stop_ops_t test_stop_ops = { .send_return = test_return_output };
+
 int main(void)
 {
     uint8_t raw[YERTLE_PROTOCOL_MAX_RAW];
-    motor_position_target_t saved_target;
     reset(); tick = 1500U;
     size_t size = make_request(raw, MESSAGE_SET_JOINT_TARGETS, YERTLE_MOTOR_COUNT * 5U);
     handle_frame(&context, raw, size);
-    assert(!motor_control_read_targets(&saved_target) && !context.host_connected && context.state == HOST_FSM_DISARMED);
+    assert(!context.host_connected && context.state == HOST_FSM_DISARMED);
 
     reset(); host_protocol_request_target_timeout();
     motor_target_set_t targets = { 0 }; targets.motor[0].position = 2200U;
     assert(!motor_control_submit_targets(&targets));
     handle_frame(&context, raw, size);
-    assert(!motor_control_read_targets(&saved_target) && context.state == HOST_FSM_DISARMED && host_protocol_is_stop_requested());
+    assert(context.state == HOST_FSM_DISARMED && host_protocol_is_stop_requested());
     reset(); host_protocol_latch_fault(HOST_FAULT_SERVO);
     assert(!motor_control_submit_targets(&targets));
     handle_frame(&context, raw, size);
-    assert(!motor_control_read_targets(&saved_target) && context.state == HOST_FSM_FAULT);
+    assert(context.state == HOST_FSM_FAULT);
 
     /* Actual actuator keeps torque on through center return on heartbeat expiry. */
     reset(); assert(motor_control_submit_targets(&targets));
@@ -162,10 +177,10 @@ int main(void)
         changing_feedback = true;
         motor_safe_stop_begin(&attempt, 0U, true);
         for (tick = 0U; tick <= 400U; tick += 100U) {
-            motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+            motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &test_stop_ops, NULL);
             assert(attempt.outcome == MOTOR_STOP_RETURNING);
         }
-        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &test_stop_ops, NULL);
         assert(attempt.outcome == MOTOR_STOP_STALLED && attempt.off_confirmed);
         assert(attempt.last_progress_ms[stalled_id - 1U] == 0U);
     }
@@ -174,12 +189,12 @@ int main(void)
     changing_feedback = true;
     motor_safe_stop_begin(&attempt, 0U, true);
     for (tick = 0U; tick <= 1000U; tick += 100U) {
-        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &test_stop_ops, NULL);
         assert(attempt.outcome == MOTOR_STOP_RETURNING);
     }
     reset(); invalid_feedback = true; tick = 100U;
     motor_safe_stop_begin(&attempt, 0U, true);
-    motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+    motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &test_stop_ops, NULL);
     assert(attempt.off_confirmed && center_writes == 0U);
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) assert(attempt.last_progress_ms[i] == 0U);
     puts("control safety: ordered stop, stale/pending target rejection, RX budgets and per-axis stall passed");

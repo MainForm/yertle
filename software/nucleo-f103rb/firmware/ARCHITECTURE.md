@@ -142,16 +142,17 @@ actuator request.
   the host task publishes the FSM transition. Timeout/fault handling publishes
   SAFE_STOP first, then changes the state and sends the UART event. The actuator
   observes these requests directly, avoiding a DISARMED/immediate-torque-off race.
-- A successful `actuator_submit_targets` enqueue stores an acceptance tick with
-  the target set. The 500 ms target watchdog uses that tick, not dequeue time.
-  Rejected/failed enqueues and repeated UART target writes do not refresh it.
-  An already-expired queued target is discarded before any motor write.
+- Both modes use the latest accepted command and the same 500 ms receipt-time
+  watchdog. Rejected packets and repeated motor writes do not refresh it.
+  Position, PID and direct PWM use the same feedback checks and stop on
+  three consecutive actuator transmission failures.
 - Position is restricted to 0..4095 steps and speed to 0..3400 raw.
 - A received target is written with one seven-byte-per-servo SYNC_WRITE frame:
   acceleration, position, running time (zero), and speed.
 - Torque stays disabled until a valid target exists. The target registers are
   written first, then torque is enabled, preventing an uncommanded jump to an
-  arbitrary startup target.
+  arbitrary startup target. Both modes enter `MOTOR_CONTROL_ACTIVE` after
+  the first successful goal and torque-ON writes.
 - Both modes use the actuator-owned stop sequence in `motor_safe_stop.c`.
   An eligible, already-driven robot gets one bounded return attempt to position
   2048. The position backend sends speed 200 and acceleration 10 (raw). The PWM
@@ -160,13 +161,15 @@ actuator request.
   must be within 16 steps for three consecutive samples before completing the
   return. A motor outside tolerance must improve its best error by 12 steps
   within 500 ms. Three consecutive unusable feedback opportunities, a servo
-  fault, the backend's TX limit, or the 15 s overall limit advance to torque-off.
+  fault, three consecutive TX failures, or the 15 s deadline advance to OFF.
 - Torque-off is sent and then read back on all twelve motors. Once in this
   stage, only OFF and its verification are retried until confirmed. The PWM
   backend sends its final zero once before those retries. Neither backend
   issues an explicit torque-ON command during a stop.
-- After verified OFF the actuator marks SAFE_STOP complete. The host task
-  clears a latched FAULT and requires a new heartbeat before re-arming.
+- After verified OFF and physical motor-mode revalidation, both modes return
+  to `MOTOR_CONTROL_READY`. Failed mode verification leaves the backend in
+  `MOTOR_CONTROL_FAILED` with torque OFF. The host requires a fresh heartbeat
+  and a fresh target before any new motion.
 
 ## Feedback behavior
 

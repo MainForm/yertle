@@ -7,4 +7,6 @@ typedef int BaseType_t;
 #define pdPASS 1
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 #define portTICK_PERIOD_MS 1U
+#define taskENTER_CRITICAL() ((void)0)
+#define taskEXIT_CRITICAL() ((void)0)
 #endif

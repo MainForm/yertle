@@ -75,7 +75,7 @@ static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,backend};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,epoch);
  receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
  receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
- assert(pwm_control_service());service_pwm(c);assert(!c->pwm_mode_pending&&!pwm_control_can_arm());
+ motor_control_service();service_pwm(c);assert(!c->pwm_mode_pending&&!motor_control_can_arm());
  for(uint8_t id=1;id<=12;++id){
   const uint8_t q[5]={id,0x21,1,1,backend==YPWM_PID?2:0};
   receive(c,MESSAGE_SET_MOTOR_REGISTER,q,5);assert(c->register_job_active);
@@ -83,7 +83,7 @@ static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  }
  mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
  receive(c,MESSAGE_HEARTBEAT,NULL,0);assert(c->lease_established);
- assert(pwm_control_service());try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
+ motor_control_service();try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
  service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established&&torque_mask==0);
  try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
 }
@@ -94,15 +94,15 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
 int main(void){
  seed_calibration();mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
- motor_control_init();assert(pwm_control_service());assert(motor_control_position_ready());
+ motor_control_init();motor_control_service();assert(motor_control_position_ready());
  /* Slow DISARMED configuration may outlive5s, but never ARM. A silent
     configuration still disconnects/rolls back at its own bounded20s window. */
  uint8_t slow[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(slow+3,YPWM_ALL_MASK);ypwm_put32(slow+5,118);
- receive(&c,MESSAGE_SET_CONTROL_MODE,slow,9);assert(pwm_control_service());service_pwm(&c);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,slow,9);motor_control_service();service_pwm(&c);
  tick+=6000;expire_host_link(&c);try_enter_control_ready(&c);
- assert(c.host_connected&&c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm()&&on_count==0&&native_writes==0);
+ assert(c.host_connected&&c.state==HOST_FSM_DISARMED&&!motor_control_can_arm()&&on_count==0&&native_writes==0);
  tick+=YPWM_PREPARATION_LINK_TIMEOUT_MS;expire_host_link(&c);assert(!c.host_connected);
- service_safety_state(&c);assert(pwm_control_service());service_safety_state(&c);
+ service_safety_state(&c);motor_control_service();service_safety_state(&c);
  receive(&c,MESSAGE_HELLO,NULL,0);assert(c.host_connected);
  uint8_t legacy[8]={2,1};receive(&c,MESSAGE_SET_CONTROL_MODE,legacy,8);assert(last_result==MESSAGE_NACK&&!c.pwm_mode_pending);
  const uint8_t forbidden[5]={1,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,forbidden,5);assert(last_result==MESSAGE_NACK);
@@ -111,9 +111,9 @@ int main(void){
  configure(&c,YPWM_PID,120);
  for(unsigned i=0;i<12;++i){tick+=250;receive(&c,MESSAGE_GET_SENSOR_FEEDBACK,NULL,0);
   try_enter_control_ready(&c);assert(c.host_connected&&!c.lease_established&&c.state==HOST_FSM_DISARMED);
-  assert(pwm_control_service());assert(on_count==0&&native_writes==0&&pwm_control_can_arm());}
+  motor_control_service();assert(on_count==0&&native_writes==0&&motor_control_can_arm());}
  /* Losing the monitoring link before H still restores the previous setting. */
- tick+=1001;expire_host_link(&c);assert(!c.host_connected);service_safety_state(&c);assert(pwm_control_service());service_safety_state(&c);
+ tick+=1001;expire_host_link(&c);assert(!c.host_connected);service_safety_state(&c);motor_control_service();service_safety_state(&c);
  for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
  receive(&c,MESSAGE_HELLO,NULL,0);assert(c.host_connected);
  transition(&c,YPWM_PID,123);
@@ -128,18 +128,15 @@ int main(void){
   assert(duty[i]*expected[i]>0&&duty[i]>=-YPWM_DUTY_LIMIT&&duty[i]<=YPWM_DUTY_LIMIT);}
  /* Malformed 0x0F is rejected; ordinary target/heartbeat watchdog stops PID. */
  receive(&c,0x0f,NULL,0);assert(last_result==MESSAGE_NACK);
- tick+=501;assert(pwm_control_service());service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
- for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
+ tick+=501;motor_control_service();service_safety_state(&c);assert(c.state==HOST_FSM_DISARMED);
+ for(unsigned a=0;a<4;++a){tick+=20;motor_control_service();service_safety_state(&c);}
  assert(!host_protocol_is_stop_requested());
  for(unsigned i=0;i<12;++i)assert(duty[i]==0);
- /* A new connection after a completed runtime stop must revalidate the
-    persisted selection without EEPROM writes or energizing the motor. */
- assert(!pwm_control_can_arm());
+ /* A completed runtime stop already reverified the motor mode. */
+ assert(motor_control_can_arm());
  const unsigned recover_programs=mode_memory_programs,recover_on=on_count;
  set_host_connected(&c,false);receive(&c,MESSAGE_HELLO,NULL,0);
- try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
- assert(pwm_control_service()&&!pwm_control_can_arm()); /* request -> unverified */
- assert(pwm_control_service()&&pwm_control_can_arm()); /* OFF/mode/PWM0/OFF */
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&motor_control_can_arm());
  uint8_t resumed[YPWM_STATUS_LENGTH];assert(pwm_control_status(resumed,true));
  assert(resumed[7]==YPWM_REASON_NONE); /* PC beginConfiguredControl requires this */
  assert(!torque_mask&&on_count==recover_on&&mode_memory_programs==recover_programs);
@@ -148,16 +145,15 @@ int main(void){
  assert(on_count==recover_on); /* no torque until an explicit new target */
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);motor_control_service();
  assert(on_count==recover_on+1);
- tick+=501;assert(pwm_control_service());service_safety_state(&c);
- /* HELLO during STOPPING is remembered, but cannot ARM or skip OFF. */
+ tick+=501;motor_control_service();service_safety_state(&c);
+ /* HELLO during STOPPING cannot ARM or skip OFF. */
  set_host_connected(&c,false);receive(&c,MESSAGE_HELLO,NULL,0);
- try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
- for(unsigned a=0;a<4;++a){tick+=20;assert(pwm_control_service());service_safety_state(&c);}
- assert(!host_protocol_is_stop_requested());
- /* Physical mode mismatch on reconnect must stay FAILED and torque OFF. */
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!motor_control_can_arm());
+ /* A physical mode mismatch during stop completion keeps torque OFF. */
  servo_modes[3]=0;
- assert(pwm_control_service()&&pwm_control_service());
- assert(!pwm_control_can_arm()&&!torque_mask&&on_count==recover_on+1);
+ for(unsigned a=0;a<4;++a){tick+=20;motor_control_service();service_safety_state(&c);}
+ assert(!host_protocol_is_stop_requested());
+ assert(!motor_control_can_arm()&&!torque_mask&&on_count==recover_on+1);
  servo_modes[3]=2;
  transition(&c,YPWM_POSITION,124);assert(motor_control_position_ready());
  uint8_t position_status[YPWM_STATUS_LENGTH];
@@ -172,21 +168,23 @@ int main(void){
  assert(native_writes==1&&native_target.motor[0].position==2100&&
         native_target.motor[0].speed==600&&native_target.motor[0].acceleration==25);
  published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;
- motor_control_service();assert(!torque_mask);
+ for(unsigned a=0;a<4;++a){tick+=20;motor_control_service();service_safety_state(&c);}
+ assert(!torque_mask&&motor_control_position_ready());
+ const unsigned native_writes_at_stop=native_writes;
  receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED);
- motor_control_service();assert(native_writes==1&&!torque_mask); /* no stale goal after re-arm */
+ motor_control_service();assert(native_writes==native_writes_at_stop&&!torque_mask); /* no stale goal after re-arm */
  published_state=HOST_FSM_DISARMED;c.state=HOST_FSM_DISARMED;mode_fail_id=2;
  uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,125);
- receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(pwm_control_service());service_pwm(&c);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);motor_control_service();service_pwm(&c);
  const uint8_t q[5]={2,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,q,5);service_motor_register_write(&c);
  assert(last_result==MESSAGE_NACK&&last_error==15&&write_diag_order<result_order);
  uint8_t failure_detail[64],write_detail[64];bool has_write;
  assert(pwm_control_mode_diagnostics(failure_detail,write_detail,&has_write,false));
  assert(failure_detail[3]==YPWM_DIAG_MODE_TRANSACTION&&failure_detail[7]==2&&failure_detail[6]==YPWM_MODE_FAILED);
- assert(pwm_control_service());try_enter_control_ready(&c);assert(!pwm_control_can_arm()&&c.state==HOST_FSM_DISARMED);
+ motor_control_service();try_enter_control_ready(&c);assert(!motor_control_can_arm()&&c.state==HOST_FSM_DISARMED);
  /* Transient 0x0D failures wait safely for the PC's explicit CANCEL/retry. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
- assert(pwm_control_service());service_pwm(&c);assert(!pwm_control_can_arm());
+ motor_control_service();service_pwm(&c);assert(!motor_control_can_arm());
  assert(last_diag[3]==YPWM_DIAG_ROLLBACK&&last_diag[6]==0&&ypwm_u16(last_diag+16)==YPWM_ALL_MASK);
  /* Same-epoch CANCEL confirms already completed requested rollback. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);service_pwm(&c);
@@ -195,40 +193,40 @@ int main(void){
     start a verified new session without a fresh mode/EEPROM transaction. */
  const mode_setting_t saved={YPWM_PID,YPWM_ALL_MASK};assert(mode_store_save(&saved));
  for(unsigned i=0;i<12;++i)servo_modes[i]=2;
- const unsigned before_program=mode_memory_programs,before_on=on_count;
+ const unsigned before_program=mode_memory_programs,before_on=on_count,before_native=native_writes;
  /* Boot ordering: actuator can run before host init; boot OFF must finish
     before verification grants READY and HELLO + heartbeat can arm. */
  memset(&c,0,sizeof c);c.state=HOST_FSM_BOOT;published_state=HOST_FSM_BOOT;
- pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
- pwm_control_init();assert(pwm_control_service()&&!pwm_control_can_arm());
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
+ motor_control_init();motor_control_service(); assert(!motor_control_can_arm());
  request_safe_stop();transition_state(&c,HOST_FSM_DISARMED,STATE_CAUSE_BOOT_COMPLETE,false);
- boot_off_ok=false;assert(pwm_control_service()&&!pwm_control_can_arm());service_safety_state(&c);
+ boot_off_ok=false;motor_control_service(); assert(!motor_control_can_arm());service_safety_state(&c);
  assert(host_protocol_is_stop_requested()); /* no readiness on failed OFF */
- boot_off_ok=true;assert(pwm_control_service()&&!pwm_control_can_arm());service_safety_state(&c);
- assert(!host_protocol_is_stop_requested());assert(pwm_control_service()&&pwm_control_can_arm());
+ boot_off_ok=true;motor_control_service(); assert(!motor_control_can_arm());service_safety_state(&c);
+ assert(!host_protocol_is_stop_requested());motor_control_service(); assert(motor_control_can_arm());
  receive(&c,MESSAGE_HELLO,NULL,0);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);
  assert(c.state==HOST_FSM_ARMED); /* no F5 and no auto torque */
  memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
- pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
- pwm_control_init();receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED);
- assert(pwm_control_service());receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
+ motor_control_init();receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED);
+ motor_control_service();receive(&c,MESSAGE_HELLO,NULL,0);try_enter_control_ready(&c);
  assert(c.state==HOST_FSM_DISARMED&&on_count==before_on&&mode_memory_programs==before_program);
  receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);assert(c.state==HOST_FSM_ARMED&&on_count==before_on);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK);motor_control_service();
- assert(on_count==before_on+1&&native_writes==1&&mode_memory_programs==before_program);
+ assert(on_count==before_on+1&&native_writes==before_native&&mode_memory_programs==before_program);
  /* Flash read failure at first boot has its own NACK, with no adopted epoch. */
  memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
- pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_pwm_stop=false;
- mode_memory_read_ok=false;pwm_control_init();receive(&c,MESSAGE_HELLO,NULL,0);
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
+ mode_memory_read_ok=false;motor_control_init();receive(&c,MESSAGE_HELLO,NULL,0);
  mode[1]=YPWM_PREPARE;ypwm_put32(mode+5,456);
  receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
  assert(last_result==MESSAGE_NACK&&last_error==YPWM_FLASH_READ_FAILED&&!c.pwm_mode_pending);
  uint8_t boot_status[YPWM_STATUS_LENGTH];assert(pwm_control_status(boot_status,true));
  assert(boot_status[6]==YPWM_FLASH_READ_FAILED&&boot_status[7]==YPWM_REASON_FLASH_READ&&ypwm_u32(boot_status+8)==0);
- try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!pwm_control_can_arm());
- mode_memory_read_ok=true;pwm_control_init();assert(pwm_control_status(boot_status,true)&&boot_status[6]==0&&ypwm_u32(boot_status+8)==0);
+ try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!motor_control_can_arm());
+ mode_memory_read_ok=true;motor_control_init();assert(pwm_control_status(boot_status,true)&&boot_status[6]==0&&ypwm_u32(boot_status+8)==0);
  /* Wrong backend rejects a complete PWM frame, even while DISARMED. */
- mode_memory_reset();pwm_control_init();c.host_connected=true;c.pwm_mode_pending=false;
+ mode_memory_reset();motor_control_init();c.host_connected=true;c.pwm_mode_pending=false;
  uint8_t raw_pwm[YPWM_DIRECT_LENGTH]={0};
  receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
  assert(last_result==MESSAGE_NACK&&last_error==YPWM_PWM_MODE_REQUIRED);
@@ -238,7 +236,7 @@ int main(void){
  assert(c.state==HOST_FSM_ARMED);
  ypwm_put16(raw_pwm,(uint16_t)(int16_t)-777);ypwm_put16(raw_pwm+2,713);
  receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
- assert(pwm_control_service());service_pwm(&c);
+ motor_control_service();service_pwm(&c);
  assert(last_result==MESSAGE_ACK&&last_error==0&&duty[0]==-777&&duty[1]==713);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);assert(last_result==MESSAGE_ACK);motor_control_service();
  assert(duty[0]!=-777); /* existing position->PID route resumes */

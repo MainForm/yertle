@@ -3,10 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "sensor_task.h"
+#include "host_protocol.h"
 
 /* Real actuator loop and native-position service; mocked scheduling and I/O. */
 #include "../../firmware/src/actuator_task.c"
-#include "../../firmware/src/motor_control.c"
 
 static jmp_buf finished;
 static TickType_t tick;
@@ -36,9 +36,11 @@ host_fsm_state_t host_protocol_get_state(void)
 bool host_protocol_is_armed(void) { return armed; }
 bool host_protocol_is_stop_requested(void) { return false; }
 void host_protocol_complete_safe_stop(void) { assert(false); }
-void host_protocol_latch_fault(host_fault_reason_t reason)
-{ (void)reason; assert(false); }
+void host_protocol_request_motor_stop(void) { assert(false); }
+void host_protocol_latch_fault(host_fault_reason_t reason) { (void)reason; assert(false); }
 void host_protocol_request_target_timeout(void) { longjmp(finished, 1); }
+uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
+
 bool motor_device_validate_targets(const motor_target_set_t *value)
 { return value != NULL && valid_targets; }
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *value)
@@ -50,9 +52,21 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *value
 motor_device_status_t motor_device_set_torque(bool enabled)
 { if (enabled) ++torque_on_calls; return MOTOR_DEVICE_OK; }
 bool motor_device_verify_torque_off(uint16_t *unknown)
-{ (void)unknown; assert(false); return false; }
+{ *unknown = 0U; return true; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
-{ (void)motor; (void)imu; return false; }
+{
+    memset(motor, 0, sizeof(*motor));
+    memset(imu, 0, sizeof(*imu));
+    motor->sequence = tick / 20U + 1U;
+    motor->uptime_ms = tick;
+    motor->valid_mask = YERTLE_ALL_MOTORS_MASK;
+    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+        motor->motor[i].valid = true;
+        motor->motor[i].position = 2048;
+        motor->motor[i].voltage = 60U;
+    }
+    return true;
+}
 
 static void reset(void)
 {
@@ -64,9 +78,9 @@ static void reset(void)
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i)
         targets.motor[i].position = 2200U;
     motor_control_init();
+    motor_control_service();
+    assert(motor_control_position_ready());
     assert(motor_control_submit_targets(&targets));
-    motor_position_target_t saved_target;
-    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 }
 static void run_until_timeout(TickType_t start, TickType_t expected)
 {
@@ -77,7 +91,6 @@ static void run_until_timeout(TickType_t start, TickType_t expected)
 
 int main(void)
 {
-    motor_position_target_t saved_target;
     reset();
     run_until_timeout(400U, 600U);
     assert(writes == 20U); /* Deadline stays at reception+500, not first service+500. */
@@ -90,7 +103,6 @@ int main(void)
     inject_target = true;
     inject_at = 590U;
     run_until_timeout(400U, 1090U);
-    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 590U);
 
     reset();
     tick = 350U;
@@ -102,13 +114,11 @@ int main(void)
     inject_at = 590U;
     valid_targets = false;
     run_until_timeout(400U, 600U);
-    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 
     reset();
     armed = false;
     tick = 590U;
     assert(!motor_control_submit_targets(&targets));
-    assert(motor_control_read_targets(&saved_target) && saved_target.accepted_ms == 100U);
 
     reset();
     tick = UINT32_MAX - 199U;

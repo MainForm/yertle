@@ -5,6 +5,7 @@
 
 #define MOTOR_STOP_CENTER 2048
 #define MOTOR_STOP_TOLERANCE 16
+#define MOTOR_CONTROL_TX_FAILURE_LIMIT 3U
 
 /* Outcome values 1–10 are part of the PWM stop-detail event. */
 typedef enum {
@@ -31,6 +32,14 @@ typedef struct {
     bool feedback_paused, off_started, off_confirmed;
 } motor_safe_stop_t;
 
+typedef enum {
+    MOTOR_FEEDBACK_VALID,
+    MOTOR_FEEDBACK_INCOMPLETE,
+    MOTOR_FEEDBACK_SERVO_ERROR
+} motor_feedback_status_t;
+
+motor_feedback_status_t motor_feedback_status(const motor_feedback_set_t *feedback);
+
 typedef struct {
     /* Return NONE on success, FEEDBACK for a retryable unusable sample. */
     motor_stop_outcome_t (*prepare_feedback)(const void *mode, const motor_feedback_set_t *feedback,
@@ -39,8 +48,6 @@ typedef struct {
                                       uint32_t dt_ms);
     bool (*pause_return)(const void *mode);
     void (*before_off)(const void *mode);
-    uint32_t max_feedback_age_ms; /* Zero leaves the age check disabled. */
-    uint8_t return_tx_failure_limit;
 } motor_safe_stop_ops_t;
 
 void motor_safe_stop_begin(motor_safe_stop_t *stop, uint32_t now, bool return_eligible);

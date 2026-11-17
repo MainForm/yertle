@@ -21,7 +21,7 @@ else()
 endif()
 add_test(NAME firmware_dma_test COMMAND firmware_dma_test)
 add_executable(firmware_safe_stop_test ../safe_stop/actuator_safe_stop_test.c
-    ../../firmware/src/actuator_task.c ../../firmware/src/motor_control.c)
+    ../../firmware/src/actuator_task.c)
 target_include_directories(firmware_safe_stop_test PRIVATE ../safe_stop ../../firmware/include)
 if(MSVC)
     target_compile_options(firmware_safe_stop_test PRIVATE /W4 /WX /UNDEBUG)
@@ -113,7 +113,12 @@ add_test(NAME firmware_pwm_driver_test COMMAND firmware_pwm_driver_test)
 
 foreach(native firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test)
  target_compile_definitions(${native} PRIVATE NATIVE_POSITION_TEST=1)
- target_sources(${native} PRIVATE ../../firmware/src/motor_safe_stop.c)
+ target_sources(${native} PRIVATE ../../firmware/src/motor_safe_stop.c
+    ../../firmware/src/motor_control_state.c ../../firmware/src/position_pid.c
+    ../safe_stop/position_driver_stubs.c)
+ if(NOT MSVC)
+   target_link_libraries(${native} PRIVATE m)
+ endif()
 endforeach()
 
 foreach(legacy firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test

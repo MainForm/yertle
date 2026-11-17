@@ -35,8 +35,8 @@ void host_protocol_task(void *argument);
 void host_protocol_complete_safe_stop(void);
 void host_protocol_latch_fault(host_fault_reason_t reason);
 void host_protocol_request_target_timeout(void);
-/* Enter SAFE_STOP after a PWM release or fault and report the PWM FSM cause. */
-void host_protocol_request_pwm_stop(void);
+/* Enter SAFE_STOP after a motor-control stop request. */
+void host_protocol_request_motor_stop(void);
 host_fsm_state_t host_protocol_get_state(void);
 bool host_protocol_is_armed(void);
 /* Includes pending fault/timeout requests before the FSM publishes a state.

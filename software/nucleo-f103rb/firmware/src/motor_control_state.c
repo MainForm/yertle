@@ -1,6 +1,5 @@
 #include "pwm_control.h"
 #include "motor_control.h"
-#include "motor_control_state.h"
 #include "motor_safe_stop.h"
 #include "position_pid.h"
 #include "mode_store.h"
@@ -12,16 +11,20 @@
 #include <string.h>
 #include "register_write_diagnostics.h"
 typedef struct {
+    motor_target_set_t targets;
+    uint32_t accepted_ms;
+} motor_position_target_t;
+
+typedef struct {
     uint8_t backend,phase,reason,result,operation,mode_write_id;
     uint16_t mask,verified,unknown,torque,request,feedback_age;
     uint32_t epoch,retired_epoch,command_count,raw_accepted_ms,status_ms,started_ms;
     motor_position_target_t position_target;
     int16_t sent[12];
     int16_t raw[12];uint16_t raw_request;uint8_t raw_result;
-    bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart,return_eligible;
+    bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart;
     bool result_pending,arm_allowed,dirty,ever_command,mode_busy,transaction_pending,snapshot_valid,rollback_failed;
-    bool preference_touched,boot_restored,flash_read_failed;
-    bool reconnect_stop_recoverable,reconnect_recovery_requested;
+    bool preference_touched,flash_read_failed;
 } control_context;
 static control_context p;
 static motor_mode_snapshot_t previous_modes;
@@ -32,6 +35,7 @@ static bool mode_detail_valid,mode_detail_pending,mode_detail_has_write,rollback
 /* These numerical states belong exclusively to the actuator task. */
 static position_pid_t axes[12];
 static uint32_t last_sample,last_feedback_ms;
+static uint8_t tx_failures;
 /* Actuator-owned: one snapshot cannot count as several hot samples. */
 static uint32_t thermal_sequence;
 static uint8_t hot_samples[12];
@@ -44,13 +48,13 @@ static bool return_reference_ready;
  * Existing EVENT envelope, no new command message or motor transaction. */
 static uint8_t stop_detail[20];static bool stop_detail_pending;
 static uint32_t stop_detail_ms;
-static void publish_stop(const control_context *s,uint32_t now,bool force){
+static void publish_stop(uint8_t reason,uint16_t torque,uint16_t unknown,uint32_t now,bool force){
     if(!force&&now-stop_detail_ms<200U)return;
     taskENTER_CRITICAL();stop_detail_ms=now;
-    stop_detail[0]=9;stop_detail[1]=1;stop_detail[2]=(uint8_t)returning.outcome;stop_detail[3]=s->reason;
+    stop_detail[0]=9;stop_detail[1]=1;stop_detail[2]=(uint8_t)returning.outcome;stop_detail[3]=reason;
     ypwm_put32(stop_detail+4,now);ypwm_put32(stop_detail+8,now-returning.started_ms);
     ypwm_put16(stop_detail+12,returning.max_error);stop_detail[14]=returning.settled;stop_detail[15]=0;
-    ypwm_put16(stop_detail+16,s->torque);ypwm_put16(stop_detail+18,s->unknown);stop_detail_pending=true;
+    ypwm_put16(stop_detail+16,torque);ypwm_put16(stop_detail+18,unknown);stop_detail_pending=true;
     taskEXIT_CRITICAL();
 }
 bool pwm_control_stop_detail(uint8_t b[20]){
@@ -59,13 +63,13 @@ bool pwm_control_stop_detail(uint8_t b[20]){
     taskEXIT_CRITICAL();return available;
 }
 static bool temperature_trip(const motor_feedback_set_t *f){
-    if(f->sequence==thermal_sequence)return false;
-    if(!thermal_sequence||f->sequence-thermal_sequence!=1U)memset(hot_samples,0,sizeof hot_samples);
-    thermal_sequence=f->sequence;
+    const bool new_sample = f->sequence != thermal_sequence;
+    if (new_sample && (!thermal_sequence || f->sequence - thermal_sequence != 1U)) memset(hot_samples, 0, sizeof hot_samples);
+    thermal_sequence = f->sequence;
     bool trip=false;
     for(unsigned i=0;i<12;++i){
         if(f->motor[i].temperature<60U)hot_samples[i]=0;
-        else if(hot_samples[i]<3U)++hot_samples[i];
+        else if(new_sample && hot_samples[i]<3U)++hot_samples[i];
         if(hot_samples[i]>=3U)trip=true;
     }
     return trip;
@@ -120,37 +124,36 @@ bool pwm_control_pid_stats(uint8_t b[YPWM_PID_STATS_LENGTH]){
 
 static control_context snapshot(void){control_context s;taskENTER_CRITICAL();s=p;taskEXIT_CRITICAL();return s;}
 /* Output guards must not copy the goal/PWM arrays onto nested task stacks. */
-static bool pid_current(uint8_t phase){
-    taskENTER_CRITICAL();const bool ok=p.phase==phase&&!p.direct;taskEXIT_CRITICAL();return ok;
-}
 static bool raw_current(uint8_t phase,uint16_t request){
     taskENTER_CRITICAL();const bool ok=p.phase==phase&&p.raw_pending&&p.raw_request==request;taskEXIT_CRITICAL();return ok;
 }
 static bool phase_current(uint8_t phase){
     taskENTER_CRITICAL();const bool ok=p.phase==phase;taskEXIT_CRITICAL();return ok;
 }
-void pwm_control_init(void){
+void motor_control_init(void){
     mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
-    memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
+    memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;tx_failures=0U;
     thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     memset(&returning,0,sizeof returning);stop_detail_pending=false;stop_detail_ms=0;
     trace_pending=trace_draining=false;trace_chunk=0;
     trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
-    p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?MOTOR_CONTROL_FAILED:MOTOR_CONTROL_UNVERIFIED;
+    p.phase=stored==MODE_STORE_READ_ERROR?MOTOR_CONTROL_FAILED:MOTOR_CONTROL_UNVERIFIED;
     p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
     if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
     p.dirty=true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;taskEXIT_CRITICAL();
 }
-void pwm_control_on_armed(void){
+void motor_control_on_armed(void)
+{
     taskENTER_CRITICAL();
-    if(p.phase==MOTOR_CONTROL_READY){
-        if(p.backend==YPWM_POSITION)p.ever_command=false;
-        p.snapshot_valid=false;p.boot_restored=false;
+    if (p.phase == MOTOR_CONTROL_READY) {
+        p.ever_command = false;
+        p.snapshot_valid = false;
     }
     taskEXIT_CRITICAL();
 }
+
 bool motor_control_position_ready(void)
 {
     taskENTER_CRITICAL();
@@ -158,12 +161,11 @@ bool motor_control_position_ready(void)
     taskEXIT_CRITICAL();
     return ready;
 }
+
 /* Caller holds the critical section. */
 static bool accepts_targets(void)
 {
-    return (p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY) ||
-           (p.backend == YPWM_PID && p.arm_allowed &&
-            (p.phase == MOTOR_CONTROL_READY || p.phase == MOTOR_CONTROL_ACTIVE));
+    return p.arm_allowed && (p.phase == MOTOR_CONTROL_READY || p.phase == MOTOR_CONTROL_ACTIVE);
 }
 
 bool motor_control_accepts_targets(void)
@@ -174,75 +176,66 @@ bool motor_control_accepts_targets(void)
     return accepted;
 }
 
-bool motor_control_read_targets(motor_position_target_t *target)
-{
-    taskENTER_CRITICAL();
-    const bool available = p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY && p.ever_command;
-    if (available) *target = p.position_target;
-    taskEXIT_CRITICAL();
-    return available;
-}
-
-void motor_control_discard_targets(void)
-{
-    taskENTER_CRITICAL();
-    if (p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY &&
-        (!host_protocol_is_armed() || host_protocol_is_stop_requested())) p.ever_command = false;
-    taskEXIT_CRITICAL();
-}
-
 static bool calibration_ready(uint16_t mask){
     uint16_t raw;int16_t steps;
     for(unsigned i=0;i<12;++i)if((mask&(1U<<i))&&!calibration_cache_get((uint8_t)(i+1U),&raw,&steps))return false;
     return true;
 }
-bool pwm_control_can_arm(void){const control_context s=snapshot();return
-    s.phase==MOTOR_CONTROL_READY&&(s.backend==YPWM_POSITION||
-    (s.backend==YPWM_PID&&s.arm_allowed&&calibration_ready(s.mask)));}
-static bool transitioning(uint8_t phase){return phase==MOTOR_CONTROL_PREPARING||phase==MOTOR_CONTROL_STAGED||phase==MOTOR_CONTROL_ROLLING_BACK;}
-void pwm_control_stop(uint8_t reason){
-    taskENTER_CRITICAL();
-    if(p.raw_pending){p.raw_pending=false;p.raw_result_pending=true;p.raw_result=YPWM_INVALID_STATE;}
-    if(p.rollback_failed){
-        /* OFF/release must retain the original epoch and recovery snapshot. */
-        p.arm_allowed=false;p.dirty=true;
-    }else if(transitioning(p.phase)){
-        p.phase=MOTOR_CONTROL_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
-    }else if(p.phase!=MOTOR_CONTROL_STOPPING){
-        p.reconnect_stop_recoverable=p.backend==YPWM_PID&&
-            (p.phase==MOTOR_CONTROL_READY||p.phase==MOTOR_CONTROL_ACTIVE)&&
-            (p.verified&p.mask)==p.mask&&ypwm_mask(p.mask);
-        p.reconnect_recovery_requested=false;
-        p.phase=MOTOR_CONTROL_STOPPING;p.reason=reason;p.arm_allowed=false;
-        if(p.epoch)p.retired_epoch=p.epoch;
-        p.epoch=0;p.dirty=true;
-        if(p.result_pending){p.result=YPWM_INVALID_STATE;}
-    }
-    taskEXIT_CRITICAL();host_protocol_request_pwm_stop();
+bool motor_control_can_arm(void)
+{
+    const control_context s = snapshot();
+    return s.phase == MOTOR_CONTROL_READY && s.arm_allowed && !s.unknown &&
+        (s.backend == YPWM_POSITION || calibration_ready(s.mask));
 }
-void pwm_control_reconnect_recover(void){
+static bool transitioning(uint8_t phase){return phase==MOTOR_CONTROL_PREPARING||phase==MOTOR_CONTROL_STAGED||phase==MOTOR_CONTROL_ROLLING_BACK;}
+static void begin_stop(uint8_t reason)
+{
     taskENTER_CRITICAL();
-    if((p.phase==MOTOR_CONTROL_STOPPING||p.phase==MOTOR_CONTROL_FAILED)&&
-       p.reconnect_stop_recoverable&&!p.rollback_failed&&!p.flash_read_failed)
-        p.reconnect_recovery_requested=true;
+    if (p.raw_pending) {
+        p.raw_pending = false;
+        p.raw_result_pending = true;
+        p.raw_result = YPWM_INVALID_STATE;
+    }
+    p.arm_allowed = false;
+    if (p.rollback_failed) {
+        /* Retain the transaction and its snapshot for another CANCEL. */
+    } else if (transitioning(p.phase)) {
+        p.phase = MOTOR_CONTROL_ROLLING_BACK;
+        p.reason = reason;
+        p.result = YPWM_INVALID_STATE;
+    } else if (p.phase != MOTOR_CONTROL_STOPPING) {
+        p.phase = MOTOR_CONTROL_STOPPING;
+        p.reason = reason;
+        if (p.epoch) p.retired_epoch = p.epoch;
+        p.epoch = 0U;
+        p.ever_command = false;
+        p.direct = p.raw_preview = p.pid_restart = false;
+        if (p.result_pending) p.result = YPWM_INVALID_STATE;
+    }
+    p.dirty = true;
     taskEXIT_CRITICAL();
 }
-void pwm_control_connection_reset(void){const control_context s=snapshot();
-    /* A restored preference is NOT a restored lease. An initial HELLO may
-       establish a new session after boot OFF/mode verification, without any
-       EEPROM writes. Once ARMED, the ordinary stop/reprepare rules apply. */
-    if(s.boot_restored&&!s.epoch&&!s.ever_command&&
-       s.phase==MOTOR_CONTROL_READY)return;
-    /* User-approved: retain rollback only until the first real ARMED state.
-       This also covers a successfully committed mode whose ACK was lost. */
-    if(s.snapshot_valid&&s.phase==MOTOR_CONTROL_READY&&!host_protocol_is_armed()){
-        taskENTER_CRITICAL();if(p.epoch==s.epoch){p.phase=MOTOR_CONTROL_ROLLING_BACK;p.arm_allowed=false;p.dirty=true;}taskEXIT_CRITICAL();
-        pwm_control_stop(YPWM_REASON_LINK);return;
-    }
-    if(transitioning(s.phase)||(s.backend==YPWM_PID&&
-        (s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE||(s.phase==MOTOR_CONTROL_FAILED&&s.unknown))))
-        pwm_control_stop(YPWM_REASON_LINK);
+
+void motor_control_stop(uint8_t reason)
+{
+    begin_stop(reason);
+    host_protocol_request_motor_stop();
 }
+
+void motor_control_connection_reset(void)
+{
+    const control_context s = snapshot();
+    if (s.snapshot_valid && s.phase == MOTOR_CONTROL_READY && !host_protocol_is_armed()) {
+        taskENTER_CRITICAL();
+        if (p.epoch == s.epoch && p.phase == s.phase) p.phase = MOTOR_CONTROL_ROLLING_BACK;
+        taskEXIT_CRITICAL();
+        motor_control_stop(YPWM_REASON_LINK);
+    } else if (transitioning(s.phase) || s.phase == MOTOR_CONTROL_ACTIVE ||
+               (s.phase == MOTOR_CONTROL_READY && (host_protocol_is_armed() || s.unknown))) {
+        motor_control_stop(YPWM_REASON_LINK);
+    }
+}
+
 uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence){
     ypwm_mode_request r;if(!ypwm_decode_mode(bytes,n,&r))return YPWM_INVALID_PAYLOAD;
     if(host_protocol_get_state()!=HOST_FSM_DISARMED)return YPWM_INVALID_STATE;
@@ -269,8 +262,8 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
        p.result_pending||p.mode_busy||p.raw_pending||p.raw_result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.epoch==p.epoch||r.epoch==p.retired_epoch){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
     p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=MOTOR_CONTROL_PREPARING;p.operation=YPWM_PREPARE;
-    p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;p.return_eligible=false;
-    p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;p.boot_restored=false;
+    p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;
+    p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;
     p.direct=p.raw_preview=p.pid_restart=false;
     memset(&p.position_target,0,sizeof p.position_target);memset(p.sent,0,sizeof p.sent);p.dirty=true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;
@@ -366,10 +359,8 @@ bool motor_control_submit_targets(const motor_target_set_t *targets)
     p.position_target.targets = *targets;
     p.position_target.accepted_ms = milliseconds();
     p.ever_command = true;
-    if (p.backend == YPWM_PID) {
-        ++p.command_count;
-        p.dirty = true;
-    }
+    ++p.command_count;
+    p.dirty = true;
     taskEXIT_CRITICAL();
     return true;
 }
@@ -402,7 +393,7 @@ bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result){
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result){
     taskENTER_CRITICAL();const bool ready=p.result_pending;
     if(ready){*sequence=p.request;*result=p.result;p.result_pending=false;
-        p.arm_allowed=p.result==YPWM_OK&&p.backend==YPWM_PID&&p.phase==MOTOR_CONTROL_READY;}
+        p.arm_allowed=p.result==YPWM_OK&&p.phase==MOTOR_CONTROL_READY;}
     taskEXIT_CRITICAL();return ready;
 }
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
@@ -410,11 +401,12 @@ bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
     if(!force&&(!p.dirty||now-p.status_ms<YPWM_STATUS_PERIOD_MS)){taskEXIT_CRITICAL();return false;}
     const control_context s=p;p.dirty=false;p.status_ms=now;taskEXIT_CRITICAL();
     memset(b,0,YPWM_STATUS_LENGTH);b[0]=YPWM_EVENT_CODE;b[1]=YPWM_SCHEMA;b[2]=s.backend;
-    /* The v3 PC decoder expects 1 for position READY and 3 for PWM READY. */
-    b[3] = s.backend == YPWM_POSITION && s.phase == MOTOR_CONTROL_READY ? 1U : s.phase;
+    /* The v3 PC reports position control as ready while driving too. */
+    b[3] = s.backend == YPWM_POSITION &&
+        (s.phase == MOTOR_CONTROL_READY || s.phase == MOTOR_CONTROL_ACTIVE) ? 1U : s.phase;
     ypwm_put16(b+4,s.request);b[6]=s.result;b[7]=s.reason;ypwm_put32(b+8,s.epoch);
     ypwm_put16(b+12,s.mask);ypwm_put16(b+14,s.verified);ypwm_put16(b+16,s.torque);ypwm_put16(b+18,s.unknown);
-    ypwm_put32(b+20,s.command_count);ypwm_put16(b+24,YPWM_DUTY_LIMIT);ypwm_put16(b+26,YPWM_TARGET_TIMEOUT_MS);
+    ypwm_put32(b+20,s.command_count);ypwm_put16(b+24,YPWM_DUTY_LIMIT);ypwm_put16(b+26,MOTOR_CONTROL_TARGET_TIMEOUT_MS);
     ypwm_put16(b+28,YPWM_FOLLOWING_ERROR_LIMIT);ypwm_put16(b+30,s.feedback_age);
     for(unsigned i=0;i<12;++i)if(s.mask&(1U<<i)){ypwm_put16(b+32,(uint16_t)s.sent[i]);break;}
     ypwm_put32(b+34,now);return true;
@@ -496,7 +488,7 @@ static void prepare_mode(const control_context *s){
     if(!error){detail[3]=YPWM_DIAG_COMPLETE;ypwm_put16(detail+18,unknown);}
     ypwm_put16(detail+16,verified);ypwm_put16(detail+40,motor_device_register_lock_uncertain_mask());
     ypwm_put32(detail+20,milliseconds()-started);ypwm_put32(detail+56,milliseconds());detail[6]=error;
-    memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
+    memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;tx_failures=0U;
     thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     taskENTER_CRITICAL();
     if(p.phase==MOTOR_CONTROL_PREPARING&&p.epoch==s->epoch){
@@ -514,7 +506,7 @@ static void prepare_mode(const control_context *s){
     taskEXIT_CRITICAL();
 }
 static void rollback_mode(const control_context *s){
-    /* A queued/in-flight sensor job must retire before the snapshot is restored.
+    /* An in-flight register write must retire before the snapshot is restored.
        Its callback rejects any late target write after STAGED is invalidated. */
     if(s->mode_busy)return;
     uint16_t unknown=YPWM_ALL_MASK,restored=0;uint8_t failed=0;
@@ -535,7 +527,6 @@ static void rollback_mode(const control_context *s){
     /* Retain both snapshots until every restoration proof succeeds. */
     if(ok){p.snapshot_valid=false;p.preference_touched=false;
         if(s->rollback_failed&&!p.flash_read_failed)p.reason=YPWM_REASON_NONE;}
-    p.boot_restored=false;
     /* Keep original first-failure detail; status exposes rollback verification mask. */
     if(mode_detail_valid){
         memcpy(rollback_detail,mode_detail,YPWM_DIAG_LENGTH);rollback_detail[1]=YPWM_DIAG_VERSION;
@@ -556,25 +547,48 @@ static void rollback_mode(const control_context *s){
     taskEXIT_CRITICAL();
     if(final_off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
 }
-/* Return uses the already configured backend/calibration, never mode writes,
- * a host lease, or new torque-ON. Boot/unarmed/unknown axes fail the eligibility
- * check and proceed to OFF; this must never arm an idle robot to center it. */
-static motor_stop_outcome_t prepare_pwm_stop_feedback(
-    const void *mode, const motor_feedback_set_t *feedback, int16_t position[YERTLE_MOTOR_COUNT])
+/* The common stop state supplies feedback and checks progress. */
+static motor_stop_outcome_t feedback_limits(const motor_feedback_set_t *feedback)
 {
-    const control_context *s = mode;
-    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
-        if ((s->mask & (1U << i)) &&
-            !calibration_cache_position((uint8_t)(i + 1U), position[i], &position[i])) {
-            return MOTOR_STOP_FEEDBACK;
-        }
-    }
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
         if (feedback->motor[i].voltage <= 40U || feedback->motor[i].voltage > 74U) {
             return MOTOR_STOP_VOLTAGE;
         }
     }
     return temperature_trip(feedback) ? MOTOR_STOP_TEMPERATURE : MOTOR_STOP_NONE;
+}
+
+static motor_stop_outcome_t prepare_stop_feedback(
+    const void *mode, const motor_feedback_set_t *feedback, int16_t position[YERTLE_MOTOR_COUNT])
+{
+    const motor_stop_outcome_t limits = feedback_limits(feedback);
+    if (limits != MOTOR_STOP_NONE) return limits;
+
+    const control_context *s = mode;
+    if (s->backend == YPWM_PID) {
+        for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+            if ((s->mask & (1U << i)) &&
+                !calibration_cache_position((uint8_t)(i + 1U), position[i], &position[i])) {
+                return MOTOR_STOP_FEEDBACK;
+            }
+        }
+    }
+    return MOTOR_STOP_NONE;
+}
+
+static motor_stop_outcome_t send_position_return(
+    const void *mode, const int16_t position[YERTLE_MOTOR_COUNT], uint32_t dt_ms)
+{
+    (void)mode;
+    (void)position;
+    (void)dt_ms;
+    motor_target_set_t targets = { 0 };
+    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+        targets.motor[i].position = MOTOR_STOP_CENTER;
+        targets.motor[i].speed = 200U;
+        targets.motor[i].acceleration = 10U;
+    }
+    return motor_device_write_targets(&targets) == MOTOR_DEVICE_OK ? MOTOR_STOP_NONE : MOTOR_STOP_TX;
 }
 
 static motor_stop_outcome_t send_pwm_return(
@@ -631,170 +645,265 @@ static void zero_pwm_before_off(const void *mode)
     }
 }
 
-static const motor_safe_stop_ops_t pwm_stop_ops = {
-    .prepare_feedback = prepare_pwm_stop_feedback,
-    .send_return = send_pwm_return,
-    .pause_return = pause_pwm_return,
-    .before_off = zero_pwm_before_off,
-    .return_tx_failure_limit = 1U
+static const motor_safe_stop_ops_t position_stop_ops = {
+    .prepare_feedback = prepare_stop_feedback,
+    .send_return = send_position_return
 };
 
-static void service_stop(const control_context *s)
+static const motor_safe_stop_ops_t pwm_stop_ops = {
+    .prepare_feedback = prepare_stop_feedback,
+    .send_return = send_pwm_return,
+    .pause_return = pause_pwm_return,
+    .before_off = zero_pwm_before_off
+};
+
+static void service_stop(const control_context *s, uint32_t now)
 {
-    const uint32_t now = milliseconds();
+    const bool pwm = s->backend == YPWM_PID;
+    const bool verified = ypwm_mask(s->mask) && (s->verified & s->mask) == s->mask;
     if (returning.outcome == MOTOR_STOP_NONE) {
-        const bool eligible = s->backend == YPWM_PID && s->ever_command && s->return_eligible &&
-            ypwm_mask(s->mask) && (s->verified & s->mask) == s->mask && calibration_ready(s->mask);
+        const bool eligible = verified && s->torque && (!pwm || calibration_ready(s->mask));
         motor_safe_stop_begin(&returning, now, eligible);
         return_reference_ready = false;
-        publish_stop(s, now, true);
+        publish_stop(s->reason, s->torque, s->unknown, now, true);
         memset(axes, 0, sizeof axes);
-        thermal_sequence = 0U;
-        memset(hot_samples, 0, sizeof hot_samples);
     }
 
-    motor_safe_stop_service(&returning, now, s->mask, &pwm_stop_ops, s);
+    const motor_safe_stop_ops_t *ops = pwm ? &pwm_stop_ops : &position_stop_ops;
+    motor_safe_stop_service(&returning, now, s->mask, ops, s);
     if (returning.outcome == MOTOR_STOP_RETURNING) {
-        publish_stop(s, now, false);
+        publish_stop(s->reason, s->torque, s->unknown, now, false);
         return;
     }
+
     const bool off = returning.off_confirmed;
-    if (off) {
-        memset(axes, 0, sizeof axes);
-        last_sample = last_feedback_ms = 0U;
-    }
     const bool complete = off && !host_protocol_is_armed();
+    uint16_t reverified = 0U;
+    const bool ready = complete && verified && !s->rollback_failed && !s->flash_read_failed &&
+        motor_device_verify_modes(s->backend, s->mask, &reverified);
     taskENTER_CRITICAL();
+    if (complete) p.verified = reverified;
     p.unknown = returning.unknown_torque;
     if (off) p.torque = 0U;
     p.dirty = true;
     if (complete) {
-        p.phase = MOTOR_CONTROL_FAILED;
-        p.ever_command = false;
-        p.return_eligible = false;
+        p.phase = ready ? MOTOR_CONTROL_READY : MOTOR_CONTROL_FAILED;
+        p.arm_allowed = ready;
+        if (ready) {
+            p.reason = YPWM_REASON_NONE;
+            p.result = YPWM_OK;
+        } else if (!p.rollback_failed && !p.flash_read_failed) {
+            p.reason = YPWM_REASON_MODE;
+            p.result = YPWM_MODE_FAILED;
+        }
     }
     taskEXIT_CRITICAL();
-    const control_context status = snapshot();
-    publish_stop(&status, now, true);
-    if (complete) host_protocol_complete_safe_stop();
-}
-static bool feedback_safe(const motor_feedback_set_t *f){
-    if(f->valid_mask!=YPWM_ALL_MASK||!f->sequence){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-    /* Current thresholds belong to the PC CLI. Preserve current telemetry and
-       servo-reported fault checks, but do not latch a local current trip. */
-    for(unsigned i=0;i<12;++i){const motor_feedback_t *m=&f->motor[i];
-        if(!m->valid||m->servo_error||m->position<0||m->position>4095){pwm_control_stop(YPWM_REASON_SENSOR);return false;}
-        if(m->voltage<=40||m->voltage>74){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
+
+    /* Preserve the completed stop reason in its diagnostic even after READY. */
+    publish_stop(s->reason, off ? 0U : s->torque, returning.unknown_torque, now, true);
+    if (complete) {
+        last_sample = last_feedback_ms = 0U;
+        tx_failures = 0U;
+        host_protocol_complete_safe_stop();
     }
-    if(temperature_trip(f)){pwm_control_stop(YPWM_REASON_THERMAL_VOLTAGE);return false;}
+}
+
+static bool output_is_current(const control_context *s)
+{
+    taskENTER_CRITICAL();
+    const bool current = p.phase == s->phase && p.epoch == s->epoch &&
+        p.direct == s->direct && (!s->direct || (p.raw_pending && p.raw_request == s->raw_request)) &&
+        host_protocol_is_armed() && !host_protocol_is_stop_requested();
+    taskEXIT_CRITICAL();
+    return current;
+}
+
+static uint8_t send_drive_output(const control_context *s, const int16_t duty[YERTLE_MOTOR_COUNT])
+{
+    if (!output_is_current(s)) return YPWM_INVALID_STATE;
+    if (s->phase == MOTOR_CONTROL_READY) {
+        taskENTER_CRITICAL();
+        p.unknown |= s->mask;
+        taskEXIT_CRITICAL();
+    }
+
+    motor_device_status_t status = duty ? motor_device_write_pwm(s->mask, duty) :
+        motor_device_write_targets(&s->position_target.targets);
+    if (status == MOTOR_DEVICE_OK && s->phase == MOTOR_CONTROL_READY) {
+        if (!output_is_current(s)) return YPWM_INVALID_STATE;
+        status = motor_device_torque_mask(s->mask, true);
+        if (status == MOTOR_DEVICE_OK) {
+            taskENTER_CRITICAL();
+            p.torque = s->mask;
+            taskEXIT_CRITICAL();
+        }
+    }
+    if (status != MOTOR_DEVICE_OK) return YPWM_MODE_FAILED;
+    return output_is_current(s) ? YPWM_OK : YPWM_INVALID_STATE;
+}
+
+static void record_drive_result(uint8_t result)
+{
+    if (result == YPWM_OK) {
+        tx_failures = 0U;
+    } else if (result == YPWM_MODE_FAILED && host_protocol_is_armed() &&
+               !host_protocol_is_stop_requested() && ++tx_failures >= MOTOR_CONTROL_TX_FAILURE_LIMIT) {
+        begin_stop(YPWM_REASON_DRIVER);
+        host_protocol_latch_fault(HOST_FAULT_SERVO);
+    }
+}
+
+/* Called with the critical section held after a successful output. */
+static bool mark_active(const control_context *s, const int16_t *duty)
+{
+    if (!output_is_current(s)) return false;
+    p.phase = MOTOR_CONTROL_ACTIVE;
+    p.torque = s->mask;
+    p.unknown = s->mask;
+    if (duty) memcpy(p.sent, duty, sizeof p.sent);
+    p.dirty = true;
     return true;
 }
-static void service_pid(const control_context *s,uint32_t now){
-    if(!s->ever_command)return;
-    if(now-s->position_target.accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
-    motor_feedback_set_t f;imu_feedback_t imu;
-    if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
-    if(!feedback_safe(&f))return;
-    /* Never integrate/differentiate the same measurement more than once. */
-    if(!s->pid_restart&&s->phase==MOTOR_CONTROL_ACTIVE&&f.sequence==last_sample)return;
-    if(s->pid_restart){memset(axes,0,sizeof axes);taskENTER_CRITICAL();p.pid_restart=false;taskEXIT_CRITICAL();}
-    const uint32_t dt_ms=s->phase==MOTOR_CONTROL_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
-    if(!dt_ms||(dt_ms&0x80000000UL)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
-    const float dt=(float)dt_ms*0.001f;
-    int16_t out[12]={0};
-    for(unsigned i=0;i<12;++i)if(s->mask&(1U<<i)){
+
+static void service_pid(const control_context *s, const motor_feedback_set_t *feedback, uint32_t now)
+{
+    /* Sample each measurement once, including when a UART write fails. */
+    if (!s->pid_restart && feedback->sequence == last_sample) return;
+    if (s->pid_restart) {
+        memset(axes, 0, sizeof axes);
+        taskENTER_CRITICAL();
+        p.pid_restart = false;
+        taskEXIT_CRITICAL();
+    }
+    const uint32_t dt_ms = !last_sample || s->pid_restart ? 20U : feedback->uptime_ms - last_feedback_ms;
+    if (!dt_ms || (dt_ms & 0x80000000UL)) {
+        motor_control_stop(YPWM_REASON_SENSOR);
+        return;
+    }
+
+    int16_t duty[YERTLE_MOTOR_COUNT] = { 0 };
+    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
+        if (!(s->mask & (1U << i))) continue;
         int16_t measured;
-        if(!calibration_cache_position((uint8_t)(i+1U),f.motor[i].position,&measured)){
-            pwm_control_stop(YPWM_REASON_CALIBRATION);return;
+        if (!calibration_cache_position((uint8_t)(i + 1U), feedback->motor[i].position, &measured)) {
+            motor_control_stop(YPWM_REASON_CALIBRATION);
+            return;
         }
-        position_pid_config_t config=position_pid_default_config();
-        config.polarity=position_pid_motor_polarity((uint8_t)(i+1U));
-        if(!position_pid_step(&axes[i],&config,s->position_target.targets.motor[i].position,measured,dt,&out[i])){pwm_control_stop(YPWM_REASON_TRAVEL);return;}
-    }
-    if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
-    if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
-    taskENTER_CRITICAL();p.return_eligible=true;taskEXIT_CRITICAL();
-    if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
-    if(s->phase==MOTOR_CONTROL_READY){
-        taskENTER_CRITICAL();p.unknown|=s->mask;taskEXIT_CRITICAL();
-        if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
-        if(!pid_current(s->phase)||host_protocol_is_stop_requested()){
-            pwm_control_stop(YPWM_REASON_LINK);return;
+        position_pid_config_t config = position_pid_default_config();
+        config.polarity = position_pid_motor_polarity((uint8_t)(i + 1U));
+        if (!position_pid_step(&axes[i], &config, s->position_target.targets.motor[i].position,
+                               measured, (float)dt_ms * 0.001f, &duty[i])) {
+            motor_control_stop(YPWM_REASON_TRAVEL);
+            return;
         }
     }
-    last_sample=f.sequence;last_feedback_ms=f.uptime_ms;
-    taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=MOTOR_CONTROL_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
-        p.feedback_age=(uint16_t)((now-f.uptime_ms)>UINT16_MAX?UINT16_MAX:(now-f.uptime_ms));memcpy(p.sent,out,sizeof out);p.dirty=true;
-        publish_pid_trace(s,&f,milliseconds(),dt_ms);}taskEXIT_CRITICAL();
-}
-static void service_raw(const control_context *s,uint32_t now){
-    if(!s->raw_preview){
-        if(!host_protocol_is_armed()||host_protocol_is_stop_requested()){pwm_control_stop(YPWM_REASON_LINK);return;}
-        if(now-s->raw_accepted_ms>=YPWM_TARGET_TIMEOUT_MS){pwm_control_stop(YPWM_REASON_TTL);return;}
-        motor_feedback_set_t f;imu_feedback_t imu;
-        if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
-        if(!feedback_safe(&f))return;
-    }
-    if(!s->raw_pending)return;
-    uint8_t result=YPWM_OK;
-    if(s->raw_preview){uint16_t verified=0;
-        if(host_protocol_get_state()!=HOST_FSM_DISARMED||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
-        else if(!motor_device_verify_modes(YPWM_PID,s->mask,&verified))result=YPWM_PWM_MODE_REQUIRED;
-    }
-    if(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested())result=YPWM_INVALID_STATE;
-    if(!result){
-        if(motor_device_write_pwm(s->mask,s->raw)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
-        else if(!s->raw_preview){taskENTER_CRITICAL();p.return_eligible=true;taskEXIT_CRITICAL();}
-    }
-    if(!result&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||
-       (!s->raw_preview&&!host_protocol_is_armed())))result=YPWM_INVALID_STATE;
-    if(!result&&!s->raw_preview&&s->phase==MOTOR_CONTROL_READY){
-        if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
-    }
-    if(!s->raw_preview&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||!host_protocol_is_armed())){
-        pwm_control_stop(YPWM_REASON_LINK);result=YPWM_INVALID_STATE;
-    }
+
+    last_sample = feedback->sequence;
+    last_feedback_ms = feedback->uptime_ms;
+    const uint8_t result = send_drive_output(s, duty);
+    record_drive_result(result);
+    if (result != YPWM_OK) return;
+
     taskENTER_CRITICAL();
-    if(p.raw_pending&&p.raw_request==s->raw_request){
-        p.raw_pending=false;p.raw_result=result;p.raw_result_pending=true;
-        if(!result){memcpy(p.sent,s->raw,sizeof p.sent);p.unknown|=s->mask;
-            if(!s->raw_preview){p.phase=MOTOR_CONTROL_ACTIVE;p.torque=s->mask;}else p.raw_preview=false;}
-        p.dirty=true;
+    if (mark_active(s, duty)) {
+        const uint32_t age = now - feedback->uptime_ms;
+        p.feedback_age = (uint16_t)(age > UINT16_MAX ? UINT16_MAX : age);
+        publish_pid_trace(s, feedback, milliseconds(), dt_ms);
     }
     taskEXIT_CRITICAL();
-    if(result&&!s->raw_preview&&!host_protocol_is_stop_requested()&&phase_current(s->phase))
-        pwm_control_stop(YPWM_REASON_DRIVER);
 }
-bool pwm_control_service(void){
+
+static void service_raw(const control_context *s)
+{
+    if (!s->raw_pending) return;
+    uint8_t result;
+    if (!s->raw_preview) {
+        result = send_drive_output(s, s->raw);
+    } else {
+        uint16_t verified = 0U;
+        if (host_protocol_get_state() != HOST_FSM_DISARMED || host_protocol_is_stop_requested()) {
+            result = YPWM_INVALID_STATE;
+        } else if (!motor_device_verify_modes(YPWM_PID, s->mask, &verified)) {
+            result = YPWM_PWM_MODE_REQUIRED;
+        } else if (!raw_current(s->phase, s->raw_request) || host_protocol_is_stop_requested()) {
+            result = YPWM_INVALID_STATE;
+        } else {
+            taskENTER_CRITICAL();
+            p.unknown |= s->mask; /* PWM 0 can enable torque, even on partial TX. */
+            taskEXIT_CRITICAL();
+            result = motor_device_write_pwm(s->mask, s->raw) == MOTOR_DEVICE_OK ? YPWM_OK : YPWM_MODE_FAILED;
+        }
+    }
+
+    taskENTER_CRITICAL();
+    if (p.raw_pending && p.raw_request == s->raw_request) {
+        if (result == YPWM_OK) {
+            if (!s->raw_preview) {
+                if (!mark_active(s, s->raw)) result = YPWM_INVALID_STATE;
+            } else {
+                memcpy(p.sent, s->raw, sizeof p.sent);
+                p.raw_preview = false;
+            }
+        }
+        p.raw_pending = false;
+        p.raw_result = result;
+        p.raw_result_pending = true;
+        p.dirty = true;
+    }
+    taskEXIT_CRITICAL();
+    if (!s->raw_preview) record_drive_result(result);
+}
+
+static void service_drive(const control_context *s, uint32_t now)
+{
+    if (!s->ever_command || !host_protocol_is_armed()) return;
+    const uint32_t accepted_ms = s->direct ? s->raw_accepted_ms : s->position_target.accepted_ms;
+    if (now - accepted_ms >= MOTOR_CONTROL_TARGET_TIMEOUT_MS) {
+        begin_stop(YPWM_REASON_TTL);
+        host_protocol_request_target_timeout();
+        return;
+    }
+
+    motor_feedback_set_t feedback;
+    imu_feedback_t imu;
+    if (!sensor_get_feedback_snapshot(&feedback, &imu) ||
+        motor_feedback_status(&feedback) != MOTOR_FEEDBACK_VALID) {
+        motor_control_stop(YPWM_REASON_SENSOR);
+        return;
+    }
+    if (feedback_limits(&feedback) != MOTOR_STOP_NONE) {
+        motor_control_stop(YPWM_REASON_THERMAL_VOLTAGE);
+        return;
+    }
+
+    if (s->backend == YPWM_POSITION) {
+        const uint8_t result = send_drive_output(s, NULL);
+        record_drive_result(result);
+        if (result != YPWM_OK) return;
+        taskENTER_CRITICAL();
+        (void)mark_active(s, NULL);
+        taskEXIT_CRITICAL();
+    } else if (s->direct) {
+        service_raw(s);
+    } else {
+        service_pid(s, &feedback, now);
+    }
+}
+
+void motor_control_service(void)
+{
     control_context s=snapshot();const uint32_t now=milliseconds();
     if(s.phase!=MOTOR_CONTROL_STOPPING)returning.outcome=MOTOR_STOP_NONE;
-    if(s.snapshot_valid&&s.phase==MOTOR_CONTROL_READY&&host_protocol_is_armed()){
-        taskENTER_CRITICAL();p.snapshot_valid=false;taskEXIT_CRITICAL();
-    }
-    if(s.backend==YPWM_POSITION&&s.phase==MOTOR_CONTROL_READY)return false;
-    /* A fresh HELLO after a completed operational stop may request a new
-     * validation. Keep rollback/flash failures latched and never arm or
-     * command motion here. A HELLO during STOPPING waits for confirmed OFF. */
-    if(s.phase==MOTOR_CONTROL_FAILED&&s.reconnect_recovery_requested&&s.reconnect_stop_recoverable&&
-       !s.rollback_failed&&!s.flash_read_failed&&!s.unknown&&
-       host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested()){
-        taskENTER_CRITICAL();
-        if(p.phase==MOTOR_CONTROL_FAILED&&p.reconnect_recovery_requested){
-            p.phase=MOTOR_CONTROL_UNVERIFIED;p.boot_restored=true;p.arm_allowed=false;
-            p.reconnect_recovery_requested=false;p.reconnect_stop_recoverable=false;p.dirty=true;
-        }
-        taskEXIT_CRITICAL();return true;
-    }
     if(s.phase==MOTOR_CONTROL_UNVERIFIED){
         /* The actuator can run before host init. Complete the boot torque-OFF
          * request first, then verify the persisted backend on a later pass. */
-        if(host_protocol_get_state()==HOST_FSM_BOOT)return true;
+        if(host_protocol_get_state()==HOST_FSM_BOOT)return;
         if(host_protocol_is_stop_requested()){
             uint16_t unknown=YPWM_ALL_MASK;
             const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
             taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.dirty=true;}taskEXIT_CRITICAL();
             if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
-            return true;
+            return;
         }
         uint16_t unknown=YPWM_ALL_MASK,verified=0;
         const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
@@ -810,28 +919,53 @@ bool pwm_control_service(void){
         taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.verified=verified;
             p.phase=ready?MOTOR_CONTROL_READY:MOTOR_CONTROL_FAILED;
             if(ready){p.reason=YPWM_REASON_NONE;p.result=YPWM_OK;}
-            p.arm_allowed=ready&&s.backend==YPWM_PID;p.dirty=true;}taskEXIT_CRITICAL();return true;
+            p.arm_allowed=ready;p.dirty=true;}taskEXIT_CRITICAL();return;
     }
-    if(transitioning(s.phase)&&now-s.started_ms>=YPWM_PREPARATION_TIMEOUT_MS&&s.phase!=MOTOR_CONTROL_ROLLING_BACK){
-        pwm_control_stop(YPWM_REASON_TTL);s=snapshot();
+    if (transitioning(s.phase) && s.phase != MOTOR_CONTROL_ROLLING_BACK &&
+        now - s.started_ms >= YPWM_PREPARATION_TIMEOUT_MS) {
+        motor_control_stop(YPWM_REASON_TTL);
+        s = snapshot();
     }
-    if(s.phase==MOTOR_CONTROL_ROLLING_BACK){rollback_mode(&s);return true;}
-    if(s.raw_pending&&s.raw_preview){service_raw(&s,now);return true;}
-    if(s.phase==MOTOR_CONTROL_STAGED||s.phase==MOTOR_CONTROL_CANCELED)return true;
-    if(s.phase==MOTOR_CONTROL_PREPARING){prepare_mode(&s);return true;}
-    if((s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE)&&
-        (host_protocol_get_state()==HOST_FSM_FAULT||host_protocol_is_stop_requested()||
-         (s.phase==MOTOR_CONTROL_ACTIVE&&!host_protocol_is_armed())))pwm_control_stop(YPWM_REASON_LINK);
-    s=snapshot();
-    if(s.phase==MOTOR_CONTROL_STOPPING){service_stop(&s);return true;}
-    if(s.phase==MOTOR_CONTROL_FAILED&&s.unknown){
-        (void)motor_device_torque_mask(YPWM_ALL_MASK,false);
-        uint16_t unknown=YPWM_ALL_MASK;(void)motor_device_verify_torque_off(&unknown);
-        taskENTER_CRITICAL();p.unknown=unknown;p.dirty=true;taskEXIT_CRITICAL();
-        if(!unknown&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
-        return true;
+    if (s.phase == MOTOR_CONTROL_ROLLING_BACK) {
+        rollback_mode(&s);
+        return;
     }
-    if(s.phase==MOTOR_CONTROL_FAILED&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
-    if(s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE){if(s.direct)service_raw(&s,now);else service_pid(&s,now);}
-    return true;
+    if (s.raw_pending && s.raw_preview) {
+        service_raw(&s);
+        return;
+    }
+    if (s.phase == MOTOR_CONTROL_PREPARING) {
+        prepare_mode(&s);
+        return;
+    }
+    if (s.phase == MOTOR_CONTROL_READY || s.phase == MOTOR_CONTROL_ACTIVE) {
+        if (host_protocol_is_stop_requested() || host_protocol_get_state() == HOST_FSM_FAULT) {
+            if (s.phase == MOTOR_CONTROL_READY && !s.unknown && !s.ever_command) {
+                if (!host_protocol_is_armed()) host_protocol_complete_safe_stop();
+                return;
+            }
+            begin_stop(YPWM_REASON_LINK);
+        } else if (s.phase == MOTOR_CONTROL_ACTIVE && !host_protocol_is_armed()) {
+            motor_control_stop(YPWM_REASON_LINK);
+        } else {
+            service_drive(&s, now);
+            return;
+        }
+        s = snapshot();
+    }
+    if (s.phase == MOTOR_CONTROL_STOPPING) {
+        service_stop(&s, now);
+    } else if (s.phase == MOTOR_CONTROL_FAILED && s.unknown) {
+        (void)motor_device_torque_mask(YPWM_ALL_MASK, false);
+        uint16_t unknown = YPWM_ALL_MASK;
+        (void)motor_device_verify_torque_off(&unknown);
+        taskENTER_CRITICAL();
+        p.unknown = unknown;
+        p.dirty = true;
+        taskEXIT_CRITICAL();
+        if (!unknown && !host_protocol_is_armed()) host_protocol_complete_safe_stop();
+    } else if ((s.phase == MOTOR_CONTROL_FAILED || s.phase == MOTOR_CONTROL_CANCELED) &&
+               !host_protocol_is_armed() && host_protocol_is_stop_requested()) {
+        host_protocol_complete_safe_stop();
+    }
 }

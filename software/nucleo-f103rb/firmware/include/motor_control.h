@@ -3,7 +3,13 @@
 
 #include "motor_device.h"
 
+#define MOTOR_CONTROL_TARGET_TIMEOUT_MS 500U
+
 void motor_control_init(void);
+bool motor_control_can_arm(void);
+void motor_control_on_armed(void);
+void motor_control_connection_reset(void);
+void motor_control_stop(uint8_t reason);
 /* Position-only operations such as reading servo position offsets. */
 bool motor_control_position_ready(void);
 /* Common acceptance gate and latest position target for both motor modes.

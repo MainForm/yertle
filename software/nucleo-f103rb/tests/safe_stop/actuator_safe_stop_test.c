@@ -63,6 +63,10 @@ void host_protocol_latch_fault(host_fault_reason_t reason)
     state = HOST_FSM_FAULT;
 }
 void host_protocol_request_target_timeout(void) { assert(false); }
+void host_protocol_request_motor_stop(void)
+{ safety_action = HOST_SAFETY_ACTION_SAFE_STOP; state = HOST_FSM_DISARMED; }
+
+uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
 
 bool motor_device_validate_targets(const motor_target_set_t *targets)
 {
@@ -106,7 +110,7 @@ bool motor_device_verify_torque_off(uint16_t *unknown)
 
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 {
-    if (missing_feedback) return false;
+    if (missing_feedback && tick >= 10U) return false;
     memset(motor, 0, sizeof(*motor));
     memset(imu, 0, sizeof(*imu));
     motor->sequence = tick / 20U + 1U;
@@ -114,6 +118,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
     motor->valid_mask = YERTLE_ALL_MOTORS_MASK;
     for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) {
         motor->motor[i].valid = true;
+        motor->motor[i].voltage = 60U;
         motor->motor[i].position = stuck || tick < center_after_tick ? 2200 : 2048;
     }
     return true;
@@ -140,7 +145,18 @@ static void run_case(bool start_with_target, bool force_stall, bool stop_on_faul
     torque_off_queries = 0U;
     verified_off = false;
     writes_at_first_successful_off = 0U;
+    const host_fsm_state_t run_state = state;
+    state = HOST_FSM_DISARMED;
+    safety_action = HOST_SAFETY_ACTION_NONE;
+    torque_off_failures = off_query_failures = 0U;
     motor_control_init();
+    motor_control_service();
+    assert(motor_control_position_ready() && verified_off);
+    state = run_state;
+    safety_action = start_with_target ? HOST_SAFETY_ACTION_NONE : HOST_SAFETY_ACTION_SAFE_STOP;
+    torque_off_failures = off_failures;
+    off_query_failures = read_failures;
+    torque_off_calls = torque_off_queries = 0U;
     if (start_with_target) {
         motor_target_set_t targets = { 0 };
         for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i)
@@ -165,7 +181,7 @@ int main(void)
     assert(torque_off_tick == 510U);
 
     run_case(false, false, false, 70U, 100U, false, false, 0U, 0U);
-    assert(center_writes == 0U && torque_on_calls == 0U && torque_off_calls == 1U);
+    assert(center_writes == 0U && torque_on_calls == 0U && torque_off_calls == 0U);
     assert(torque_off_tick == 0U && completed_stops == 1U);
 
     /* A stop already caused by FAULT follows the same return sequence. */
@@ -178,7 +194,7 @@ int main(void)
     assert(torque_on_calls == 1U && center_writes == 0U);
     assert(torque_off_tick == 50U && completed_stops == 1U && state == HOST_FSM_DISARMED);
 
-    /* The position backend keeps its three-attempt budget for return TX. */
+    /* Both modes share a three-attempt budget for return TX. */
     run_case(true, false, false, 70U, 300U, true, false, 0U, 0U);
     assert(center_writes == 3U && torque_on_calls == 1U && faults == 0U);
     assert(torque_off_calls == 1U && completed_stops == 1U);

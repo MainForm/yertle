@@ -48,9 +48,15 @@ if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
  message(FATAL_ERROR "Cannot determine minimal stack words")
 endif()
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
-check_path(actuator_calibrated_position actuator_task motor_control_service pwm_control_service service_pid
+check_path(actuator_calibrated_position actuator_task motor_control_service service_drive service_pid
     calibration_cache_position calibration_cache_get)
-check_path(actuator_pid_publish actuator_task motor_control_service pwm_control_service service_pid publish_pid_trace trace_float)
+check_path(actuator_pid_publish actuator_task motor_control_service service_drive service_pid publish_pid_trace trace_float)
+check_path(actuator_position_output actuator_task motor_control_service service_drive send_drive_output
+    motor_device_write_targets send_broadcast motor_uart_write)
+check_path(actuator_pwm_output actuator_task motor_control_service service_drive service_pid send_drive_output
+    motor_device_write_pwm send_broadcast motor_uart_write)
+check_path(actuator_torque_on actuator_task motor_control_service service_drive service_pid send_drive_output
+    motor_device_torque_mask send_broadcast motor_uart_write)
 if(NOT main_source MATCHES "xTaskCreate\\(host_protocol_task,[^)]*configMINIMAL_STACK_SIZE \\* ([0-9]+)U")
  message(FATAL_ERROR "Cannot determine host stack multiplier")
 endif()
@@ -96,20 +102,20 @@ check_path(host_pid_telemetry host_protocol_task report_host_state service_pid_d
     host_uart_write_bytes wait_tx_flag)
 
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
-set(pwm_stop actuator_task motor_control_service pwm_control_service service_stop)
-set(position_stop actuator_task motor_control_service service_native_position service_position_stop)
+set(actuator_stop actuator_task motor_control_service service_stop)
 set(stop_off_verify motor_safe_stop_service motor_device_verify_torque_off motor_device_verify_torque_off_detailed
     motor_device_read_register read_register_locked read_register_timed motor_uart_read_frame read_byte)
-check_path(actuator_return_pid ${pwm_stop} motor_safe_stop_service service_return send_pwm_return position_pid_step)
-check_path(actuator_return_calibration ${pwm_stop} motor_safe_stop_service service_return prepare_pwm_stop_feedback
+check_path(actuator_return_pid ${actuator_stop} motor_safe_stop_service service_return send_pwm_return position_pid_step)
+check_path(actuator_return_calibration ${actuator_stop} motor_safe_stop_service service_return prepare_stop_feedback
     calibration_cache_position calibration_cache_get)
-check_path(actuator_pwm_return_tx ${pwm_stop} motor_safe_stop_service service_return send_pwm_return
+check_path(actuator_pwm_return_tx ${actuator_stop} motor_safe_stop_service service_return send_pwm_return
     motor_device_write_pwm STS3215_BuildSyncWrite prv_pack_frame prv_checksum)
-check_path(actuator_position_return_tx ${position_stop} motor_safe_stop_service service_return send_position_return
+check_path(actuator_position_return_tx ${actuator_stop} motor_safe_stop_service service_return send_position_return
     motor_device_write_targets STS3215_BuildSyncWrite prv_pack_frame prv_checksum)
-check_path(actuator_pwm_off_verify ${pwm_stop} ${stop_off_verify})
-check_path(actuator_position_off_verify ${position_stop} ${stop_off_verify})
-check_path(actuator_return_telemetry ${pwm_stop} publish_stop)
+check_path(actuator_stop_off_verify ${actuator_stop} ${stop_off_verify})
+check_path(actuator_stop_mode_verify ${actuator_stop} motor_device_verify_modes motor_device_verify_modes_detailed
+    motor_device_read_register read_register_timed motor_uart_read_frame read_byte)
+check_path(actuator_return_telemetry ${actuator_stop} publish_stop)
 
 set(stack_bytes ${sensor_stack_bytes})
 set(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines)

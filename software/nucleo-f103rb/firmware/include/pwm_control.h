@@ -3,16 +3,7 @@
 #include "pwm_contract.h"
 #include "motor_device.h"
 #include "pwm_mode_diagnostics.h"
-/* Host functions only copy bounded state under a critical section; no motor I/O.
- * service() runs from motor_control_service() and owns all PWM writes. */
-void pwm_control_init(void);
-bool pwm_control_service(void);
-bool pwm_control_can_arm(void);
-void pwm_control_on_armed(void);
-void pwm_control_connection_reset(void);
-/* Request re-verification only for a new host connection, never motor motion. */
-void pwm_control_reconnect_recover(void);
-void pwm_control_stop(uint8_t reason);
+/* Host-side mode/diagnostic requests publish state for motor_control_service(). */
 uint8_t pwm_control_request_mode(const uint8_t *p,size_t n,uint16_t sequence);
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode);
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *request);

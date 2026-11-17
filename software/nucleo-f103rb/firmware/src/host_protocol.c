@@ -89,7 +89,7 @@ enum state_cause {
     STATE_CAUSE_TARGET_TIMEOUT = 7U,
     STATE_CAUSE_FAULT = 8U,
     STATE_CAUSE_SAFE_STOP_COMPLETE = 9U,
-    STATE_CAUSE_PWM_STOP = 10U
+    STATE_CAUSE_MOTOR_STOP = 10U
 };
 
 typedef struct {
@@ -161,7 +161,7 @@ static volatile host_fault_reason_t requested_fault_reason = HOST_FAULT_NONE;
 static volatile host_safety_action_t pending_safety_action = HOST_SAFETY_ACTION_NONE;
 static volatile bool safe_stop_completed = false;
 static volatile bool requested_target_timeout = false;
-static volatile bool requested_pwm_stop = false;
+static volatile bool requested_motor_stop = false;
 
 static uint16_t crc16_ccitt(const uint8_t *data, size_t length)
 {
@@ -678,7 +678,7 @@ static void set_host_connected(protocol_context_t *context, bool connected)
         return;
     }
     context->host_connected = connected;
-    if (!connected) {context->lease_established = false;context->idle_monitor_seen=false;pwm_control_connection_reset();}
+    if (!connected) {context->lease_established = false;context->idle_monitor_seen=false;motor_control_connection_reset();}
     const uint8_t payload[] = { EVENT_HOST_LINK_CHANGED, connected ? 1U : 0U };
     send_frame(context, MESSAGE_EVENT, payload, sizeof(payload));
 }
@@ -689,7 +689,7 @@ static bool can_arm(const protocol_context_t *context)
     return context->lease_established &&
            (context->state == HOST_FSM_DISARMED) &&
            !host_protocol_is_stop_requested() && !context->register_job_active && !context->offsets_job_active &&
-           !context->pwm_mode_pending && pwm_control_can_arm() &&
+           !context->pwm_mode_pending && motor_control_can_arm() &&
            motor_device_register_lock_uncertain_mask() == 0U &&
            (TickType_t)(xTaskGetTickCount() - context->last_host_heartbeat_tick) <
                pdMS_TO_TICKS(YERTLE_HOST_TIMEOUT_MS);
@@ -698,7 +698,7 @@ static bool can_arm(const protocol_context_t *context)
 static void try_enter_control_ready(protocol_context_t *context)
 {
     if (can_arm(context)) {
-        pwm_control_on_armed();
+        motor_control_on_armed();
         transition_state(context, HOST_FSM_ARMED, STATE_CAUSE_LEASE_READY, true);
     }
 }
@@ -728,9 +728,9 @@ static void expire_host_link(protocol_context_t *context)
 
 static void service_safety_state(protocol_context_t *context)
 {
-    if(requested_pwm_stop){
-        requested_pwm_stop=false;
-        enter_safe_stop(context,HOST_FSM_DISARMED,STATE_CAUSE_PWM_STOP);
+    if(requested_motor_stop){
+        requested_motor_stop=false;
+        enter_safe_stop(context,HOST_FSM_DISARMED,STATE_CAUSE_MOTOR_STOP);
     }
     if (safe_stop_completed) {
         safe_stop_completed = false;
@@ -963,8 +963,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
         break;
     }
     case MESSAGE_HELLO: {
-        pwm_control_connection_reset();
-        pwm_control_reconnect_recover();
+        motor_control_connection_reset();
         /* New connection gets a first-heartbeat grace period. Repeated HELLO
          * on an established link must not refresh the heartbeat watchdog. */
         if (!context->host_connected) context->last_host_heartbeat_tick = xTaskGetTickCount();
@@ -1128,7 +1127,7 @@ void host_protocol_request_target_timeout(void)
 {
     requested_target_timeout = true;
 }
-void host_protocol_request_pwm_stop(void){requested_pwm_stop=true;}
+void host_protocol_request_motor_stop(void){requested_motor_stop=true;}
 
 host_fsm_state_t host_protocol_get_state(void)
 {
@@ -1143,5 +1142,5 @@ bool host_protocol_is_armed(void)
 bool host_protocol_is_stop_requested(void)
 {
     return pending_safety_action != HOST_SAFETY_ACTION_NONE ||
-           requested_fault_reason != HOST_FAULT_NONE || requested_target_timeout || requested_pwm_stop;
+           requested_fault_reason != HOST_FAULT_NONE || requested_target_timeout || requested_motor_stop;
 }

@@ -45,7 +45,6 @@
 #define YPWM_PID 1U
 /* Untuned controller output ceiling, not calibrated torque/current. */
 #define YPWM_DUTY_LIMIT 1000
-#define YPWM_TARGET_TIMEOUT_MS 500U
 /* Status field: zero indicates that following-error shutdown is disabled. */
 #define YPWM_FOLLOWING_ERROR_LIMIT 0U
 #define YPWM_STATUS_PERIOD_MS 100U
