@@ -2,6 +2,7 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
+#include "sensor_task.h"
 
 /* Real actuator loop and native-position service; mocked scheduling and I/O. */
 #include "../../firmware/src/actuator_task.c"
@@ -50,6 +51,8 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *value
 }
 motor_device_status_t motor_device_set_torque(bool enabled)
 { if (enabled) ++torque_on_calls; return MOTOR_DEVICE_OK; }
+bool motor_device_verify_torque_off(uint16_t *unknown)
+{ (void)unknown; assert(false); return false; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 { (void)motor; (void)imu; return false; }
 

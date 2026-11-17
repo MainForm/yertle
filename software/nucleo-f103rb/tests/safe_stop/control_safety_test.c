@@ -76,7 +76,9 @@ bool motor_device_validate_targets(const motor_target_set_t *targets)
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *targets)
 { if (targets->motor[0].position == 2048U) ++center_writes; return MOTOR_DEVICE_OK; }
 motor_device_status_t motor_device_set_torque(bool enabled)
-{ if (enabled) ++torque_on_calls; else { assert(center_writes > 0U); ++torque_off_calls; } return MOTOR_DEVICE_OK; }
+{ if (enabled) ++torque_on_calls; else ++torque_off_calls; return MOTOR_DEVICE_OK; }
+bool motor_device_verify_torque_off(uint16_t *unknown)
+{ *unknown = 0U; return true; }
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
 {
     memset(motor, 0, sizeof(*motor)); memset(imu, 0, sizeof(*imu));
@@ -86,6 +88,7 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
         motor->motor[i].valid = true;
         motor->motor[i].position = (int16_t)(changing_feedback ? 2200U - tick / 100U * 12U : 2048U);
     }
+    if (changing_feedback && !stalled_id) motor->motor[0].position = 2048;
     if (stalled_id) motor->motor[stalled_id - 1U].position = 2200;
     if (invalid_feedback) motor->motor[11].servo_error = 4U;
     return true;
@@ -155,23 +158,30 @@ int main(void)
 
     /* Every individual motor can independently stop an otherwise moving return. */
     for (stalled_id = 1U; stalled_id <= YERTLE_MOTOR_COUNT; ++stalled_id) {
-        safe_stop_context_t stop = { 0 }; changing_feedback = true;
-        begin_stop_attempt(&stop, 0U, true, true);
+        motor_safe_stop_t attempt;
+        changing_feedback = true;
+        motor_safe_stop_begin(&attempt, 0U, true);
         for (tick = 0U; tick <= 400U; tick += 100U) {
-            assert(!center_reached(&stop, tick)); assert(!stop_has_stalled(&stop, tick));
+            motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+            assert(attempt.outcome == MOTOR_STOP_RETURNING);
         }
-        assert(stop_has_stalled(&stop, 500U));
-        assert(stop.last_progress_tick[stalled_id - 1U] == 0U);
+        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+        assert(attempt.outcome == MOTOR_STOP_STALLED && attempt.off_confirmed);
+        assert(attempt.last_progress_ms[stalled_id - 1U] == 0U);
     }
     /* Already-centered motors remain healthy while another is progressing. */
-    reset(); safe_stop_context_t stop = { 0 };
-    begin_stop_attempt(&stop, 0U, true, true);
+    reset(); motor_safe_stop_t attempt;
+    changing_feedback = true;
+    motor_safe_stop_begin(&attempt, 0U, true);
     for (tick = 0U; tick <= 1000U; tick += 100U) {
-        center_reached(&stop, tick); assert(!stop_has_stalled(&stop, tick));
+        motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+        assert(attempt.outcome == MOTOR_STOP_RETURNING);
     }
-    reset(); begin_stop_attempt(&stop, 0U, true, true); invalid_feedback = true; tick = 100U;
-    assert(!center_reached(&stop, tick));
-    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) assert(stop.last_progress_tick[i] == 0U);
+    reset(); invalid_feedback = true; tick = 100U;
+    motor_safe_stop_begin(&attempt, 0U, true);
+    motor_safe_stop_service(&attempt, tick, YERTLE_ALL_MOTORS_MASK, &position_stop_ops, NULL);
+    assert(attempt.off_confirmed && center_writes == 0U);
+    for (unsigned i = 0U; i < YERTLE_MOTOR_COUNT; ++i) assert(attempt.last_progress_ms[i] == 0U);
     puts("control safety: ordered stop, stale/pending target rejection, RX budgets and per-axis stall passed");
     return 0;
 }

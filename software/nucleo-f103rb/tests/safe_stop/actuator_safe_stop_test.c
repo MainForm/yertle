@@ -16,6 +16,7 @@ static host_safety_action_t safety_action;
 static host_fsm_state_t state;
 static bool stuck;
 static bool fault_on_stop;
+static bool inject_stop;
 static bool fail_center_writes;
 static bool missing_feedback;
 static TickType_t center_after_tick;
@@ -27,7 +28,8 @@ static unsigned torque_off_calls;
 static unsigned completed_stops;
 static unsigned faults;
 static TickType_t torque_off_tick;
-static TickType_t last_center_write_tick;
+static unsigned torque_off_queries, off_query_failures;
+static bool verified_off;
 static unsigned writes_at_first_successful_off;
 
 TickType_t xTaskGetTickCount(void) { return tick; }
@@ -36,9 +38,9 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
 {
     tick = *previous + increment;
     *previous = tick;
-    if (tick == 10U) {
+    if (inject_stop && tick == 10U) {
         safety_action = HOST_SAFETY_ACTION_SAFE_STOP;
-        if (fault_on_stop) state = HOST_FSM_FAULT;
+        state = fault_on_stop ? HOST_FSM_FAULT : HOST_FSM_DISARMED;
     }
     if (tick >= stop_test_tick) longjmp(finished, 1);
 }
@@ -50,6 +52,7 @@ bool host_protocol_is_stop_requested(void)
 { return safety_action != HOST_SAFETY_ACTION_NONE || state == HOST_FSM_FAULT; }
 void host_protocol_complete_safe_stop(void)
 {
+    assert(verified_off);
     ++completed_stops;
     safety_action = HOST_SAFETY_ACTION_NONE;
     if (state == HOST_FSM_FAULT) state = HOST_FSM_DISARMED;
@@ -74,7 +77,6 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *targe
         if (targets->motor[i].position != 2048U) is_center = false;
     if (is_center) {
         ++center_writes;
-        last_center_write_tick = tick;
         if (fail_center_writes) return MOTOR_DEVICE_UART_ERROR;
     }
     return MOTOR_DEVICE_OK;
@@ -83,6 +85,7 @@ motor_device_status_t motor_device_write_targets(const motor_target_set_t *targe
 motor_device_status_t motor_device_set_torque(bool enabled)
 {
     if (enabled) {
+        assert(safety_action == HOST_SAFETY_ACTION_NONE);
         ++torque_on_calls;
     } else {
         ++torque_off_calls;
@@ -92,6 +95,14 @@ motor_device_status_t motor_device_set_torque(bool enabled)
             writes_at_first_successful_off = center_writes;
     }
     return MOTOR_DEVICE_OK;
+}
+
+bool motor_device_verify_torque_off(uint16_t *unknown)
+{
+    ++torque_off_queries;
+    verified_off = torque_off_queries > off_query_failures;
+    *unknown = verified_off ? 0U : 1U;
+    return verified_off;
 }
 
 bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
@@ -111,13 +122,14 @@ bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *i
 
 static void run_case(bool start_with_target, bool force_stall, bool stop_on_fault,
                      TickType_t centered_at, TickType_t run_until,
-                     bool write_failure, bool no_feedback, unsigned off_failures)
+                     bool write_failure, bool no_feedback, unsigned off_failures, unsigned read_failures)
 {
     tick = 0U;
     safety_action = start_with_target ? HOST_SAFETY_ACTION_NONE : HOST_SAFETY_ACTION_SAFE_STOP;
-    state = HOST_FSM_ARMED;
+    state = start_with_target ? HOST_FSM_ARMED : HOST_FSM_DISARMED;
     stuck = force_stall;
     fault_on_stop = stop_on_fault;
+    inject_stop = start_with_target;
     fail_center_writes = write_failure;
     missing_feedback = no_feedback;
     center_after_tick = centered_at;
@@ -125,7 +137,9 @@ static void run_case(bool start_with_target, bool force_stall, bool stop_on_faul
     torque_off_failures = off_failures;
     center_writes = torque_on_calls = torque_off_calls = completed_stops = faults = 0U;
     torque_off_tick = 0U;
-    last_center_write_tick = 0U;
+    off_query_failures = read_failures;
+    torque_off_queries = 0U;
+    verified_off = false;
     writes_at_first_successful_off = 0U;
     motor_control_init();
     if (start_with_target) {
@@ -139,53 +153,46 @@ static void run_case(bool start_with_target, bool force_stall, bool stop_on_faul
 
 int main(void)
 {
-    run_case(true, false, false, 70U, 250U, false, false, 0U);
+    run_case(true, false, false, 70U, 250U, false, false, 0U, 0U);
     assert(torque_on_calls == 1U && center_writes > 0U);
-    assert(torque_off_calls == 1U && torque_off_tick >= 110U);
+    assert(torque_off_calls == 1U && torque_off_tick == 110U);
     assert(completed_stops == 1U && faults == 0U);
 
-    /* Initial stop and the single FAULT retry stall; successful OFF completes. */
-    run_case(true, true, false, 70U, 1750U, false, false, 0U);
-    assert(torque_on_calls == 2U && center_writes > 0U);
-    assert(torque_off_calls == 1U && faults == 1U && completed_stops == 1U);
+    /* A stall proceeds straight to OFF and never starts a second return. */
+    run_case(true, true, false, 70U, 1750U, false, false, 0U, 0U);
+    assert(torque_on_calls == 1U && center_writes > 0U);
+    assert(torque_off_calls == 1U && faults == 0U && completed_stops == 1U);
     assert(state == HOST_FSM_DISARMED && center_writes == writes_at_first_successful_off);
-    assert(last_center_write_tick < 1040U && torque_off_tick < 1050U);
+    assert(torque_off_tick == 510U);
 
-    run_case(false, false, false, 70U, 100U, false, false, 0U);
-    assert(center_writes == 0U && torque_off_calls == 1U);
-    assert(torque_off_tick == 0U && faults == 0U);
+    run_case(false, false, false, 70U, 100U, false, false, 0U, 0U);
+    assert(center_writes == 0U && torque_on_calls == 0U && torque_off_calls == 1U);
+    assert(torque_off_tick == 0U && completed_stops == 1U);
 
-    /* FAULT recovery succeeds on the first try; no repeat after completion. */
-    run_case(true, false, true, 70U, 300U, false, false, 0U);
-    assert(torque_on_calls == 2U && center_writes > 0U);
+    /* A stop already caused by FAULT follows the same return sequence. */
+    run_case(true, false, true, 70U, 300U, false, false, 0U, 0U);
+    assert(torque_on_calls == 1U && center_writes > 0U);
     assert(torque_off_calls == 1U && completed_stops == 1U && state == HOST_FSM_DISARMED);
 
-    /* No second FAULT return attempt, even if feedback later becomes centered. */
-    run_case(true, false, true, 600U, 850U, false, false, 0U);
-    assert(torque_on_calls == 2U && torque_off_calls == 1U && completed_stops == 1U);
-    assert(torque_off_tick < 600U && state == HOST_FSM_DISARMED);
+    /* Three missed feedback opportunities cause OFF without new movement. */
+    run_case(true, false, true, 70U, 200U, false, true, 0U, 0U);
+    assert(torque_on_calls == 1U && center_writes == 0U);
+    assert(torque_off_tick == 50U && completed_stops == 1U && state == HOST_FSM_DISARMED);
 
-    /* No feedback cannot be mistaken for a centered pose. */
-    run_case(true, false, true, 70U, 1250U, false, true, 0U);
-    assert(torque_on_calls == 2U && torque_off_calls == 1U && completed_stops == 1U);
+    /* The position backend keeps its three-attempt budget for return TX. */
+    run_case(true, false, false, 70U, 300U, true, false, 0U, 0U);
+    assert(center_writes == 3U && torque_on_calls == 1U && faults == 0U);
+    assert(torque_off_calls == 1U && completed_stops == 1U);
+
+    /* Failed OFF writes or readbacks must never re-enter the return stage. */
+    run_case(true, false, true, 0U, 350U, false, false, 6U, 2U);
+    assert(torque_on_calls == 1U && torque_off_calls == 9U && torque_off_queries == 3U);
+    assert(completed_stops == 1U && center_writes == writes_at_first_successful_off);
     assert(state == HOST_FSM_DISARMED);
-    assert(center_writes == writes_at_first_successful_off);
 
-    /* Three failed goal writes per attempt: initial + one retry, then off-only. */
-    run_case(true, false, false, 70U, 300U, true, false, 0U);
-    assert(center_writes == 6U && torque_on_calls == 1U && faults == 1U);
-    assert(torque_off_calls == 1U && completed_stops == 1U && state == HOST_FSM_DISARMED);
-
-    /* Failed OFF writes retry without more center commands; first success ends. */
-    run_case(true, false, true, 0U, 350U, false, false, 6U);
-    assert(torque_on_calls == 2U && torque_off_calls == 7U && completed_stops == 1U);
-    assert(center_writes == writes_at_first_successful_off && state == HOST_FSM_DISARMED);
-
-    /* While OFF keeps failing, FAULT and the pending stop must remain active. */
-    run_case(true, true, true, 70U, 850U, false, false, 1000U);
-    assert(torque_on_calls == 2U && torque_off_calls >= 10U && completed_stops == 0U);
+    run_case(true, true, true, 70U, 850U, false, false, 0U, 1000U);
+    assert(torque_on_calls == 1U && torque_off_calls >= 10U && completed_stops == 0U);
     assert(state == HOST_FSM_FAULT && safety_action == HOST_SAFETY_ACTION_SAFE_STOP);
-    assert(last_center_write_tick < 520U);
     return 0;
 }
 

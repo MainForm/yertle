@@ -96,9 +96,20 @@ check_path(host_pid_telemetry host_protocol_task report_host_state service_pid_d
     host_uart_write_bytes wait_tx_flag)
 
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
-check_path(actuator_return_pid actuator_task motor_control_service pwm_control_service service_stop position_pid_step)
-check_path(actuator_return_calibration actuator_task motor_control_service pwm_control_service service_stop calibration_cache_position calibration_cache_get)
-check_path(actuator_return_telemetry actuator_task motor_control_service pwm_control_service service_stop publish_stop)
+set(pwm_stop actuator_task motor_control_service pwm_control_service service_stop)
+set(position_stop actuator_task motor_control_service service_native_position service_position_stop)
+set(stop_off_verify motor_safe_stop_service motor_device_verify_torque_off motor_device_verify_torque_off_detailed
+    motor_device_read_register read_register_locked read_register_timed motor_uart_read_frame read_byte)
+check_path(actuator_return_pid ${pwm_stop} motor_safe_stop_service service_return send_pwm_return position_pid_step)
+check_path(actuator_return_calibration ${pwm_stop} motor_safe_stop_service service_return prepare_pwm_stop_feedback
+    calibration_cache_position calibration_cache_get)
+check_path(actuator_pwm_return_tx ${pwm_stop} motor_safe_stop_service service_return send_pwm_return
+    motor_device_write_pwm STS3215_BuildSyncWrite prv_pack_frame prv_checksum)
+check_path(actuator_position_return_tx ${position_stop} motor_safe_stop_service service_return send_position_return
+    motor_device_write_targets STS3215_BuildSyncWrite prv_pack_frame prv_checksum)
+check_path(actuator_pwm_off_verify ${pwm_stop} ${stop_off_verify})
+check_path(actuator_position_off_verify ${position_stop} ${stop_off_verify})
+check_path(actuator_return_telemetry ${pwm_stop} publish_stop)
 
 set(stack_bytes ${sensor_stack_bytes})
 set(imu_recovery sensor_task imu_device_init imu_i2c_init recover_lines)

@@ -418,7 +418,7 @@ DISARMED --healthy host lease, safe stop complete, no fault--> ARMED
 ARMED --target timeout (500 ms)--> DISARMED + safe stop request
 ARMED --heartbeat timeout--> DISARMED + safe stop request
 ARMED or DISARMED --fault report--> FAULT
-FAULT --safe stop or fallback torque-off TX succeeds--> DISARMED
+FAULT --torque OFF confirmed on all motors--> DISARMED
 ```
 
 FSM values are `BOOT=0`, `DISARMED=1`, `ARMED=2`, and `FAULT=5`. Values 3 and
@@ -428,8 +428,8 @@ FSM values are `BOOT=0`, `DISARMED=1`, `ARMED=2`, and `FAULT=5`. Values 3 and
 owns FSM transitions. `HELLO` establishes the link; a valid `HEARTBEAT` grants
 a lease, after which the F103 enters `ARMED` only when safe-stop has completed
 and no fault is latched. A target timeout revokes the lease until a fresh
-heartbeat. FAULT is released into DISARMED when safe stop or fallback torque-off
-transmission succeeds; this clears the fault reason and revokes the host lease,
+heartbeat. FAULT is released into DISARMED when torque-off is confirmed on all
+motors. This clears the fault reason and revokes the host lease,
 requiring a heartbeat received after completion before re-arming. There is no
 remote fault reset command. The PC cannot command immediate disarm/stop. Ceasing targets
 triggers the 500 ms target watchdog; no accepted PC heartbeat RX for 1000 ms
@@ -450,35 +450,31 @@ safe stop; this preserves the RPi policy's ability to issue recovery targets.
 `host_protocol_clear_unsafe()` clears the diagnostic once the later safety task
 has verified recovery. A fault remains an F103-owned hard stop.
 
-`actuator_task` owns target execution and safe stopping. On a target or host
-timeout with commanded torque active, a safe stop discards queued targets,
-repeatedly sends a synchronized 2048-step goal (speed 200 raw, acceleration
-10 raw) and requires three fresh complete feedback samples with all twelve
-axes within 16 steps. It then sends broadcast torque-off and calls
-`host_protocol_complete_safe_stop()`. The return attempt is bounded to 15 s
-overall and 0.5 s without measurable progress; repeated motor-bus failures,
-missing feedback or a blocked joint trigger FAULT. At boot with no commanded
-torque, it skips movement and attempts torque-off immediately.
-The stop request is published before the DISARMED/FAULT state and its EVENT;
-the actuator also observes pending fault/timeout flags before the host task
-publishes a state. Progress is checked per motor, not by summed center error:
-each motor outside the 16-step tolerance must improve its best error by at
-least 12 steps within 500 ms. Fresh complete error-free samples refresh the
-timers of already-centered motors. Missing/invalid feedback refreshes none.
-Motion/current reply servo-error bits are OR-combined per feedback cycle; the
-next cycle starts clear. Feedback validity is not a fault-free guarantee.
-In FAULT, the actuator performs one additional full return-and-torque-off
-attempt. It sends the center goal before explicitly enabling torque, uses
-fresh feedback, and has independent 0.5 s no-progress and 15 s total deadlines.
-Three consecutive transmission failures also fail an attempt, including failures
-to send torque-off. Successful recovery clears the pending safety action and
-fault reason, then transitions to DISARMED (state-change EVENT cause 9).
-If the single attempt fails, torque-off is repeatedly transmitted every 10 ms
-actuator cycle; position and torque-on commands stop. FAULT and the safety action
-stay active while transmission fails. The first successful local torque-off
-transmission terminates this fallback loop and also transitions to DISARMED.
-Broadcast success confirms transmission, not individual servo compliance.
-The host must send fresh targets after the F103 autonomously re-enters ARMED.
+`actuator_task` owns target execution and safe stopping. Both modes discard or
+block further host targets while stopping. With an eligible drive already active,
+the actuator makes one return attempt to 2048. The position backend uses speed
+200 raw and acceleration 10 raw. The PWM backend uses calibrated feedback and
+moves its internal PID target by at most four steps per update toward 2048.
+
+Return completion requires three consecutive fresh and complete samples with
+all motors within 16 steps of center. Each motor outside tolerance must
+improve its best error by at least 12 steps within 500 ms. The actuator advances
+to torque-off on a stall, three unusable feedback opportunities, a servo fault,
+the backend's transmission failure limit, or the 15 s total return limit. A
+stop with an ineligible drive goes straight to torque-off. The actuator
+issues no explicit torque-ON command during a stop.
+
+The actuator transmits torque OFF and reads the torque register on all twelve
+motors. A failed write or missing/non-OFF readback keeps the stop pending and
+the actuator only retries OFF and verification. The PWM backend sends its
+final PWM zero once before this stage. On verified OFF the actuator calls
+`host_protocol_complete_safe_stop()`. The host must send a fresh target after
+the F103 re-enters ARMED.
+
+The stop request is published before the DISARMED/FAULT state and its EVENT.
+The actuator also observes pending fault and timeout flags before the host
+task publishes a state. Motion/current reply servo-error bits remain
+OR-combined per feedback cycle.
 
 Target and feedback messages are implemented as described above. IMU feedback
 is telemetry only; this version does not use it for actuator safety decisions.

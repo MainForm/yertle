@@ -152,33 +152,21 @@ actuator request.
 - Torque stays disabled until a valid target exists. The target registers are
   written first, then torque is enabled, preventing an uncommanded jump to an
   arbitrary startup target.
-- Target or heartbeat timeout discards queued targets, then commands all twelve
-  motors toward position 2048 at speed 200 raw and acceleration 10 raw. Three
-  fresh, complete feedback samples with every motor within 16 steps are needed
-  before broadcast torque-off completes SAFE_STOP. Recovery is bounded by a
-  15 s total timeout and a 0.5 s no-progress timeout; failed writes also abort.
-- Return progress is tracked separately for all twelve motors: a fresh complete
-  error-free sample must reduce that motor's best center error by at least 12
-  steps within 500 ms. A motor already within 16 steps refreshes its timer with
-  each valid new sample. Any stalled motor fails the attempt; movement of other
-  motors cannot hide it. Missing/invalid samples refresh no motor's timer.
-- At boot (no commanded torque), SAFE_STOP only requests broadcast torque-off.
-- FAULT starts one additional full SAFE_STOP attempt: command position 2048,
-  explicitly enable torque, verify settling, then disable torque. Each attempt
-  resets its timers and feedback history. Three consecutive command/torque
-  transmission failures, 0.5 s without progress, or 15 s overall fail an attempt.
-- Successful FAULT recovery completes SAFE_STOP and transitions to DISARMED.
-  If the single attempt fails, only torque-off is retried once per 10 ms actuator
-  cycle, without position or torque-on commands. The first successful local
-  torque-off transmission also completes SAFE_STOP and transitions to DISARMED.
-  While OFF keeps failing, FAULT and the pending safety action remain active.
-  A successful broadcast write does not prove that every servo disabled torque.
-- FAULT completion clears the fault reason and revokes the host lease. A new
-  heartbeat after completion is required before automatic re-arming; torque
-  remains off until a fresh target. A subsequent fault report starts a new cycle.
-- The 0.5 s no-progress limit applies separately to each attempt: an initial
-  failed stop followed by one stalled FAULT retry can total about 1.0 s.
-- Re-arming does not restore a stale target; a new target set is required.
+- Both modes use the actuator-owned stop sequence in `motor_safe_stop.c`.
+  An eligible, already-driven robot gets one bounded return attempt to position
+  2048. The position backend sends speed 200 and acceleration 10 (raw). The PWM
+  backend applies cached calibration and its bounded 4-step reference updates.
+- The return uses fresh, complete feedback at 20 ms opportunities. Each motor
+  must be within 16 steps for three consecutive samples before completing the
+  return. A motor outside tolerance must improve its best error by 12 steps
+  within 500 ms. Three consecutive unusable feedback opportunities, a servo
+  fault, the backend's TX limit, or the 15 s overall limit advance to torque-off.
+- Torque-off is sent and then read back on all twelve motors. Once in this
+  stage, only OFF and its verification are retried until confirmed. The PWM
+  backend sends its final zero once before those retries. Neither backend
+  issues an explicit torque-ON command during a stop.
+- After verified OFF the actuator marks SAFE_STOP complete. The host task
+  clears a latched FAULT and requires a new heartbeat before re-arming.
 
 ## Feedback behavior
 

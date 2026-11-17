@@ -113,6 +113,7 @@ add_test(NAME firmware_pwm_driver_test COMMAND firmware_pwm_driver_test)
 
 foreach(native firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test)
  target_compile_definitions(${native} PRIVATE NATIVE_POSITION_TEST=1)
+ target_sources(${native} PRIVATE ../../firmware/src/motor_safe_stop.c)
 endforeach()
 
 foreach(legacy firmware_safe_stop_test firmware_target_timeout_test firmware_control_safety_test

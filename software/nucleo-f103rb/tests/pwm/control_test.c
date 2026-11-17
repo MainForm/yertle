@@ -363,6 +363,16 @@ static void return_first_tests(void){
  pwm_control_stop(YPWM_REASON_RELEASE);assert(pwm_control_service()&&phase()==YPWM_STOPPING);
  feedback.motor[0].voltage=40;advance();assert(pwm_control_service()&&phase()==YPWM_FAILED);
  assert(pwm_control_stop_detail(detail)&&detail[2]==5&&servo_torque_on==0);
+ /* Failed OFF attempts must not send PWM0 again and re-enable the servo. */
+ reset();ready(YPWM_ALL_MASK);pwm_auto_enable=true;off_ok=false;
+ pwm_control_stop(YPWM_REASON_RELEASE);
+ const unsigned writes_at_stop=write_count;
+ for(unsigned i=0;i<3;++i){advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING);}
+ const unsigned writes_at_off=write_count;
+ assert(writes_at_off>writes_at_stop&&completed==0U);
+ advance();assert(pwm_control_service()&&phase()==YPWM_STOPPING&&write_count==writes_at_off);
+ off_ok=true;advance();assert(pwm_control_service()&&phase()==YPWM_FAILED&&completed==1U);
+ assert(write_count==writes_at_off&&servo_torque_on==0U);
  /* A mechanically stalled motor and stale sensor both fall back to OFF. */
  reset();ready(YPWM_ALL_MASK);feedback.motor[0].position=2100;pwm_control_stop(YPWM_REASON_RELEASE);
  for(unsigned a=0;a<30&&phase()==YPWM_STOPPING;++a){advance();assert(pwm_control_service());}

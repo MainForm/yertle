@@ -20,6 +20,7 @@ add_executable(yertle_f103rb
     src/imu_i2c.c
     src/actuator_task.c
     src/motor_control.c
+    src/motor_safe_stop.c
     src/motor_control_state.c
     src/position_pid.c
     src/calibration_store.c
