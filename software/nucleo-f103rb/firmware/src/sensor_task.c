@@ -43,7 +43,9 @@ bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feed
 
 void sensor_task(void *argument)
 {
-    pmw3901_device_t *flow = argument;
+    sensor_devices_t *devices = argument;
+    imu_device_t *imu_device = &devices->imu;
+    pmw3901_device_t *flow = &devices->optical_flow;
     TickType_t last_wake = xTaskGetTickCount();
     TickType_t next_imu_probe = last_wake + pdMS_TO_TICKS(SENSOR_RETRY_MS);
     TickType_t next_flow_probe = last_wake + pdMS_TO_TICKS(SENSOR_RETRY_MS);
@@ -58,10 +60,10 @@ void sensor_task(void *argument)
 
         imu.sequence = sample.sequence;
         imu.uptime_ms = sample.uptime_ms;
-        const bool imu_ready = imu_device_is_ready();
+        const bool imu_ready = imu_device->ready;
         if (imu_ready || (int32_t)(xTaskGetTickCount() - next_imu_probe) >= 0) {
-            if (imu_ready || imu_device_init()) {
-                imu.valid = imu_device_read(&imu.raw);
+            if (imu_ready || imu_device_init(imu_device)) {
+                imu.valid = imu_device_read(imu_device, &imu.raw);
             }
             if (!imu.valid) {
                 next_imu_probe = xTaskGetTickCount() + pdMS_TO_TICKS(SENSOR_RETRY_MS);

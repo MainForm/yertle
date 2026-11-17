@@ -104,19 +104,20 @@ uint8_t imu_i2c_test_read_dr(void)
     return registers[selected_register + received++];
 }
 
-static bool initialize(void)
+static bool initialize(imu_device_t *device)
 {
     recovering = true;
-    return imu_device_init();
+    return imu_device_init(device);
 }
 
 int main(void)
 {
-    assert(!imu_device_is_ready());
+    imu_device_t device = {0};
+    assert(!device.ready);
     registers[0x75] = 0x68U;
     gpiob.CRL = 0xABCDEFU;
     gpiob.IDR = SCL | SDA;
-    assert(initialize() && imu_device_is_ready());
+    assert(initialize(&device) && device.ready);
     assert(gpio_scl_low_writes == 1U); /* Only the ES096 idle-bus transition. */
     assert(gpiob.CRL == 0xEEABCDEFU && (rcc.APB1ENR & RCC_APB1ENR_I2C1EN));
     assert(i2c.CR2 == 32U && i2c.CCR == 200U && i2c.TRISE == 33U);
@@ -127,38 +128,40 @@ int main(void)
     const uint8_t sample_bytes[] = {0x40,0, 0xFF,0xFE, 0,3, 0x80,0, 0,5, 0xFF,0xFA, 0,7};
     memcpy(registers + 0x3B, sample_bytes, sizeof sample_bytes);
     imu_raw_sample_t sample = {0};
-    assert(imu_device_read(&sample));
+    imu_device_t uninitialized_device = {0};
+    assert(!uninitialized_device.ready && !imu_device_read(&uninitialized_device, &sample));
+    assert(imu_device_read(&device, &sample));
     assert(starts == 9U && stops == 7U && received == 14U && !primask);
     assert(sample.accel_x == 16384 && sample.accel_y == -2 && sample.accel_z == 3);
     assert(sample.temperature == -32768 && sample.gyro_x == 5 && sample.gyro_y == -6 && sample.gyro_z == 7);
 
     uint32_t begin = cycles;
     suppress_receive = true;
-    assert(!imu_device_read(&sample) && !imu_device_is_ready());
+    assert(!imu_device_read(&device, &sample) && !device.ready);
     assert(sample.gyro_z == 7 && i2c.CR1 == 0U && !primask);
     assert(cycles - begin >= 1000U * 64U && cycles - begin < 2000U * 64U);
     suppress_receive = false;
-    assert(initialize() && imu_device_read(&sample));
+    assert(initialize(&device) && imu_device_read(&device, &sample));
 
     /* Delays spread across successful flags must still hit the transaction cap. */
     poll_step_us = 800U;
-    assert(!imu_device_read(&sample) && i2c.CR1 == 0U && !primask);
+    assert(!imu_device_read(&device, &sample) && i2c.CR1 == 0U && !primask);
     poll_step_us = 1U;
-    assert(initialize());
+    assert(initialize(&device));
 
     nack_address = true;
-    assert(!imu_device_read(&sample) && i2c.CR1 == 0U);
+    assert(!imu_device_read(&device, &sample) && i2c.CR1 == 0U);
     nack_address = false;
-    assert(initialize());
+    assert(initialize(&device));
     suppress_start = true;
-    assert(!imu_device_read(&sample) && i2c.CR1 == 0U);
+    assert(!imu_device_read(&device, &sample) && i2c.CR1 == 0U);
     suppress_start = false;
-    assert(initialize());
+    assert(initialize(&device));
 
     const unsigned starts_before_busy = starts;
     i2c.SR2 = I2C_SR2_BUSY;
-    assert(!imu_device_read(&sample) && i2c.CR1 == 0U && starts == starts_before_busy);
-    assert(initialize() && imu_device_read(&sample));
+    assert(!imu_device_read(&device, &sample) && i2c.CR1 == 0U && starts == starts_before_busy);
+    assert(initialize(&device) && imu_device_read(&device, &sample));
 
     /* Stop clocking as soon as SDA releases, including on the ninth pulse. */
     const unsigned release_cases[] = {3U, 9U};
@@ -166,7 +169,7 @@ int main(void)
         const unsigned edges_before = gpio_scl_low_writes;
         hold_sda = true;
         sda_release_after_pulses = release_cases[i];
-        assert(initialize() && !hold_sda);
+        assert(initialize(&device) && !hold_sda);
         assert(gpio_scl_low_writes - edges_before == release_cases[i] + 1U);
     }
 
@@ -174,18 +177,18 @@ int main(void)
     unsigned edges_before = gpio_scl_low_writes;
     unsigned starts_before = starts;
     hold_sda = true;
-    assert(!initialize() && !imu_device_is_ready() && i2c.CR1 == 0U);
+    assert(!initialize(&device) && !device.ready && i2c.CR1 == 0U);
     assert(gpio_scl_low_writes - edges_before == 9U && starts == starts_before);
 
     /* Held-low SCL prevents both bus clear and peripheral transfers. */
     edges_before = gpio_scl_low_writes;
     hold_scl = true;
     begin = cycles;
-    assert(!initialize() && !imu_device_is_ready() && i2c.CR1 == 0U);
+    assert(!initialize(&device) && !device.ready && i2c.CR1 == 0U);
     assert(gpio_scl_low_writes == edges_before && starts == starts_before);
     assert(cycles - begin >= 250U * 64U && cycles - begin < 300U * 64U);
     hold_scl = hold_sda = false;
-    assert(initialize() && imu_device_is_ready() && imu_device_read(&sample));
+    assert(initialize(&device) && device.ready && imu_device_read(&device, &sample));
     puts("IMU I2C1 setup, receive sequences, register data, deadlines and recovery passed");
     return 0;
 }

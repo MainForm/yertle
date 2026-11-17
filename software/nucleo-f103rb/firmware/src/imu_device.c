@@ -12,41 +12,34 @@
 #define REG_PWR_MGMT_1 0x6BU
 #define REG_WHO_AM_I 0x75U
 
-static bool initialized;
-
 static int16_t unpack_be16(const uint8_t *data)
 {
     return (int16_t)(((uint16_t)data[0] << 8U) | data[1]);
 }
 
-bool imu_device_init(void)
+bool imu_device_init(imu_device_t *device)
 {
-    initialized = false;
+    device->ready = false;
     if (!imu_i2c_init()) return false;
 
     uint8_t who_am_i = 0U;
     if (!imu_i2c_read(MPU_ADDRESS, REG_WHO_AM_I, &who_am_i, 1U) || who_am_i != MPU_ADDRESS) {
         return false;
     }
-    initialized = imu_i2c_write(MPU_ADDRESS, REG_PWR_MGMT_1, 0x01U) &&
-                  imu_i2c_write(MPU_ADDRESS, REG_CONFIG, 0x03U) &&
-                  imu_i2c_write(MPU_ADDRESS, REG_SMPLRT_DIV, 0x09U) &&
-                  imu_i2c_write(MPU_ADDRESS, REG_GYRO_CONFIG, 0x00U) &&
-                  imu_i2c_write(MPU_ADDRESS, REG_ACCEL_CONFIG, 0x00U);
-    return initialized;
+    device->ready = imu_i2c_write(MPU_ADDRESS, REG_PWR_MGMT_1, 0x01U) &&
+                    imu_i2c_write(MPU_ADDRESS, REG_CONFIG, 0x03U) &&
+                    imu_i2c_write(MPU_ADDRESS, REG_SMPLRT_DIV, 0x09U) &&
+                    imu_i2c_write(MPU_ADDRESS, REG_GYRO_CONFIG, 0x00U) &&
+                    imu_i2c_write(MPU_ADDRESS, REG_ACCEL_CONFIG, 0x00U);
+    return device->ready;
 }
 
-bool imu_device_is_ready(void)
-{
-    return initialized;
-}
-
-bool imu_device_read(imu_raw_sample_t *sample)
+bool imu_device_read(imu_device_t *device, imu_raw_sample_t *sample)
 {
     uint8_t bytes[14];
-    if (sample == NULL || !initialized) return false;
+    if (sample == NULL || !device->ready) return false;
     if (!imu_i2c_read(MPU_ADDRESS, REG_ACCEL_XOUT_H, bytes, sizeof(bytes))) {
-        initialized = false;
+        device->ready = false;
         return false;
     }
     sample->accel_x = unpack_be16(&bytes[0]);

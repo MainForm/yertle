@@ -14,6 +14,12 @@ typedef struct {
     imu_raw_sample_t raw;
 } imu_feedback_t;
 
+/* Owned by main(), then used by sensor_task for the life of the scheduler. */
+typedef struct {
+    imu_device_t imu;
+    pmw3901_device_t optical_flow;
+} sensor_devices_t;
+
 /* Cache the initial optical state before starting the scheduler. */
 bool sensor_task_init(const pmw3901_feedback_t *flow_feedback);
 bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow);

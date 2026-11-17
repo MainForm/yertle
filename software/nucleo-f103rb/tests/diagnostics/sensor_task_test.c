@@ -14,7 +14,7 @@
 static TickType_t tick;
 static unsigned cycles, initializations, services;
 static bool cache_locked, missing_at_boot;
-static bool imu_ready, imu_missing_at_boot, imu_fail_at_runtime;
+static bool imu_missing_at_boot, imu_fail_at_runtime;
 static unsigned imu_retries;
 static jmp_buf finished;
 
@@ -51,26 +51,21 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *sample)
     return MOTOR_DEVICE_OK;
 }
 
-bool imu_device_init(void)
+bool imu_device_init(imu_device_t *device)
 {
-    assert(!cache_locked && !imu_ready && imu_retries == 0U);
+    assert(!cache_locked && !device->ready && imu_retries == 0U);
     assert(imu_missing_at_boot || imu_fail_at_runtime);
     assert(tick == (imu_missing_at_boot ? 1000U : 1020U));
     ++imu_retries;
-    imu_ready = true;
+    device->ready = true;
     return true;
 }
 
-bool imu_device_is_ready(void)
+bool imu_device_read(imu_device_t *device, imu_raw_sample_t *sample)
 {
-    return imu_ready;
-}
-
-bool imu_device_read(imu_raw_sample_t *sample)
-{
-    assert(!cache_locked && imu_ready);
+    assert(!cache_locked && device->ready);
     if (imu_fail_at_runtime && tick == 20U) {
-        imu_ready = false;
+        device->ready = false;
         return false;
     }
     sample->gyro_x = 123;
@@ -137,25 +132,25 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
 
 int main(int argc, char **argv)
 {
-    static pmw3901_device_t device;
+    static sensor_devices_t devices;
     missing_at_boot = argc > 1 && strcmp(argv[1], "missing-at-boot") == 0;
     imu_missing_at_boot = argc > 1 && strcmp(argv[1], "imu-missing-at-boot") == 0;
     imu_fail_at_runtime = argc > 1 && strcmp(argv[1], "imu-fail-at-runtime") == 0;
-    imu_ready = !imu_missing_at_boot;
-    device.feedback.epoch = 1U;
-    device.feedback.ready = !missing_at_boot;
-    device.feedback.state = missing_at_boot ? PMW_RETRY : PMW_READY;
-    assert(sensor_task_init(&device.feedback));
+    devices.imu.ready = !imu_missing_at_boot;
+    devices.optical_flow.feedback.epoch = 1U;
+    devices.optical_flow.feedback.ready = !missing_at_boot;
+    devices.optical_flow.feedback.state = missing_at_boot ? PMW_RETRY : PMW_READY;
+    assert(sensor_task_init(&devices.optical_flow.feedback));
 
     motor_feedback_set_t motor;
     imu_feedback_t imu;
     pmw3901_feedback_t flow;
     assert(sensor_get_extended_feedback_snapshot(&motor, &imu, &flow));
-    assert(flow.epoch == 1U && flow.ready == device.feedback.ready);
-    assert(flow.state == device.feedback.state);
+    assert(flow.epoch == 1U && flow.ready == devices.optical_flow.feedback.ready);
+    assert(flow.state == devices.optical_flow.feedback.state);
 
     if (setjmp(finished) == 0) {
-        sensor_task(&device);
+        sensor_task(&devices);
         assert(0);
     }
     assert(cycles == (missing_at_boot ? 52U : 53U));
