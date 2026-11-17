@@ -29,7 +29,7 @@ void pwm_control_init(void){motor_control_discard_targets();}
 void pwm_control_init(void){}
 #endif
 bool pwm_control_service(void){return false;}
-bool pwm_control_native_ready(void){return true;}
+bool motor_control_position_ready(void){return true;}
 bool motor_control_accepts_targets(void){return true;}
 bool pwm_control_can_arm(void){return true;}
 void pwm_control_on_armed(void){}

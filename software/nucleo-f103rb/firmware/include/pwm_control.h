@@ -7,7 +7,6 @@
  * service() runs from motor_control_service() and owns all PWM writes. */
 void pwm_control_init(void);
 bool pwm_control_service(void);
-bool pwm_control_native_ready(void);
 bool pwm_control_can_arm(void);
 void pwm_control_on_armed(void);
 void pwm_control_connection_reset(void);

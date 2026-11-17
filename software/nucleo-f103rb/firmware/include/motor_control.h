@@ -4,6 +4,8 @@
 #include "motor_device.h"
 
 void motor_control_init(void);
+/* Position-only operations such as reading servo position offsets. */
+bool motor_control_position_ready(void);
 /* Common acceptance gate and latest position target for both motor modes.
  * Submission copies targets and timestamps reception without motor I/O. */
 bool motor_control_accepts_targets(void);

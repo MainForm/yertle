@@ -94,7 +94,7 @@ static void transition(protocol_context_t *c,uint8_t backend,uint32_t epoch){
 int main(void){
  seed_calibration();mode_memory_reset();
  protocol_context_t c={0};c.host_connected=true;c.state=HOST_FSM_DISARMED;c.last_host_heartbeat_tick=tick;published_state=HOST_FSM_DISARMED;
- motor_control_init();assert(pwm_control_service());assert(pwm_control_native_ready());
+ motor_control_init();assert(pwm_control_service());assert(motor_control_position_ready());
  /* Slow DISARMED configuration may outlive5s, but never ARM. A silent
     configuration still disconnects/rolls back at its own bounded20s window. */
  uint8_t slow[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};ypwm_put16(slow+3,YPWM_ALL_MASK);ypwm_put32(slow+5,118);
@@ -159,7 +159,9 @@ int main(void){
  assert(pwm_control_service()&&pwm_control_service());
  assert(!pwm_control_can_arm()&&!torque_mask&&on_count==recover_on+1);
  servo_modes[3]=2;
- transition(&c,YPWM_POSITION,124);assert(pwm_control_native_ready());
+ transition(&c,YPWM_POSITION,124);assert(motor_control_position_ready());
+ uint8_t position_status[YPWM_STATUS_LENGTH];
+ assert(pwm_control_status(position_status,true)&&position_status[2]==YPWM_POSITION&&position_status[3]==1U);
  receive(&c,MESSAGE_SET_JOINT_TARGETS,targets,60);
  assert(last_result==MESSAGE_ACK&&native_writes==0);
  uint8_t newer[sizeof targets];memcpy(newer,targets,sizeof newer);

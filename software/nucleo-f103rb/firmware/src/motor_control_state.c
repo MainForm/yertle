@@ -137,7 +137,7 @@ void pwm_control_init(void){
     trace_pending=trace_draining=false;trace_chunk=0;
     trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
     taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
-    p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?YPWM_FAILED:YPWM_UNVERIFIED;
+    p.boot_restored=stored==MODE_STORE_VALID;p.phase=stored==MODE_STORE_READ_ERROR?MOTOR_CONTROL_FAILED:MOTOR_CONTROL_UNVERIFIED;
     p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
     if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
     p.dirty=true;
@@ -145,16 +145,25 @@ void pwm_control_init(void){
 }
 void pwm_control_on_armed(void){
     taskENTER_CRITICAL();
-    if(p.phase==YPWM_NATIVE_READY)p.ever_command=false;
-    if(p.phase==YPWM_READY||p.phase==YPWM_NATIVE_READY){p.snapshot_valid=false;p.boot_restored=false;}taskEXIT_CRITICAL();
+    if(p.phase==MOTOR_CONTROL_READY){
+        if(p.backend==YPWM_POSITION)p.ever_command=false;
+        p.snapshot_valid=false;p.boot_restored=false;
+    }
+    taskEXIT_CRITICAL();
 }
-bool pwm_control_native_ready(void){const control_context s=snapshot();return s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY;}
+bool motor_control_position_ready(void)
+{
+    taskENTER_CRITICAL();
+    const bool ready = p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY;
+    taskEXIT_CRITICAL();
+    return ready;
+}
 /* Caller holds the critical section. */
 static bool accepts_targets(void)
 {
-    return (p.backend == YPWM_POSITION && p.phase == YPWM_NATIVE_READY) ||
+    return (p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY) ||
            (p.backend == YPWM_PID && p.arm_allowed &&
-            (p.phase == YPWM_READY || p.phase == YPWM_ACTIVE));
+            (p.phase == MOTOR_CONTROL_READY || p.phase == MOTOR_CONTROL_ACTIVE));
 }
 
 bool motor_control_accepts_targets(void)
@@ -168,7 +177,7 @@ bool motor_control_accepts_targets(void)
 bool motor_control_read_targets(motor_position_target_t *target)
 {
     taskENTER_CRITICAL();
-    const bool available = p.phase == YPWM_NATIVE_READY && p.ever_command;
+    const bool available = p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY && p.ever_command;
     if (available) *target = p.position_target;
     taskEXIT_CRITICAL();
     return available;
@@ -177,7 +186,7 @@ bool motor_control_read_targets(motor_position_target_t *target)
 void motor_control_discard_targets(void)
 {
     taskENTER_CRITICAL();
-    if (p.phase == YPWM_NATIVE_READY &&
+    if (p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY &&
         (!host_protocol_is_armed() || host_protocol_is_stop_requested())) p.ever_command = false;
     taskEXIT_CRITICAL();
 }
@@ -188,9 +197,9 @@ static bool calibration_ready(uint16_t mask){
     return true;
 }
 bool pwm_control_can_arm(void){const control_context s=snapshot();return
-    (s.backend==YPWM_POSITION&&s.phase==YPWM_NATIVE_READY)||
-    (s.backend==YPWM_PID&&s.phase==YPWM_READY&&s.arm_allowed&&calibration_ready(s.mask));}
-static bool transitioning(uint8_t phase){return phase==YPWM_PREPARING||phase==YPWM_STAGED||phase==YPWM_ROLLING_BACK;}
+    s.phase==MOTOR_CONTROL_READY&&(s.backend==YPWM_POSITION||
+    (s.backend==YPWM_PID&&s.arm_allowed&&calibration_ready(s.mask)));}
+static bool transitioning(uint8_t phase){return phase==MOTOR_CONTROL_PREPARING||phase==MOTOR_CONTROL_STAGED||phase==MOTOR_CONTROL_ROLLING_BACK;}
 void pwm_control_stop(uint8_t reason){
     taskENTER_CRITICAL();
     if(p.raw_pending){p.raw_pending=false;p.raw_result_pending=true;p.raw_result=YPWM_INVALID_STATE;}
@@ -198,13 +207,13 @@ void pwm_control_stop(uint8_t reason){
         /* OFF/release must retain the original epoch and recovery snapshot. */
         p.arm_allowed=false;p.dirty=true;
     }else if(transitioning(p.phase)){
-        p.phase=YPWM_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
-    }else if(p.phase!=YPWM_STOPPING){
+        p.phase=MOTOR_CONTROL_ROLLING_BACK;p.reason=reason;p.arm_allowed=false;p.result=YPWM_INVALID_STATE;p.dirty=true;
+    }else if(p.phase!=MOTOR_CONTROL_STOPPING){
         p.reconnect_stop_recoverable=p.backend==YPWM_PID&&
-            (p.phase==YPWM_READY||p.phase==YPWM_ACTIVE)&&
+            (p.phase==MOTOR_CONTROL_READY||p.phase==MOTOR_CONTROL_ACTIVE)&&
             (p.verified&p.mask)==p.mask&&ypwm_mask(p.mask);
         p.reconnect_recovery_requested=false;
-        p.phase=YPWM_STOPPING;p.reason=reason;p.arm_allowed=false;
+        p.phase=MOTOR_CONTROL_STOPPING;p.reason=reason;p.arm_allowed=false;
         if(p.epoch)p.retired_epoch=p.epoch;
         p.epoch=0;p.dirty=true;
         if(p.result_pending){p.result=YPWM_INVALID_STATE;}
@@ -213,7 +222,7 @@ void pwm_control_stop(uint8_t reason){
 }
 void pwm_control_reconnect_recover(void){
     taskENTER_CRITICAL();
-    if((p.phase==YPWM_STOPPING||p.phase==YPWM_FAILED)&&
+    if((p.phase==MOTOR_CONTROL_STOPPING||p.phase==MOTOR_CONTROL_FAILED)&&
        p.reconnect_stop_recoverable&&!p.rollback_failed&&!p.flash_read_failed)
         p.reconnect_recovery_requested=true;
     taskEXIT_CRITICAL();
@@ -223,15 +232,15 @@ void pwm_control_connection_reset(void){const control_context s=snapshot();
        establish a new session after boot OFF/mode verification, without any
        EEPROM writes. Once ARMED, the ordinary stop/reprepare rules apply. */
     if(s.boot_restored&&!s.epoch&&!s.ever_command&&
-       (s.phase==YPWM_READY||s.phase==YPWM_NATIVE_READY))return;
+       s.phase==MOTOR_CONTROL_READY)return;
     /* User-approved: retain rollback only until the first real ARMED state.
        This also covers a successfully committed mode whose ACK was lost. */
-    if(s.snapshot_valid&&(s.phase==YPWM_READY||s.phase==YPWM_NATIVE_READY)&&!host_protocol_is_armed()){
-        taskENTER_CRITICAL();if(p.epoch==s.epoch){p.phase=YPWM_ROLLING_BACK;p.arm_allowed=false;p.dirty=true;}taskEXIT_CRITICAL();
+    if(s.snapshot_valid&&s.phase==MOTOR_CONTROL_READY&&!host_protocol_is_armed()){
+        taskENTER_CRITICAL();if(p.epoch==s.epoch){p.phase=MOTOR_CONTROL_ROLLING_BACK;p.arm_allowed=false;p.dirty=true;}taskEXIT_CRITICAL();
         pwm_control_stop(YPWM_REASON_LINK);return;
     }
     if(transitioning(s.phase)||(s.backend==YPWM_PID&&
-        (s.phase==YPWM_READY||s.phase==YPWM_ACTIVE||(s.phase==YPWM_FAILED&&s.unknown))))
+        (s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE||(s.phase==MOTOR_CONTROL_FAILED&&s.unknown))))
         pwm_control_stop(YPWM_REASON_LINK);
 }
 uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence){
@@ -242,24 +251,24 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
         if(r.epoch!=p.epoch||r.backend!=p.backend||r.mask!=p.mask){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
         if(p.result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
         if(r.operation==YPWM_CANCEL){
-            if(!transitioning(p.phase)&&p.phase!=YPWM_CANCELED&&
-               !(p.rollback_failed&&p.phase==YPWM_FAILED)&&
-               !(p.snapshot_valid&&(p.phase==YPWM_READY||p.phase==YPWM_NATIVE_READY))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
+            if(!transitioning(p.phase)&&p.phase!=MOTOR_CONTROL_CANCELED&&
+               !(p.rollback_failed&&p.phase==MOTOR_CONTROL_FAILED)&&
+               !(p.snapshot_valid&&p.phase==MOTOR_CONTROL_READY)){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
             p.request=sequence;p.operation=YPWM_CANCEL;p.transaction_pending=true;p.result=YPWM_OK;p.arm_allowed=false;
-            if(p.phase==YPWM_CANCELED){p.result_pending=true;p.transaction_pending=false;}
-            else p.phase=YPWM_ROLLING_BACK;
+            if(p.phase==MOTOR_CONTROL_CANCELED){p.result_pending=true;p.transaction_pending=false;}
+            else p.phase=MOTOR_CONTROL_ROLLING_BACK;
         }else{
-            if(p.phase!=YPWM_STAGED||p.mode_busy||host_protocol_is_stop_requested()){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
-            p.request=sequence;p.operation=r.operation;p.phase=YPWM_PREPARING;p.transaction_pending=true;
+            if(p.phase!=MOTOR_CONTROL_STAGED||p.mode_busy||host_protocol_is_stop_requested()){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
+            p.request=sequence;p.operation=r.operation;p.phase=MOTOR_CONTROL_PREPARING;p.transaction_pending=true;
         }
         p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
     }
     if(p.flash_read_failed){taskEXIT_CRITICAL();return YPWM_FLASH_READ_FAILED;}
     if(p.rollback_failed){taskEXIT_CRITICAL();return YPWM_ROLLBACK_FAILED;}
-    if(host_protocol_is_stop_requested()||transitioning(p.phase)||p.phase==YPWM_ACTIVE||p.phase==YPWM_STOPPING||
+    if(host_protocol_is_stop_requested()||transitioning(p.phase)||p.phase==MOTOR_CONTROL_ACTIVE||p.phase==MOTOR_CONTROL_STOPPING||
        p.result_pending||p.mode_busy||p.raw_pending||p.raw_result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.epoch==p.epoch||r.epoch==p.retired_epoch){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
-    p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=YPWM_PREPARING;p.operation=YPWM_PREPARE;
+    p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=MOTOR_CONTROL_PREPARING;p.operation=YPWM_PREPARE;
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;p.return_eligible=false;
     p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;p.boot_restored=false;
     p.direct=p.raw_preview=p.pid_restart=false;
@@ -267,8 +276,8 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;
     taskEXIT_CRITICAL();return YPWM_OK;
 }
-uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==YPWM_STAGED?s.epoch:0;}
-bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.phase==YPWM_PREPARING||s.phase==YPWM_STAGED;}
+uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_STAGED?s.epoch:0;}
+bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_PREPARING||s.phase==MOTOR_CONTROL_STAGED;}
 static bool mode_write_window_open(uint32_t started_ms)
 {
     return host_protocol_get_state() == HOST_FSM_DISARMED &&
@@ -279,7 +288,7 @@ static bool mode_write_window_open(uint32_t started_ms)
 bool pwm_control_mode_write_current(void)
 {
     taskENTER_CRITICAL();
-    const bool active = p.phase == YPWM_STAGED && p.snapshot_valid && p.mode_busy;
+    const bool active = p.phase == MOTOR_CONTROL_STAGED && p.snapshot_valid && p.mode_busy;
     const uint32_t started_ms = p.started_ms;
     taskEXIT_CRITICAL();
     return active && mode_write_window_open(started_ms);
@@ -289,7 +298,7 @@ bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
     if(id<1||id>12)return false;
     /* Only copy the fields needed to validate the requested motor and mode. */
     taskENTER_CRITICAL();
-    const bool staged=p.phase==YPWM_STAGED&&p.snapshot_valid&&
+    const bool staged=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
         mode==((p.backend==YPWM_PID&&(p.mask&(1U<<(id-1))))?2:0);
     const uint32_t started_ms=p.started_ms;
     taskEXIT_CRITICAL();
@@ -297,7 +306,7 @@ bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
 }
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *q){
     if(motor_register_validate_mode_write(q)!=MOTOR_WRITE_OK||!pwm_control_mode_write_allowed(q->motor_id,q->data[0]))return false;
-    taskENTER_CRITICAL();const bool ok=p.phase==YPWM_STAGED&&!p.mode_busy;
+    taskENTER_CRITICAL();const bool ok=p.phase==MOTOR_CONTROL_STAGED&&!p.mode_busy;
     if(ok){p.mode_busy=true;p.mode_write_id=q->motor_id;}
     taskEXIT_CRITICAL();return ok;
 }
@@ -324,7 +333,7 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
         mode_detail[29]=r->servo_error;diagnostic_register_report(mode_detail,r);
         ypwm_put32(mode_detail+20,milliseconds()-p.started_ms);ypwm_put32(mode_detail+56,milliseconds());
         mode_detail_valid=mode_detail_pending=true;mode_detail_has_write=false;
-        const bool host_may_retry=p.phase==YPWM_STAGED&&p.snapshot_valid&&
+        const bool host_may_retry=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
             (r->status==MOTOR_WRITE_IO_ERROR||r->status==MOTOR_WRITE_VERIFY_MISMATCH)&&
             !r->servo_error&&!r->cleanup_servo_error&&!motor_device_register_lock_uncertain_mask()&&
             (!r->target_write_attempted||r->lock_restore_verified)&&
@@ -333,7 +342,7 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
         /* STAGED never permits ARM. Safe transient failures wait for the PC's
            next explicit request/CANCEL; silence and the existing TTL rollback.
            Unsafe/unknown cleanup still rolls back immediately, without PC help. */
-        if(!host_may_retry){p.phase=YPWM_ROLLING_BACK;p.result=YPWM_MODE_FAILED;p.reason=YPWM_REASON_MODE;}
+        if(!host_may_retry){p.phase=MOTOR_CONTROL_ROLLING_BACK;p.result=YPWM_MODE_FAILED;p.reason=YPWM_REASON_MODE;}
         p.arm_allowed=false;p.dirty=true;
     }else if(r->status==MOTOR_WRITE_OK&&p.mode_write_id){
         const uint16_t ok=ypwm_u16(mode_detail+14)|(uint16_t)(1U<<(p.mode_write_id-1));ypwm_put16(mode_detail+14,ok);
@@ -377,9 +386,9 @@ uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
     }
     if(p.raw_pending||p.raw_result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
     const bool preview=!armed&&zero&&host_protocol_get_state()==HOST_FSM_DISARMED&&
-        (p.phase==YPWM_READY||p.phase==YPWM_STAGED);
+        (p.phase==MOTOR_CONTROL_READY||p.phase==MOTOR_CONTROL_STAGED);
     if(host_protocol_is_stop_requested()||(!preview&&(!armed||!p.arm_allowed||
-        (p.phase!=YPWM_READY&&p.phase!=YPWM_ACTIVE)))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
+        (p.phase!=MOTOR_CONTROL_READY&&p.phase!=MOTOR_CONTROL_ACTIVE)))){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
     memcpy(p.raw,duty,sizeof p.raw);p.raw_request=sequence;p.raw_pending=true;p.raw_preview=preview;
     if(preview)p.arm_allowed=false; /* PWM0 is not proof that torque stayed OFF. */
     else{p.direct=true;p.ever_command=true;p.raw_accepted_ms=milliseconds();}
@@ -393,14 +402,16 @@ bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result){
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result){
     taskENTER_CRITICAL();const bool ready=p.result_pending;
     if(ready){*sequence=p.request;*result=p.result;p.result_pending=false;
-        p.arm_allowed=p.result==YPWM_OK&&p.backend==YPWM_PID&&p.phase==YPWM_READY;}
+        p.arm_allowed=p.result==YPWM_OK&&p.backend==YPWM_PID&&p.phase==MOTOR_CONTROL_READY;}
     taskEXIT_CRITICAL();return ready;
 }
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
     const uint32_t now=milliseconds();taskENTER_CRITICAL();
     if(!force&&(!p.dirty||now-p.status_ms<YPWM_STATUS_PERIOD_MS)){taskEXIT_CRITICAL();return false;}
     const control_context s=p;p.dirty=false;p.status_ms=now;taskEXIT_CRITICAL();
-    memset(b,0,YPWM_STATUS_LENGTH);b[0]=YPWM_EVENT_CODE;b[1]=YPWM_SCHEMA;b[2]=s.backend;b[3]=s.phase;
+    memset(b,0,YPWM_STATUS_LENGTH);b[0]=YPWM_EVENT_CODE;b[1]=YPWM_SCHEMA;b[2]=s.backend;
+    /* The v3 PC decoder expects 1 for position READY and 3 for PWM READY. */
+    b[3] = s.backend == YPWM_POSITION && s.phase == MOTOR_CONTROL_READY ? 1U : s.phase;
     ypwm_put16(b+4,s.request);b[6]=s.result;b[7]=s.reason;ypwm_put32(b+8,s.epoch);
     ypwm_put16(b+12,s.mask);ypwm_put16(b+14,s.verified);ypwm_put16(b+16,s.torque);ypwm_put16(b+18,s.unknown);
     ypwm_put32(b+20,s.command_count);ypwm_put16(b+24,YPWM_DUTY_LIMIT);ypwm_put16(b+26,YPWM_TARGET_TIMEOUT_MS);
@@ -408,7 +419,7 @@ bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
     for(unsigned i=0;i<12;++i)if(s.mask&(1U<<i)){ypwm_put16(b+32,(uint16_t)s.sent[i]);break;}
     ypwm_put32(b+34,now);return true;
 }
-static bool rollback_allowed(void){return snapshot().phase==YPWM_ROLLING_BACK;}
+static bool rollback_allowed(void){return snapshot().phase==MOTOR_CONTROL_ROLLING_BACK;}
 bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write[64],bool *has_write,bool force){
     taskENTER_CRITICAL();
     if(rollback_detail_pending&&!mode_detail_pending){memcpy(detail,rollback_detail,YPWM_DIAG_LENGTH);
@@ -472,7 +483,7 @@ static void prepare_mode(const control_context *s){
     }
     if(!error&&s->operation==YPWM_COMMIT){
         const control_context current=snapshot();
-        if(current.phase!=YPWM_PREPARING||current.epoch!=s->epoch)error=YPWM_INVALID_STATE;
+        if(current.phase!=MOTOR_CONTROL_PREPARING||current.epoch!=s->epoch)error=YPWM_INVALID_STATE;
         else{
             const mode_setting_t setting={s->backend,s->mask};
             taskENTER_CRITICAL();p.preference_touched=true;taskEXIT_CRITICAL();
@@ -488,13 +499,13 @@ static void prepare_mode(const control_context *s){
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;
     thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     taskENTER_CRITICAL();
-    if(p.phase==YPWM_PREPARING&&p.epoch==s->epoch){
+    if(p.phase==MOTOR_CONTROL_PREPARING&&p.epoch==s->epoch){
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.dirty=true;
         if(error==YPWM_FLASH_READ_FAILED){p.flash_read_failed=true;p.reason=YPWM_REASON_FLASH_READ;}
-        if(error){p.phase=YPWM_ROLLING_BACK;p.arm_allowed=false;}
+        if(error){p.phase=MOTOR_CONTROL_ROLLING_BACK;p.arm_allowed=false;}
         else{
             p.result_pending=true;p.transaction_pending=false;
-            p.phase=s->operation==YPWM_PREPARE?YPWM_STAGED:(p.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY);
+            p.phase=s->operation==YPWM_PREPARE?MOTOR_CONTROL_STAGED:MOTOR_CONTROL_READY;
         }
     }
     else {detail[6]=YPWM_INVALID_STATE;if(!error)detail[3]=YPWM_DIAG_CANCELED;}
@@ -518,7 +529,7 @@ static void rollback_mode(const control_context *s){
     if(ok&&s->preference_touched)ok=mode_store_save(&previous_setting);
     taskENTER_CRITICAL();
     p.unknown=unknown;p.torque=0;p.verified=restored;p.arm_allowed=false;p.ever_command=false;p.rollback_failed=!ok;
-    p.phase=ok?YPWM_CANCELED:YPWM_FAILED;p.dirty=true;
+    p.phase=ok?MOTOR_CONTROL_CANCELED:MOTOR_CONTROL_FAILED;p.dirty=true;
     if(!ok&&!p.flash_read_failed)p.reason=YPWM_REASON_ROLLBACK_FAILED;
     if(p.transaction_pending){if(!ok)p.result=YPWM_MODE_FAILED;p.result_pending=true;p.transaction_pending=false;}
     /* Retain both snapshots until every restoration proof succeeds. */
@@ -588,7 +599,7 @@ static motor_stop_outcome_t send_pwm_return(
                                (float)dt_ms * 0.001f, &out[i])) return MOTOR_STOP_PID;
     }
     return_reference_ready = true;
-    if (!phase_current(YPWM_STOPPING) || motor_device_write_pwm(s->mask, out) != MOTOR_DEVICE_OK) {
+    if (!phase_current(MOTOR_CONTROL_STOPPING) || motor_device_write_pwm(s->mask, out) != MOTOR_DEVICE_OK) {
         return MOTOR_STOP_TX;
     }
     taskENTER_CRITICAL();
@@ -602,7 +613,7 @@ static bool pause_pwm_return(const void *mode)
 {
     const control_context *s = mode;
     const int16_t zero[YERTLE_MOTOR_COUNT] = { 0 };
-    if (!phase_current(YPWM_STOPPING) || motor_device_write_pwm(s->mask, zero) != MOTOR_DEVICE_OK) {
+    if (!phase_current(MOTOR_CONTROL_STOPPING) || motor_device_write_pwm(s->mask, zero) != MOTOR_DEVICE_OK) {
         return false;
     }
     taskENTER_CRITICAL();
@@ -658,7 +669,7 @@ static void service_stop(const control_context *s)
     if (off) p.torque = 0U;
     p.dirty = true;
     if (complete) {
-        p.phase = YPWM_FAILED;
+        p.phase = MOTOR_CONTROL_FAILED;
         p.ever_command = false;
         p.return_eligible = false;
     }
@@ -685,9 +696,9 @@ static void service_pid(const control_context *s,uint32_t now){
     if(!sensor_get_feedback_snapshot(&f,&imu)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     if(!feedback_safe(&f))return;
     /* Never integrate/differentiate the same measurement more than once. */
-    if(!s->pid_restart&&s->phase==YPWM_ACTIVE&&f.sequence==last_sample)return;
+    if(!s->pid_restart&&s->phase==MOTOR_CONTROL_ACTIVE&&f.sequence==last_sample)return;
     if(s->pid_restart){memset(axes,0,sizeof axes);taskENTER_CRITICAL();p.pid_restart=false;taskEXIT_CRITICAL();}
-    const uint32_t dt_ms=s->phase==YPWM_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
+    const uint32_t dt_ms=s->phase==MOTOR_CONTROL_READY||s->pid_restart?20U:f.uptime_ms-last_feedback_ms;
     if(!dt_ms||(dt_ms&0x80000000UL)){pwm_control_stop(YPWM_REASON_SENSOR);return;}
     const float dt=(float)dt_ms*0.001f;
     int16_t out[12]={0};
@@ -704,7 +715,7 @@ static void service_pid(const control_context *s,uint32_t now){
     if(motor_device_write_pwm(s->mask,out)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
     taskENTER_CRITICAL();p.return_eligible=true;taskEXIT_CRITICAL();
     if(!pid_current(s->phase)||host_protocol_is_stop_requested())return;
-    if(s->phase==YPWM_READY){
+    if(s->phase==MOTOR_CONTROL_READY){
         taskENTER_CRITICAL();p.unknown|=s->mask;taskEXIT_CRITICAL();
         if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK){pwm_control_stop(YPWM_REASON_DRIVER);return;}
         if(!pid_current(s->phase)||host_protocol_is_stop_requested()){
@@ -712,7 +723,7 @@ static void service_pid(const control_context *s,uint32_t now){
         }
     }
     last_sample=f.sequence;last_feedback_ms=f.uptime_ms;
-    taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=YPWM_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
+    taskENTER_CRITICAL();if(p.phase==s->phase&&p.epoch==s->epoch){p.phase=MOTOR_CONTROL_ACTIVE;p.torque=s->mask;p.unknown=s->mask;
         p.feedback_age=(uint16_t)((now-f.uptime_ms)>UINT16_MAX?UINT16_MAX:(now-f.uptime_ms));memcpy(p.sent,out,sizeof out);p.dirty=true;
         publish_pid_trace(s,&f,milliseconds(),dt_ms);}taskEXIT_CRITICAL();
 }
@@ -737,7 +748,7 @@ static void service_raw(const control_context *s,uint32_t now){
     }
     if(!result&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||
        (!s->raw_preview&&!host_protocol_is_armed())))result=YPWM_INVALID_STATE;
-    if(!result&&!s->raw_preview&&s->phase==YPWM_READY){
+    if(!result&&!s->raw_preview&&s->phase==MOTOR_CONTROL_READY){
         if(motor_device_torque_mask(s->mask,true)!=MOTOR_DEVICE_OK)result=YPWM_MODE_FAILED;
     }
     if(!s->raw_preview&&(!raw_current(s->phase,s->raw_request)||host_protocol_is_stop_requested()||!host_protocol_is_armed())){
@@ -747,7 +758,7 @@ static void service_raw(const control_context *s,uint32_t now){
     if(p.raw_pending&&p.raw_request==s->raw_request){
         p.raw_pending=false;p.raw_result=result;p.raw_result_pending=true;
         if(!result){memcpy(p.sent,s->raw,sizeof p.sent);p.unknown|=s->mask;
-            if(!s->raw_preview){p.phase=YPWM_ACTIVE;p.torque=s->mask;}else p.raw_preview=false;}
+            if(!s->raw_preview){p.phase=MOTOR_CONTROL_ACTIVE;p.torque=s->mask;}else p.raw_preview=false;}
         p.dirty=true;
     }
     taskEXIT_CRITICAL();
@@ -756,32 +767,32 @@ static void service_raw(const control_context *s,uint32_t now){
 }
 bool pwm_control_service(void){
     control_context s=snapshot();const uint32_t now=milliseconds();
-    if(s.phase!=YPWM_STOPPING)returning.outcome=MOTOR_STOP_NONE;
-    if(s.snapshot_valid&&(s.phase==YPWM_READY||s.phase==YPWM_NATIVE_READY)&&host_protocol_is_armed()){
+    if(s.phase!=MOTOR_CONTROL_STOPPING)returning.outcome=MOTOR_STOP_NONE;
+    if(s.snapshot_valid&&s.phase==MOTOR_CONTROL_READY&&host_protocol_is_armed()){
         taskENTER_CRITICAL();p.snapshot_valid=false;taskEXIT_CRITICAL();
     }
-    if(s.phase==YPWM_NATIVE_READY)return false;
+    if(s.backend==YPWM_POSITION&&s.phase==MOTOR_CONTROL_READY)return false;
     /* A fresh HELLO after a completed operational stop may request a new
      * validation. Keep rollback/flash failures latched and never arm or
      * command motion here. A HELLO during STOPPING waits for confirmed OFF. */
-    if(s.phase==YPWM_FAILED&&s.reconnect_recovery_requested&&s.reconnect_stop_recoverable&&
+    if(s.phase==MOTOR_CONTROL_FAILED&&s.reconnect_recovery_requested&&s.reconnect_stop_recoverable&&
        !s.rollback_failed&&!s.flash_read_failed&&!s.unknown&&
        host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested()){
         taskENTER_CRITICAL();
-        if(p.phase==YPWM_FAILED&&p.reconnect_recovery_requested){
-            p.phase=YPWM_UNVERIFIED;p.boot_restored=true;p.arm_allowed=false;
+        if(p.phase==MOTOR_CONTROL_FAILED&&p.reconnect_recovery_requested){
+            p.phase=MOTOR_CONTROL_UNVERIFIED;p.boot_restored=true;p.arm_allowed=false;
             p.reconnect_recovery_requested=false;p.reconnect_stop_recoverable=false;p.dirty=true;
         }
         taskEXIT_CRITICAL();return true;
     }
-    if(s.phase==YPWM_UNVERIFIED){
+    if(s.phase==MOTOR_CONTROL_UNVERIFIED){
         /* The actuator can run before host init. Complete the boot torque-OFF
          * request first, then verify the persisted backend on a later pass. */
         if(host_protocol_get_state()==HOST_FSM_BOOT)return true;
         if(host_protocol_is_stop_requested()){
             uint16_t unknown=YPWM_ALL_MASK;
             const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
-            taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.dirty=true;}taskEXIT_CRITICAL();
+            taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.dirty=true;}taskEXIT_CRITICAL();
             if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
             return true;
         }
@@ -796,31 +807,31 @@ bool pwm_control_service(void){
             const bool final_off=motor_device_verify_torque_off(&unknown);
             ready=zero_tx==MOTOR_DEVICE_OK&&final_tx==MOTOR_DEVICE_OK&&final_off;
         }
-        taskENTER_CRITICAL();if(p.phase==YPWM_UNVERIFIED){p.unknown=unknown;p.verified=verified;
-            p.phase=ready?(s.backend==YPWM_PID?YPWM_READY:YPWM_NATIVE_READY):YPWM_FAILED;
+        taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.verified=verified;
+            p.phase=ready?MOTOR_CONTROL_READY:MOTOR_CONTROL_FAILED;
             if(ready){p.reason=YPWM_REASON_NONE;p.result=YPWM_OK;}
             p.arm_allowed=ready&&s.backend==YPWM_PID;p.dirty=true;}taskEXIT_CRITICAL();return true;
     }
-    if(transitioning(s.phase)&&now-s.started_ms>=YPWM_PREPARATION_TIMEOUT_MS&&s.phase!=YPWM_ROLLING_BACK){
+    if(transitioning(s.phase)&&now-s.started_ms>=YPWM_PREPARATION_TIMEOUT_MS&&s.phase!=MOTOR_CONTROL_ROLLING_BACK){
         pwm_control_stop(YPWM_REASON_TTL);s=snapshot();
     }
-    if(s.phase==YPWM_ROLLING_BACK){rollback_mode(&s);return true;}
+    if(s.phase==MOTOR_CONTROL_ROLLING_BACK){rollback_mode(&s);return true;}
     if(s.raw_pending&&s.raw_preview){service_raw(&s,now);return true;}
-    if(s.phase==YPWM_STAGED||s.phase==YPWM_CANCELED)return true;
-    if(s.phase==YPWM_PREPARING){prepare_mode(&s);return true;}
-    if((s.phase==YPWM_READY||s.phase==YPWM_ACTIVE)&&
+    if(s.phase==MOTOR_CONTROL_STAGED||s.phase==MOTOR_CONTROL_CANCELED)return true;
+    if(s.phase==MOTOR_CONTROL_PREPARING){prepare_mode(&s);return true;}
+    if((s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE)&&
         (host_protocol_get_state()==HOST_FSM_FAULT||host_protocol_is_stop_requested()||
-         (s.phase==YPWM_ACTIVE&&!host_protocol_is_armed())))pwm_control_stop(YPWM_REASON_LINK);
+         (s.phase==MOTOR_CONTROL_ACTIVE&&!host_protocol_is_armed())))pwm_control_stop(YPWM_REASON_LINK);
     s=snapshot();
-    if(s.phase==YPWM_STOPPING){service_stop(&s);return true;}
-    if(s.phase==YPWM_FAILED&&s.unknown){
+    if(s.phase==MOTOR_CONTROL_STOPPING){service_stop(&s);return true;}
+    if(s.phase==MOTOR_CONTROL_FAILED&&s.unknown){
         (void)motor_device_torque_mask(YPWM_ALL_MASK,false);
         uint16_t unknown=YPWM_ALL_MASK;(void)motor_device_verify_torque_off(&unknown);
         taskENTER_CRITICAL();p.unknown=unknown;p.dirty=true;taskEXIT_CRITICAL();
         if(!unknown&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
         return true;
     }
-    if(s.phase==YPWM_FAILED&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
-    if(s.phase==YPWM_READY||s.phase==YPWM_ACTIVE){if(s.direct)service_raw(&s,now);else service_pid(&s,now);}
+    if(s.phase==MOTOR_CONTROL_FAILED&&!s.unknown&&!host_protocol_is_armed()&&host_protocol_is_stop_requested())host_protocol_complete_safe_stop();
+    if(s.phase==MOTOR_CONTROL_READY||s.phase==MOTOR_CONTROL_ACTIVE){if(s.direct)service_raw(&s,now);else service_pid(&s,now);}
     return true;
 }

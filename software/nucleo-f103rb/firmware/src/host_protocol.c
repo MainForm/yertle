@@ -425,7 +425,7 @@ static void service_position_offsets(protocol_context_t *context)
 
     /* A safety change aborts remaining reads. Keep completed IDs and mark
      * unread IDs busy in the correlated partial result. */
-    if (register_access_allowed() && pwm_control_native_ready()) {
+    if (register_access_allowed() && motor_control_position_ready()) {
         const TickType_t now = xTaskGetTickCount();
         if ((int32_t)(now - context->next_offset_attempt) < 0) return;
         context->next_offset_attempt = now + pdMS_TO_TICKS(YERTLE_OFFSET_ATTEMPT_PERIOD_MS);
@@ -893,7 +893,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
     case MESSAGE_GET_POSITION_OFFSETS: {
         /* Motor-read-only; successful values also persist to F103 Flash while DISARMED. */
         const bool accepted = context->state==HOST_FSM_DISARMED && !host_protocol_is_stop_requested() &&
-            !context->pwm_mode_pending && pwm_control_native_ready() && start_position_offsets(context, sequence);
+            !context->pwm_mode_pending && motor_control_position_ready() && start_position_offsets(context, sequence);
         send_result(context, accepted ? MESSAGE_ACK : MESSAGE_NACK,
                     type, sequence, accepted ? 0U : ERROR_QUERY_BUSY);
         break;
