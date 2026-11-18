@@ -24,7 +24,7 @@ typedef struct {
     int16_t raw[12];uint16_t raw_request;uint8_t raw_result;
     bool direct,raw_pending,raw_result_pending,raw_preview,pid_restart;
     bool result_pending,arm_allowed,dirty,ever_command,mode_busy,transaction_pending,snapshot_valid,rollback_failed;
-    bool preference_touched,flash_read_failed;
+    bool preference_touched,flash_read_failed,boot_flash_read;
 } control_context;
 static control_context p;
 static motor_mode_snapshot_t previous_modes;
@@ -131,17 +131,17 @@ static bool phase_current(uint8_t phase){
     taskENTER_CRITICAL();const bool ok=p.phase==phase;taskEXIT_CRITICAL();return ok;
 }
 void motor_control_init(void){
-    mode_setting_t setting={YPWM_POSITION,YPWM_ALL_MASK};const mode_store_result_t stored=mode_store_read(&setting);
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;tx_failures=0U;
     thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     memset(&returning,0,sizeof returning);stop_detail_pending=false;stop_detail_ms=0;
     trace_pending=trace_draining=false;trace_chunk=0;
     trace_published=trace_coalesced=trace_completed=trace_tx_failed=trace_stats_ms=0;
-    taskENTER_CRITICAL();memset(&p,0,sizeof p);p.unknown=YPWM_ALL_MASK;p.backend=setting.backend;p.mask=setting.mask;
-    p.phase=stored==MODE_STORE_READ_ERROR?MOTOR_CONTROL_FAILED:MOTOR_CONTROL_UNVERIFIED;
-    p.flash_read_failed=stored==MODE_STORE_READ_ERROR;
-    if(p.flash_read_failed){p.result=YPWM_FLASH_READ_FAILED;p.reason=YPWM_REASON_FLASH_READ;}
-    p.dirty=true;
+    taskENTER_CRITICAL();
+    memset(&p, 0, sizeof p);
+    p.phase = MOTOR_CONTROL_BOOT;
+    p.backend = YPWM_POSITION;
+    p.mask = p.unknown = YPWM_ALL_MASK;
+    p.dirty = true;
     mode_detail_valid=mode_detail_pending=mode_detail_has_write=rollback_detail_pending=false;taskEXIT_CRITICAL();
 }
 void motor_control_on_armed(void)
@@ -240,6 +240,7 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     ypwm_mode_request r;if(!ypwm_decode_mode(bytes,n,&r))return YPWM_INVALID_PAYLOAD;
     if(host_protocol_get_state()!=HOST_FSM_DISARMED)return YPWM_INVALID_STATE;
     taskENTER_CRITICAL();
+    if(p.phase==MOTOR_CONTROL_BOOT){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.operation!=YPWM_PREPARE){
         if(r.epoch!=p.epoch||r.backend!=p.backend||r.mask!=p.mask){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
         if(p.result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
@@ -889,36 +890,70 @@ static void service_drive(const control_context *s, uint32_t now)
     }
 }
 
+static void service_motor_boot(const control_context *s)
+{
+    mode_setting_t setting = { s->backend, s->mask };
+    if (!s->boot_flash_read) {
+        const bool read_failed = mode_store_read(&setting) == MODE_STORE_READ_ERROR;
+        taskENTER_CRITICAL();
+        p.boot_flash_read = true;
+        p.backend = setting.backend;
+        p.mask = setting.mask;
+        p.dirty = true;
+        if (read_failed) {
+            p.flash_read_failed = true;
+            p.reason = YPWM_REASON_FLASH_READ;
+            p.result = YPWM_FLASH_READ_FAILED;
+            p.phase = MOTOR_CONTROL_FAILED;
+        }
+        taskEXIT_CRITICAL();
+        if (read_failed) return;
+    }
+
+    /* The actuator can run before the host has published its startup OFF request. */
+    if (host_protocol_get_state() == HOST_FSM_BOOT) return;
+
+    uint16_t unknown = YPWM_ALL_MASK;
+    if (host_protocol_is_stop_requested()) {
+        const bool off = motor_device_set_torque(false) == MOTOR_DEVICE_OK &&
+                         motor_device_verify_torque_off(&unknown);
+        taskENTER_CRITICAL();
+        p.unknown = unknown;
+        p.dirty = true;
+        taskEXIT_CRITICAL();
+        if (off && !host_protocol_is_armed()) host_protocol_complete_safe_stop();
+        return;
+    }
+
+    uint16_t verified = 0U;
+    const bool off = motor_device_set_torque(false) == MOTOR_DEVICE_OK &&
+                     motor_device_verify_torque_off(&unknown);
+    bool ready = off && motor_device_verify_modes(setting.backend, setting.mask, &verified);
+    if (ready && setting.backend == YPWM_PID) {
+        const int16_t zero[YERTLE_MOTOR_COUNT] = { 0 };
+        const motor_device_status_t zero_tx = motor_device_write_pwm(setting.mask, zero);
+        /* Attempt OFF even if the preceding PWM transmission failed. */
+        const motor_device_status_t final_tx = motor_device_torque_mask(YPWM_ALL_MASK, false);
+        const bool final_off = motor_device_verify_torque_off(&unknown);
+        ready = zero_tx == MOTOR_DEVICE_OK && final_tx == MOTOR_DEVICE_OK && final_off;
+    }
+
+    taskENTER_CRITICAL();
+    p.unknown = unknown;
+    p.verified = verified;
+    p.phase = ready ? MOTOR_CONTROL_READY : MOTOR_CONTROL_FAILED;
+    p.arm_allowed = ready;
+    p.dirty = true;
+    taskEXIT_CRITICAL();
+}
+
 void motor_control_service(void)
 {
     control_context s=snapshot();const uint32_t now=milliseconds();
     if(s.phase!=MOTOR_CONTROL_STOPPING)returning.outcome=MOTOR_STOP_NONE;
-    if(s.phase==MOTOR_CONTROL_UNVERIFIED){
-        /* The actuator can run before host init. Complete the boot torque-OFF
-         * request first, then verify the persisted backend on a later pass. */
-        if(host_protocol_get_state()==HOST_FSM_BOOT)return;
-        if(host_protocol_is_stop_requested()){
-            uint16_t unknown=YPWM_ALL_MASK;
-            const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
-            taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.dirty=true;}taskEXIT_CRITICAL();
-            if(off&&!host_protocol_is_armed())host_protocol_complete_safe_stop();
-            return;
-        }
-        uint16_t unknown=YPWM_ALL_MASK,verified=0;
-        const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
-        bool ready=off&&motor_device_verify_modes(s.backend,s.mask,&verified);
-        if(ready&&s.backend==YPWM_PID){const int16_t zero[12]={0};
-            const motor_device_status_t zero_tx=motor_device_write_pwm(s.mask,zero);
-            /* A persisted PWM backend needs the same zero/OFF/readback order as
-             * COMMIT. OFF cleanup is attempted even if the PWM TX failed. */
-            const motor_device_status_t final_tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
-            const bool final_off=motor_device_verify_torque_off(&unknown);
-            ready=zero_tx==MOTOR_DEVICE_OK&&final_tx==MOTOR_DEVICE_OK&&final_off;
-        }
-        taskENTER_CRITICAL();if(p.phase==MOTOR_CONTROL_UNVERIFIED){p.unknown=unknown;p.verified=verified;
-            p.phase=ready?MOTOR_CONTROL_READY:MOTOR_CONTROL_FAILED;
-            if(ready){p.reason=YPWM_REASON_NONE;p.result=YPWM_OK;}
-            p.arm_allowed=ready;p.dirty=true;}taskEXIT_CRITICAL();return;
+    if (s.phase == MOTOR_CONTROL_BOOT) {
+        service_motor_boot(&s);
+        return;
     }
     if (transitioning(s.phase) && s.phase != MOTOR_CONTROL_ROLLING_BACK &&
         now - s.started_ms >= YPWM_PREPARATION_TIMEOUT_MS) {
@@ -955,6 +990,7 @@ void motor_control_service(void)
     if (s.phase == MOTOR_CONTROL_STOPPING) {
         service_stop(&s, now);
     } else if (s.phase == MOTOR_CONTROL_FAILED && s.unknown) {
+        if (host_protocol_get_state() == HOST_FSM_BOOT) return;
         (void)motor_device_torque_mask(YPWM_ALL_MASK, false);
         uint16_t unknown = YPWM_ALL_MASK;
         (void)motor_device_verify_torque_off(&unknown);

@@ -51,7 +51,8 @@
 /* FAILED (wire value 6): backend unavailable after failure/protective stop;
  * distinct from the global host FSM FAULT. Naming only; wire values unchanged. */
 /* Phase 1 is reserved for encoding position READY in the v3 status packet. */
-enum motor_control_phase { MOTOR_CONTROL_UNVERIFIED = 0, MOTOR_CONTROL_PREPARING = 2, MOTOR_CONTROL_READY,
+/* Phase 0 is the boot check, reported as UNVERIFIED by existing PC clients. */
+enum motor_control_phase { MOTOR_CONTROL_BOOT = 0, MOTOR_CONTROL_PREPARING = 2, MOTOR_CONTROL_READY,
     MOTOR_CONTROL_ACTIVE, MOTOR_CONTROL_STOPPING, MOTOR_CONTROL_FAILED, MOTOR_CONTROL_STAGED, MOTOR_CONTROL_ROLLING_BACK, MOTOR_CONTROL_CANCELED };
 enum ypwm_reason { YPWM_REASON_NONE,YPWM_REASON_RELEASE,YPWM_REASON_TTL,
     YPWM_REASON_SENSOR,YPWM_REASON_CURRENT,YPWM_REASON_TRAVEL,YPWM_REASON_SPEED,

@@ -19,16 +19,17 @@ snapshots are NEVER persisted. Motor EEPROM0x21 and F103 Flash are separate stor
 
 ## Boot
 
-Before the scheduler starts, read and validate the newest supported committed
-record. Missing/corrupt/unsupported records default to native/all12; never infer
-PID from untrusted bytes. This does not write Flash or servo EEPROM.
-An unreadable/wrong-size/wrong-linker storage region is different from an empty
-journal: it latches FAULT/rearm-blocked rather than permitting a native fallback.
+Before the scheduler starts, the motor controller enters BOOT. On its first
+pass in BOOT, the actuator reads the newest valid committed Flash record.
+An empty journal or one with no
+supported valid record uses position mode for all 12 motors. A Flash read error
+latches FAILED and blocks ARM.
 
-Actuator startup independently forces/verifies torqueOFF, reads all actual mode
-registers, and for a matching saved PID selection sends zero PWM only to verified
-mode2 axes and checks OFF again. A mismatch or I/O failure blocks ARM. No servo
-mode is silently changed to fit the preference. HELLO by itself does not ARM.
+After completing the host startup torque OFF request, the actuator confirms
+torque OFF and verifies the actual motor modes against the selection. For a matching saved PID selection it sends zero PWM to the verified
+PWM motors, commands torque OFF, and reads it back again. Success enters READY.
+A mode mismatch or I/O failure enters FAILED. Mode change requests wait until
+BOOT finishes.
 
 After successful boot verification, a new HELLO/fresh heartbeat/ARMED handshake and
 new position targets are still required; torqueON occurs only through the normal

@@ -216,11 +216,16 @@ int main(void){
  memset(&c,0,sizeof c);c.state=HOST_FSM_BOOT;published_state=HOST_FSM_BOOT;
  pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
  motor_control_init();motor_control_service(); assert(!motor_control_can_arm());
+ uint8_t starting[YPWM_STATUS_LENGTH];assert(pwm_control_status(starting,true));
+ assert(starting[3]==MOTOR_CONTROL_BOOT&&starting[2]==YPWM_PID);
+ mode_memory_read_ok=false; /* The preference is read once on entering BOOT. */
  request_safe_stop();transition_state(&c,HOST_FSM_DISARMED,STATE_CAUSE_BOOT_COMPLETE,false);
  boot_off_ok=false;motor_control_service(); assert(!motor_control_can_arm());service_safety_state(&c);
  assert(host_protocol_is_stop_requested()); /* no readiness on failed OFF */
  boot_off_ok=true;motor_control_service(); assert(!motor_control_can_arm());service_safety_state(&c);
- assert(!host_protocol_is_stop_requested());motor_control_service(); assert(motor_control_can_arm());
+ assert(!host_protocol_is_stop_requested());
+ motor_control_service(); assert(motor_control_can_arm());
+ mode_memory_read_ok=true;
  receive(&c,MESSAGE_HELLO,NULL,0);receive(&c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(&c);
  assert(c.state==HOST_FSM_ARMED); /* no F5 and no auto torque */
  memset(&c,0,sizeof c);c.state=HOST_FSM_DISARMED;published_state=HOST_FSM_DISARMED;
@@ -236,6 +241,7 @@ int main(void){
  pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
  mode_memory_read_ok=false;motor_control_init();receive(&c,MESSAGE_HELLO,NULL,0);
  mode[1]=YPWM_PREPARE;ypwm_put32(mode+5,456);
+ motor_control_service();
  receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
  assert(last_result==MESSAGE_NACK&&last_error==YPWM_FLASH_READ_FAILED&&!c.pwm_mode_pending);
  uint8_t boot_status[YPWM_STATUS_LENGTH];assert(pwm_control_status(boot_status,true));
@@ -243,7 +249,7 @@ int main(void){
  try_enter_control_ready(&c);assert(c.state==HOST_FSM_DISARMED&&!motor_control_can_arm());
  mode_memory_read_ok=true;motor_control_init();assert(pwm_control_status(boot_status,true)&&boot_status[6]==0&&ypwm_u32(boot_status+8)==0);
  /* Wrong backend rejects a complete PWM frame, even while DISARMED. */
- mode_memory_reset();motor_control_init();c.host_connected=true;c.pwm_mode_pending=false;
+ mode_memory_reset();motor_control_init();motor_control_service();c.host_connected=true;c.pwm_mode_pending=false;
  uint8_t raw_pwm[YPWM_DIRECT_LENGTH]={0};
  receive(&c,MESSAGE_SET_MOTOR_PWM,raw_pwm,sizeof raw_pwm);
  assert(last_result==MESSAGE_NACK&&last_error==YPWM_PWM_MODE_REQUIRED);
