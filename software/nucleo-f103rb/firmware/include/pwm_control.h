@@ -19,7 +19,7 @@ uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence);
 bool pwm_control_take_raw_result(uint16_t *sequence,uint8_t *result);
 bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result);
 bool pwm_control_status(uint8_t bytes[YPWM_STATUS_LENGTH],bool force);
-bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write[64],bool *has_write,bool force);
+bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH], bool force);
 /* Host-owned consumer, one low-priority frame per host pass. No bus reads. */
 bool pwm_control_pid_detail(uint8_t bytes[YPWM_PID_DETAIL_LENGTH]);
 void pwm_control_pid_detail_result(bool sent);

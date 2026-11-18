@@ -34,8 +34,9 @@ SET_MOTOR_PWM0x0F also exists: PWM mode accepts signed direct duty; position
 mode rejects it. PWM mode accepts0x06 positions through this F103 PID.
 Mode ACK is preparation completion, not arming or physical arrival.
 
-PWM0 can enable servo torque. Stop/preparation must separately send explicit
-torqueOFF and read it back; PWM0 alone is never treated as OFF proof.
+PWM0 can enable servo torque. The PWM stop path sends explicit torque OFF after
+PWM0 and reads the torque register back. BOOT and COMMIT start with explicit OFF
+and use the same mode readback, unresolved lock and final OFF checks for both backends.
 
 ## Current independent stop conditions
 

@@ -1,7 +1,7 @@
 # Two-phase backend transition (schema 3)
 
-This changes controller preparation only. Position goals remain message 0x06
-(60 bytes); policy, calibration, motor ID/sign/raw mapping and PID tuning are unchanged.
+Position goals use message 0x06 (60 bytes) in both backends. The backend and
+servo register settings are changed through the transaction below.
 
 ## Wire contract
 
@@ -10,7 +10,7 @@ This changes controller preparation only. Position goals remain message 0x06
 | 0x0C GET_MOTOR_REGISTER | 0x8F / NACK | Read a servo register |
 | 0x0D SET_MOTOR_REGISTER | ACK/NACK + existing 0x90 detail | Write/readback/relock |
 | 0x0E SET_CONTROL_MODE | ACK/NACK + EVENT4 | PREPARE, COMMIT or CANCEL |
-| 0x0F | NACK | Removed; no dedicated release or PC PWM packet |
+| 0x0F SET_MOTOR_PWM | ACK/NACK | Direct duty in PWM mode, with a zero-only disarmed check for the selected PWM candidate |
 
 HELLO capability is bit 0x00000008; incompatible older firmware fails closed.
 0x0E is exactly nine bytes: schema=3, operation (0 PREPARE / 1 COMMIT /
@@ -25,12 +25,13 @@ The verified mask describes the restored original modes.
 1. PREPARE while DISARMED blocks ARM/targets, verifies all torques OFF and
    snapshots actual per-ID mode registers. It does not write servo mode0x21.
 2. In STAGED only, PC sends twelve 0x0D writes [ID,0x21,1,EEPROM-option1,value].
-   Selected PID axes expect2; other axes expect0. Each driver transaction verifies
+   For an all-motor PID selection, all 12 servos expect 2. A partial PID
+   selection expects 2 on selected axes and 0 on other axes. Position expects 0 on all axes. Each driver transaction verifies
    torqueOFF, existing mode and EEPROM lock, writes only a changed value, reads
    it back and restores/verifies the original lock. PC independently GETs readback.
    Public/general register-write permissions remain unchanged.
-3. COMMIT commands torque OFF, verifies OFF and all requested modes and locks,
-   then rechecks OFF before saving the Flash preference. PC requires a matching
+3. COMMIT commands torque OFF, reads back OFF and all requested modes, checks
+   for unresolved EEPROM locks, then rechecks OFF before saving the Flash preference. PC requires a matching
    ACK and READY/OFF status.
 4. Only then does PC send the ordinary fresh heartbeat and require ARMED.
    The original snapshot is retained until the first actual ARMED transition.
@@ -62,8 +63,10 @@ are invalidated at a new PREPARE; the four-entry recent mode replay window is bo
 ## Normal stop and limitations
 
 No extra release packet: PC stops targets/heartbeat, then waits for fresh DISARMED
-and completed safety action. Existing F103 target500ms/link1000ms watchdogs trigger
-PWM0 and verified torqueOFF in PID mode, never native raw2048 centering.
+and completed safety action. The F103 target (500 ms) and link (1000 ms) watchdogs
+trigger the same stop sequence in either backend. When eligible, the controller
+first returns toward raw 2048. The PWM path sends zero duty before both backends
+explicitly turn torque OFF and verify the result.
 This is not an instantaneous hardware emergency stop/current clamp. PC current
 guards and the remaining F103 thermal/voltage/sensor/following-error guards remain.
 

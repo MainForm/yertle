@@ -6,13 +6,15 @@ snapshots are NEVER persisted. Motor EEPROM0x21 and F103 Flash are separate stor
 
 ## Normal operation
 
-- Successful schema3 COMMIT verifies actual motor modes, locks and all torqueOFF,
-  then saves/read-verifies the F103 preference before ACK/READY. A failed save
+- Successful schema3 COMMIT reads back actual motor modes and all torque OFF
+  and checks for unresolved EEPROM locks before saving and read-verifying the
+  F103 preference. ACK/READY follows. A failed save
   cannot enable ARM and enters the existing rollback path.
 - The same setting is a no-op: no Flash program or erase. Control ticks, position
   goals and heartbeats never write Flash.
 - Pre-ARM CANCEL restores both the physical motor-mode snapshot and the previous
-  preference. If either restore is unconfirmed, FAULT/rearm-blocked remains latched.
+  preference. If either restore is unconfirmed, the motor FSM remains BLOCKED
+  and refuses arming until rollback is confirmed.
   With no prior valid preference, the prior default is native/all12.
 - Once actually ARMED, normal stopping retains the selected preference and physical
   modes. Current protection ownership, gains, calibration and wire messages do not change.
@@ -27,10 +29,11 @@ enters BLOCKED and reports FAILED to the PC.
 
 After completing the host startup torque OFF request, the actuator commands
 torque OFF, reads it back, verifies the actual motor modes against the selection,
-and rechecks OFF. COMMIT uses the same checks before saving the setting.
+checks for unresolved EEPROM locks and rechecks OFF. COMMIT uses the same checks
+before saving the setting.
 Success enters READY.
-A mode mismatch or I/O failure also enters BLOCKED. Mode change requests wait until
-BOOT finishes.
+A mode mismatch or motor I/O failure also enters BLOCKED. EVENT4 reports
+MODE_FAILED with the MODE reason. Mode change requests wait until BOOT finishes.
 
 After successful boot verification, a new HELLO/fresh heartbeat/ARMED handshake and
 new position targets are still required; torqueON occurs only through the normal

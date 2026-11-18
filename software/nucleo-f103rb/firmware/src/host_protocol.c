@@ -460,10 +460,9 @@ static void service_motor_register(protocol_context_t *context)
 
 static void send_pwm_mode_diagnostics(protocol_context_t *context,bool force)
 {
-    uint8_t detail[YPWM_DIAG_LENGTH],write[64];bool has_write=false;
-    if(pwm_control_mode_diagnostics(detail,write,&has_write,force)){
-        (void)send_frame(context,MESSAGE_EVENT,detail,sizeof detail);
-        if(has_write)(void)send_frame(context,REGISTER_WRITE_DIAGNOSTICS_TYPE,write,sizeof write);
+    uint8_t detail[YPWM_DIAG_LENGTH];
+    if (pwm_control_mode_diagnostics(detail, force)) {
+        (void)send_frame(context, MESSAGE_EVENT, detail, sizeof detail);
     }
 }
 static motor_register_write_request_t decode_register_write(const uint8_t *payload)

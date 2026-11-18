@@ -19,7 +19,7 @@ uint8_t pwm_control_submit_raw(const int16_t d[12],uint16_t s){(void)d;(void)s;r
 bool pwm_control_take_raw_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_take_mode_result(uint16_t *s,uint8_t *r){(void)s;(void)r;return false;}
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){(void)b;(void)force;return false;}
-bool pwm_control_mode_diagnostics(uint8_t d[YPWM_DIAG_LENGTH],uint8_t w[64],bool *has,bool force){(void)d;(void)w;(void)has;(void)force;return false;}
+bool pwm_control_mode_diagnostics(uint8_t d[YPWM_DIAG_LENGTH],bool force){(void)d;(void)force;return false;}
 
 bool pwm_control_pid_detail(uint8_t b[YPWM_PID_DETAIL_LENGTH]){(void)b;return false;}
 void pwm_control_pid_detail_result(bool sent){(void)sent;}

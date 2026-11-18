@@ -197,14 +197,16 @@ int main(void){
  receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);motor_control_service();service_pwm(&c);
  const uint8_t q[5]={2,0x21,1,1,2};receive(&c,MESSAGE_SET_MOTOR_REGISTER,q,5);service_motor_register_write(&c);
  assert(last_result==MESSAGE_NACK&&last_error==15&&write_diag_order<result_order);
- uint8_t failure_detail[64],write_detail[64];bool has_write;
- assert(pwm_control_mode_diagnostics(failure_detail,write_detail,&has_write,false));
+ uint8_t failure_detail[YPWM_DIAG_LENGTH];
+ assert(pwm_control_mode_diagnostics(failure_detail,false));
  assert(failure_detail[3]==YPWM_DIAG_MODE_TRANSACTION&&failure_detail[7]==2&&failure_detail[6]==YPWM_MODE_FAILED);
+ assert(failure_detail[30]==1U);
  motor_control_service();try_enter_control_ready(&c);assert(!motor_control_can_arm()&&c.state==HOST_FSM_DISARMED);
  /* Transient 0x0D failures wait safely for the PC's explicit CANCEL/retry. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
  motor_control_service();service_pwm(&c);assert(!motor_control_can_arm());
  assert(last_diag[3]==YPWM_DIAG_ROLLBACK&&last_diag[6]==0&&ypwm_u16(last_diag+16)==YPWM_ALL_MASK);
+ assert(last_diag[30]==0U&&last_diag[60]==255U);
  /* Same-epoch CANCEL confirms already completed requested rollback. */
  mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
  tick+=YPWM_STATUS_PERIOD_MS;service_pwm(&c);
