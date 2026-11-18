@@ -50,8 +50,7 @@ void uart_diagnostics_send_motor_buses(void *c, uart_diag_sender_t s,uint16_t q)
 void pmw3901_spi_send_diagnostics(void *c,pmw_spi_diag_sender_t s,uint16_t q){(void)c;(void)s;(void)q;}
 bool pmw3901_spi_auto_payload(uint8_t p[64]){(void)p;return false;}
 void pmw3901_spi_auto_result(bool sent){(void)sent;}
-bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);memset(f,0,sizeof *f);memset(imu,0,sizeof *imu);
- imu->ready=imu_ready;imu->valid=imu_valid;
+bool sensor_get_motor_feedback_snapshot(motor_feedback_set_t *f){assert(!critical);memset(f,0,sizeof *f);
  f->sequence=tick/20+1;f->uptime_ms=tick;f->valid_mask=YPWM_ALL_MASK;for(unsigned i=0;i<12;++i){f->motor[i].valid=true;f->motor[i].position=2048;f->motor[i].voltage=60;}return true;}
 bool motor_device_validate_targets(const motor_target_set_t *g){for(unsigned i=0;i<12;++i)if(g->motor[i].position>4095||g->motor[i].speed>32767)return false;return true;}
 motor_device_status_t motor_device_write_targets(const motor_target_set_t *g){assert(!critical);native_target=*g;++native_writes;return MOTOR_DEVICE_OK;}
@@ -267,4 +266,5 @@ int main(void){
  puts("Host/task transaction, Flash isolation and direct PWM routing passed");return 0;
 }
 
-bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f)
+{memset(i,0,sizeof *i);i->ready=imu_ready;i->valid=imu_valid;memset(f,0,sizeof *f);return sensor_get_motor_feedback_snapshot(m);}

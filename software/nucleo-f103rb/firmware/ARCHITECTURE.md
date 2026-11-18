@@ -183,8 +183,11 @@ The servo-error bits from the motion and current replies are OR-combined within 
 feedback cycle, then reset on the next cycle. A zero-error current reply cannot
 erase an error from the motion reply. Valid indicates parsed data, not absence
 of a servo fault.
-The latest snapshot and a twelve-bit validity mask are protected by a separate cache
-mutex. Missing feedback is recorded as invalid but is not yet promoted to a
+The feedback cache uses a mutex separate from the motor bus lock. The actuator
+reads the latest motor sample as soon as it is published, before the IMU read.
+The host reads the last motor/IMU pair with a shared sequence and timestamp.
+While the IMU is being read, the host can still access the previous completed
+pair. Missing feedback is recorded as invalid but is not yet promoted to a
 FAULT; that policy belongs to the later hard-safety stage.
 
 Current/voltage/load automatic limit checks are intentionally not enabled.

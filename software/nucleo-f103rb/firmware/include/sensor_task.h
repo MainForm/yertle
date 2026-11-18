@@ -21,10 +21,12 @@ typedef struct {
     pmw3901_device_t optical_flow;
 } sensor_devices_t;
 
-/* Cache both initial sensor states before starting the scheduler. */
-bool sensor_task_init(const sensor_devices_t *devices);
+/* Create the feedback buffer mutex and seed the sensor states before scheduling. */
+bool feedback_buffer_init(const sensor_devices_t *devices);
+/* Host snapshot: motor and IMU from the same completed acquisition cycle. */
 bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow);
-bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu);
+/* Motor-control snapshot: available as soon as motor acquisition completes. */
+bool sensor_get_motor_feedback_snapshot(motor_feedback_set_t *motor);
 void sensor_task(void *argument);
 
 #endif /* SENSOR_TASK_H */

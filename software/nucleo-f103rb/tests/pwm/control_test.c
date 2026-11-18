@@ -54,7 +54,7 @@ bool motor_device_restore_modes(const motor_mode_snapshot_t *m,bool (*allowed)(v
  *id=mode_fail_id;*restored=mode_fail_id?(uint16_t)(YPWM_ALL_MASK&~2U):YPWM_ALL_MASK;return !mode_fail_id;
 }
 motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);++write_count;if(write_ok){memcpy(sent,values,sizeof sent);if(pwm_auto_enable)servo_torque_on=mask;if(fail_off_after_pwm)off_ok=false;}return write_ok?MOTOR_DEVICE_OK:MOTOR_DEVICE_UART_ERROR;}
-bool sensor_get_feedback_snapshot(motor_feedback_set_t *f,imu_feedback_t *imu){assert(!critical);*f=feedback;memset(imu,0,sizeof *imu);return feedback_ok;}
+bool sensor_get_motor_feedback_snapshot(motor_feedback_set_t *f){assert(!critical);*f=feedback;return feedback_ok;}
 static uint8_t phase(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[3];}
 static uint8_t reason(void){uint8_t b[YPWM_STATUS_LENGTH];assert(pwm_control_status(b,true));return b[7];}
 static void reset(void){
@@ -561,4 +561,4 @@ int main(void){
  puts("F103 PID service: two-phase register transaction, rollback interlock, host-only current and remaining guards passed");return 0;
 }
 
-bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(i,0,sizeof *i);memset(f,0,sizeof *f);return sensor_get_motor_feedback_snapshot(m);}

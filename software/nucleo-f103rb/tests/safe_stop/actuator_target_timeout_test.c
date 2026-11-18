@@ -53,10 +53,9 @@ motor_device_status_t motor_device_set_torque(bool enabled)
 { if (enabled) ++torque_on_calls; return MOTOR_DEVICE_OK; }
 bool motor_device_verify_torque_off(uint16_t *unknown)
 { *unknown = 0U; return true; }
-bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
+bool sensor_get_motor_feedback_snapshot(motor_feedback_set_t *motor)
 {
     memset(motor, 0, sizeof(*motor));
-    memset(imu, 0, sizeof(*imu));
     motor->sequence = tick / 20U + 1U;
     motor->uptime_ms = tick;
     motor->valid_mask = YERTLE_ALL_MOTORS_MASK;
@@ -128,4 +127,4 @@ int main(void)
     return 0;
 }
 
-bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(i,0,sizeof *i);memset(f,0,sizeof *f);return sensor_get_motor_feedback_snapshot(m);}

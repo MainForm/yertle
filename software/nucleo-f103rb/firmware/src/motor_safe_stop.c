@@ -70,9 +70,8 @@ static motor_stop_outcome_t service_return(
 
     motor_feedback_set_t feedback;
     int16_t position[YERTLE_MOTOR_COUNT];
-    imu_feedback_t imu;
     motor_stop_outcome_t sample = MOTOR_STOP_FEEDBACK;
-    if (sensor_get_feedback_snapshot(&feedback, &imu) &&
+    if (sensor_get_motor_feedback_snapshot(&feedback) &&
         feedback.sequence != stop->last_sequence &&
         now - feedback.uptime_ms <= RETURN_FEEDBACK_MAX_AGE_MS) {
         const motor_feedback_status_t status = motor_feedback_status(&feedback);

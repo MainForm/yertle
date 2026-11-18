@@ -48,7 +48,21 @@ motor_device_status_t motor_device_read_feedback(motor_feedback_set_t *sample)
     assert(!cache_locked);
     ++cycles;
     sample->motor[0].valid = true;
+    sample->motor[0].position = (int16_t)cycles;
     return MOTOR_DEVICE_OK;
+}
+
+static void check_feedback_during_imu(void)
+{
+    motor_feedback_set_t newest_motor, paired_motor;
+    imu_feedback_t imu;
+    pmw3901_feedback_t flow;
+    assert(sensor_get_motor_feedback_snapshot(&newest_motor));
+    assert(newest_motor.sequence == cycles && newest_motor.motor[0].position == (int16_t)cycles);
+    assert(sensor_get_extended_feedback_snapshot(&paired_motor, &imu, &flow));
+    assert(paired_motor.sequence == cycles - 1U && imu.sequence == paired_motor.sequence);
+    assert(paired_motor.motor[0].position == (int16_t)(cycles - 1U));
+    assert(imu.uptime_ms == paired_motor.uptime_ms);
 }
 
 bool imu_device_init(imu_device_t *device)
@@ -56,6 +70,7 @@ bool imu_device_init(imu_device_t *device)
     assert(!cache_locked && !device->ready && imu_retries == 0U);
     assert(imu_missing_at_boot || imu_fail_at_runtime);
     assert(tick == (imu_missing_at_boot ? 1000U : 1020U));
+    check_feedback_during_imu();
     ++imu_retries;
     device->ready = true;
     return true;
@@ -64,6 +79,7 @@ bool imu_device_init(imu_device_t *device)
 bool imu_device_read(imu_device_t *device, imu_raw_sample_t *sample)
 {
     assert(!cache_locked && device->ready);
+    check_feedback_during_imu();
     if (imu_fail_at_runtime && tick == 20U) {
         device->ready = false;
         return false;
@@ -76,7 +92,8 @@ bool pmw3901_device_init(pmw3901_device_t *device)
 {
     motor_feedback_set_t motor;
     imu_feedback_t imu;
-    assert(sensor_get_feedback_snapshot(&motor, &imu));
+    pmw3901_feedback_t flow;
+    assert(sensor_get_extended_feedback_snapshot(&motor, &imu, &flow));
     assert(motor.sequence == cycles && motor.motor[0].valid);
     assert(imu.sequence == cycles && imu.valid);
     ++initializations;
@@ -115,6 +132,7 @@ void vTaskDelayUntil(TickType_t *previous, TickType_t increment)
     assert(increment == 20U && *previous + increment > tick);
     assert(sensor_get_extended_feedback_snapshot(&motor, &imu, &flow));
     assert(motor.sequence == cycles && imu.sequence == cycles);
+    assert(motor.motor[0].position == (int16_t)cycles && motor.uptime_ms == imu.uptime_ms);
     const bool imu_expected = (!imu_missing_at_boot || tick >= 1000U) &&
                               (!imu_fail_at_runtime || tick < 20U || tick >= 1020U);
     assert(imu.ready == imu_expected && imu.valid == imu_expected);
@@ -140,7 +158,7 @@ int main(int argc, char **argv)
     devices.optical_flow.feedback.epoch = 1U;
     devices.optical_flow.feedback.ready = !missing_at_boot;
     devices.optical_flow.feedback.state = missing_at_boot ? PMW_RETRY : PMW_READY;
-    assert(sensor_task_init(&devices));
+    assert(feedback_buffer_init(&devices));
 
     motor_feedback_set_t motor;
     imu_feedback_t imu;

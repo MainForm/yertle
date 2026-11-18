@@ -70,8 +70,6 @@ motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, 
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request, bool (*allowed)(void))
 { (void)request; (void)allowed; assert(0); return motor_register_initial_report(); }
 uint16_t motor_device_register_lock_uncertain_mask(void) { return 0U; }
-bool sensor_get_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu)
-{ (void)motor; (void)imu; return false; }
 bool motor_device_validate_targets(const motor_target_set_t *targets)
 { (void)targets; return true; }
 bool motor_control_submit_targets(const motor_target_set_t *targets)
@@ -272,4 +270,5 @@ int main(void)
     return 0;
 }
 
-bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *m, imu_feedback_t *i, pmw3901_feedback_t *f){memset(f,0,sizeof *f);return sensor_get_feedback_snapshot(m,i);}
+bool sensor_get_extended_feedback_snapshot(motor_feedback_set_t *motor, imu_feedback_t *imu, pmw3901_feedback_t *flow)
+{ (void)motor; (void)imu; (void)flow; return false; }

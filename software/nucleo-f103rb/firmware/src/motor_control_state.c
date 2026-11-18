@@ -865,8 +865,7 @@ static void service_drive(const control_context *s, uint32_t now)
     }
 
     motor_feedback_set_t feedback;
-    imu_feedback_t imu;
-    if (!sensor_get_feedback_snapshot(&feedback, &imu) ||
+    if (!sensor_get_motor_feedback_snapshot(&feedback) ||
         motor_feedback_status(&feedback) != MOTOR_FEEDBACK_VALID) {
         motor_control_stop(YPWM_REASON_SENSOR);
         return;
