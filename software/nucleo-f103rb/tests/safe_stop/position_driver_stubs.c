@@ -21,8 +21,8 @@ bool motor_device_verify_torque_off_detailed(uint16_t *unknown, motor_verify_rep
 { *report = motor_verify_initial_report(); return motor_device_verify_torque_off(unknown); }
 bool motor_device_verify_modes_detailed(uint8_t backend, uint16_t mask, uint16_t *verified, motor_verify_report_t *report)
 { *report = motor_verify_initial_report(); return motor_device_verify_modes(backend, mask, verified); }
-bool motor_device_snapshot_modes(motor_mode_snapshot_t *snapshot, motor_verify_report_t *report)
-{ (void)snapshot; (void)report; assert(false); return false; }
+bool motor_device_snapshot_modes(uint16_t mask, motor_mode_snapshot_t *snapshot, motor_verify_report_t *report)
+{ (void)mask; (void)snapshot; (void)report; assert(false); return false; }
 bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot, bool (*allowed)(void),
                                 uint16_t *restored, uint8_t *failed, motor_register_write_report_t *report)
 { (void)snapshot; (void)allowed; (void)restored; (void)failed; (void)report; assert(false); return false; }

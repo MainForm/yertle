@@ -6,7 +6,7 @@ snapshots are NEVER persisted. Motor EEPROM0x21 and F103 Flash are separate stor
 
 ## Normal operation
 
-- Successful schema3 COMMIT reads back actual motor modes and all torque OFF
+- Successful schema3 COMMIT reads back selected motor modes and all torque OFF
   and checks for unresolved EEPROM locks before saving and read-verifying the
   F103 preference. ACK/READY follows. A failed save
   cannot enable ARM and enters the existing rollback path.
@@ -28,8 +28,8 @@ supported valid record uses position mode for all 12 motors. A Flash read error
 enters BLOCKED and reports FAILED to the PC.
 
 After completing the host startup torque OFF request, the actuator commands
-torque OFF, reads it back, verifies the actual motor modes against the selection,
-checks for unresolved EEPROM locks and rechecks OFF. COMMIT uses the same checks
+torque OFF on all motors, reads it back, verifies selected motor modes,
+checks for unresolved EEPROM locks on those IDs and rechecks OFF for all motors. COMMIT uses the same checks
 before saving the setting.
 Success enters READY.
 A mode mismatch or motor I/O failure also enters BLOCKED. EVENT4 reports

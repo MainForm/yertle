@@ -12,26 +12,31 @@ servo register settings are changed through the transaction below.
 | 0x0E SET_CONTROL_MODE | ACK/NACK + EVENT4 | PREPARE, COMMIT or CANCEL |
 | 0x0F SET_MOTOR_PWM | ACK/NACK | Direct duty in PWM mode, with a zero-only disarmed check for the selected PWM candidate |
 
-HELLO capability is bit 0x00000008; incompatible older firmware fails closed.
+HELLO capability 0x00000008 advertises schema 3. Capability 0x00001000
+advertises selected-only partial PWM transitions. PC clients require it before
+submitting a partial PWM request.
 0x0E is exactly nine bytes: schema=3, operation (0 PREPARE / 1 COMMIT /
 2 CANCEL), backend (0 native / 1 F103 PID), selected mask u16LE, nonzero epoch u32LE.
 All operations are correlated by request sequence, backend, mask and epoch.
 EVENT4 remains 38 bytes with schema=3; phases 0..6 retain their numeric values,
 7=STAGED, 8=ROLLING_BACK, 9=CANCELED. Value 9 reports a confirmed rollback.
-The verified mask describes the restored original modes.
+On COMMIT the verified mask describes the selected modes. After CANCEL the
+verified mask describes confirmed restoration of the original modes in that
+same selection.
 
 ## Transaction
 
 1. PREPARE while DISARMED blocks ARM/targets, verifies all torques OFF and
-   snapshots actual per-ID mode registers. It does not write servo mode0x21.
-2. In STAGED only, PC sends twelve 0x0D writes [ID,0x21,1,EEPROM-option1,value].
-   For an all-motor PID selection, all 12 servos expect 2. A partial PID
-   selection expects 2 on selected axes and 0 on other axes. Position expects 0 on all axes. Each driver transaction verifies
+   snapshots the selected per-ID mode registers.
+2. In STAGED only, PC sends 0x0D writes [ID,0x21,1,EEPROM-option1,value] for
+   the selected IDs. Position selects all 12 servos and expects 0. PWM expects 2
+   on selected servos and leaves the other servos' 0x21 values untouched. Each driver transaction verifies
    torqueOFF, existing mode and EEPROM lock, writes only a changed value, reads
    it back and restores/verifies the original lock. PC independently GETs readback.
    Public/general register-write permissions remain unchanged.
-3. COMMIT commands torque OFF, reads back OFF and all requested modes, checks
-   for unresolved EEPROM locks, then rechecks OFF before saving the Flash preference. PC requires a matching
+3. COMMIT commands torque OFF and reads back OFF for all motors. It reads back
+   selected modes, checks for unresolved EEPROM locks on those IDs, and rechecks
+   OFF for all motors before saving the Flash preference. PC requires a matching
    ACK and READY/OFF status.
 4. Only then does PC send the ordinary fresh heartbeat and require ARMED.
    The original snapshot is retained until the first actual ARMED transition.
@@ -51,7 +56,8 @@ See MODE_WRITE_RETRIES.md for current defaults and capability requirements.
 
 A mode-write failure, preparation timeout or pre-ARM link loss invalidates the
 session. F103 waits for any queued/in-flight mode write to retire, verifies OFF,
-restores the exact snapshot via driver transactions and verifies OFF/locks again.
+restores the selected modes from the snapshot and verifies all torques OFF
+and selected EEPROM locks again.
 Explicit CANCEL also confirms a completed automatic rollback for the same epoch.
 After rollback, the motor controller stays BLOCKED and records whether recovery
 was confirmed. The host sees CANCELED for a confirmed rollback and FAILED
@@ -72,8 +78,8 @@ guards and the remaining F103 thermal/voltage/sensor/following-error guards rema
 
 Rollback snapshots are RAM-only. Power loss/reboot cannot guarantee transaction rollback.
 The selected backend/mask are now persisted separately in internal Flash and
-loaded at boot; see PERSISTENT_CONTROL_MODE.md. Boot still verifies physical
-modes and torqueOFF and never restores ARMED or silently reprograms a mismatch.
+loaded at boot; see PERSISTENT_CONTROL_MODE.md. Boot verifies the selected
+physical modes and all torques OFF and never restores ARMED or silently reprograms a mismatch.
 Software rollback cannot undo mechanical movement, an interrupted EEPROM write or
 an unreachable servo. Support the robot and verify unloaded after matching firmware
 and PC builds are installed. No real COM operation or flashing is part of offline tests.

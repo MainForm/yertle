@@ -35,7 +35,8 @@ bool host_uart_try_read(uint8_t *b,bool *d){(void)b;*d=false;return false;}
 motor_device_status_t motor_device_read_position_offset(uint8_t id, motor_position_offset_t *offset)
 { (void)id; (void)offset; assert(0); return MOTOR_DEVICE_BUSY; }
 motor_register_status_t motor_device_read_register(uint8_t id, uint8_t address, uint8_t length, motor_register_data_t *result)
-{ (void)id; (void)address; (void)length; (void)result; assert(0); return MOTOR_REGISTER_BUSY; }
+{ assert(!critical&&address==0x21U&&length==1U&&id>=1U&&id<=12U);
+  result->data[0]=servo_modes[id-1U];return MOTOR_REGISTER_OK; }
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request, bool (*allowed)(void))
 { (void)request; (void)allowed; assert(0); return motor_register_initial_report(); }
 motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
@@ -60,16 +61,18 @@ motor_device_status_t motor_device_set_torque(bool on){assert(!critical);if(on){
 motor_device_status_t motor_device_torque_mask(uint16_t mask,bool on){assert(!critical);if(on){++on_count;torque_mask|=mask;}else torque_mask&=(uint16_t)~mask;return MOTOR_DEVICE_OK;}
 bool motor_device_verify_torque_off(uint16_t *unknown){assert(!critical);*unknown=torque_mask;return !torque_mask;}
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified){
- assert(!critical);*verified=0;for(unsigned i=0;i<12;++i)if(servo_modes[i]==((backend==YPWM_PID&&(mask&(1U<<i)))?2:0))*verified|=(uint16_t)(1U<<i);
- return *verified==YPWM_ALL_MASK;
+ assert(!critical);*verified=0;for(unsigned i=0;i<12;++i)if((mask&(1U<<i))&&servo_modes[i]==ypwm_expected_servo_mode(backend))*verified|=(uint16_t)(1U<<i);
+ return *verified==mask;
 }
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *r){*r=motor_verify_initial_report();return motor_device_verify_modes(backend,mask,verified);}
 bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *r){*r=motor_verify_initial_report();return motor_device_verify_torque_off(unknown);}
-bool motor_device_snapshot_modes(motor_mode_snapshot_t *m,motor_verify_report_t *r){
- assert(!critical);memcpy(m->mode,servo_modes,12);m->valid_mask=YPWM_ALL_MASK;*r=motor_verify_initial_report();return true;
+bool motor_device_snapshot_modes(uint16_t mask,motor_mode_snapshot_t *m,motor_verify_report_t *r){
+ assert(!critical);for(unsigned i=0;i<12;++i)if(mask&(1U<<i))m->mode[i]=servo_modes[i];
+ m->valid_mask=mask;*r=motor_verify_initial_report();return true;
 }
 bool motor_device_restore_modes(const motor_mode_snapshot_t *m,bool (*allowed)(void),uint16_t *restored,uint8_t *id,motor_register_write_report_t *r){
- assert(!critical&&allowed());memcpy(servo_modes,m->mode,12);*restored=YPWM_ALL_MASK;*id=0;*r=motor_register_initial_report();return true;
+ assert(!critical&&allowed());for(unsigned i=0;i<12;++i)if(m->valid_mask&(1U<<i))servo_modes[i]=m->mode[i];
+ *restored=m->valid_mask;*id=0;*r=motor_register_initial_report();return true;
 }
 motor_device_status_t motor_device_write_pwm(uint16_t mask,const int16_t values[12]){assert(!critical&&mask);memcpy(duty,values,sizeof duty);torque_mask|=mask;return MOTOR_DEVICE_OK;}
 static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t n){
@@ -277,6 +280,38 @@ int main(void){
  for(unsigned pair=0;pair<6;++pair){service_pid_detail(&c);assert(detail_frames==before_detail+pair+1);}
  /* Continuous diagnostics still emit 1Hz producer/loss counters. */
  tick+=1000;service_pid_detail(&c);assert(stats_frames>0);
+ /* An unselected mode can stay PWM, including through reboot and CANCEL.
+    Mode-register requests outside the selection are rejected while STAGED. */
+ memset(&c,0,sizeof c);published_state=c.state=HOST_FSM_DISARMED;c.host_connected=true;c.last_host_heartbeat_tick=tick;
+ pending_safety_action=HOST_SAFETY_ACTION_NONE;safe_stop_completed=requested_motor_stop=false;
+ memset(servo_modes,0,sizeof servo_modes);servo_modes[6]=2;
+ const mode_setting_t partial={YPWM_PID,1U<<6};
+ assert(mode_store_save(&partial));motor_control_init();motor_control_service();
+ assert(motor_control_can_arm()&&pwm_control_status(boot_status,true)&&ypwm_u16(boot_status+14)==partial.mask);
+ servo_modes[3]=0;
+ uint8_t selected_request[9]={YPWM_SCHEMA,YPWM_PREPARE,YPWM_PID};
+ ypwm_put16(selected_request+3,1U<<3);ypwm_put32(selected_request+5,991);
+ receive(&c,MESSAGE_SET_CONTROL_MODE,selected_request,9);motor_control_service();service_pwm(&c);
+ assert(last_result==MESSAGE_ACK&&pwm_control_staged_mask()==(1U<<3));
+ const uint8_t outside_write[5]={7,0x21,1,1,0},outside_read[3]={7,0x21,1},inside_read[3]={4,0x21,1};
+ receive(&c,MESSAGE_SET_MOTOR_REGISTER,outside_write,5);
+ assert(last_result==MESSAGE_NACK&&last_error==ERROR_INVALID_STATE&&!c.register_job_active);
+ receive(&c,MESSAGE_GET_MOTOR_REGISTER,outside_read,3);
+ assert(last_result==MESSAGE_NACK&&last_error==ERROR_INVALID_STATE&&!c.register_job_active);
+ receive(&c,MESSAGE_GET_MOTOR_REGISTER,inside_read,3);
+ assert(c.register_job_active);service_motor_register(&c);
+ const uint8_t inside_write[5]={4,0x21,1,1,2};
+ receive(&c,MESSAGE_SET_MOTOR_REGISTER,inside_write,5);service_motor_register_write(&c);
+ assert(last_result==MESSAGE_ACK&&servo_modes[3]==2&&servo_modes[6]==2);
+ selected_request[1]=YPWM_COMMIT;receive(&c,MESSAGE_SET_CONTROL_MODE,selected_request,9);
+ motor_control_service();service_pwm(&c);
+ assert(motor_control_can_arm()&&pwm_control_status(boot_status,true)&&ypwm_u16(boot_status+14)==(1U<<3));
+ selected_request[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,selected_request,9);
+ motor_control_service();service_pwm(&c);
+ assert(pwm_control_status(boot_status,true)&&boot_status[3]==YPWM_STATUS_PHASE_CANCELED&&ypwm_u16(boot_status+14)==(1U<<3));
+ assert(servo_modes[3]==0&&servo_modes[6]==2);
+ motor_control_init();motor_control_service();
+ assert(motor_control_can_arm()&&pwm_control_status(boot_status,true)&&ypwm_u16(boot_status+14)==partial.mask);
  puts("Host/task transaction, Flash isolation and direct PWM routing passed");return 0;
 }
 

@@ -14,6 +14,7 @@
 #define YPWM_IDLE_MONITOR_CAPABILITY 0x00000010UL
 #define YPWM_HOST_MODE_RETRY_CAPABILITY 0x00000040UL
 #define YPWM_LONG_PREPARATION_CAPABILITY 0x00000080UL
+#define YPWM_PARTIAL_MODE_CAPABILITY 0x00001000UL
 /* EVENT7 detail v2 keeps six64-byte ID-pair payloads. Header18B:
  * event7,version2,sensor_sequence u32,output_uptime_ms u32,target_sequence u16,
  * first_id u8,count2 u8,actual_PID_dt_ms u32. Two23B axis records:
@@ -76,11 +77,14 @@ static inline void ypwm_put16(uint8_t *p,uint16_t v) { p[0]=(uint8_t)v;p[1]=(uin
 static inline void ypwm_put32(uint8_t *p,uint32_t v) { ypwm_put16(p,(uint16_t)v);ypwm_put16(p+2,(uint16_t)(v>>16)); }
 static inline bool ypwm_single(uint16_t m) { return m && !(m&(uint16_t)(m-1U)) && !(m&~YPWM_ALL_MASK); }
 static inline bool ypwm_mask(uint16_t m) { return m && !(m&~YPWM_ALL_MASK); }
-/* Servo register 0x21 uses 2 for PID-controlled axes and 0 for native position. */
-static inline uint8_t ypwm_expected_servo_mode(uint8_t backend, uint16_t mask, uint8_t id)
+static inline bool ypwm_motor_selected(uint16_t mask, uint8_t id)
 {
-    const bool selected = id >= 1U && id <= YPWM_MOTOR_COUNT && (mask & (1U << (id - 1U)));
-    return backend == YPWM_PID && selected ? 2U : 0U;
+    return id >= 1U && id <= YPWM_MOTOR_COUNT && (mask & (1U << (id - 1U)));
+}
+/* Expected 0x21 value for a motor participating in the transaction. */
+static inline uint8_t ypwm_expected_servo_mode(uint8_t backend)
+{
+    return backend == YPWM_PID ? 2U : 0U;
 }
 static inline bool ypwm_decode_mode(const uint8_t *p,size_t n,ypwm_mode_request *v) {
     if(!p||!v||n!=YPWM_MODE_LENGTH||p[0]!=YPWM_SCHEMA||p[1]>YPWM_CANCEL||p[2]>YPWM_PID)return false;

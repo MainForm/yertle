@@ -13,6 +13,7 @@ static unsigned depth,clock_ms,tx_count;
 static unsigned bus_tx[2];static int failing_bus=-1;
 static uint8_t fail_write_id,override_read_id,servo_fault_id;
 static unsigned transient_mode_failures,mode_target_writes;
+static uint16_t mode_read_ids,mode_write_ids;
 static bool permission=true,apply_then_lose_ack,cancel_on_error,ignore_relock;
 static bool allowed(void){return permission;}
 SemaphoreHandle_t xSemaphoreCreateMutex(void){return (void*)1;}
@@ -34,7 +35,9 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t tim
  if((int)bus==failing_bus)return false;
  (void)timeout;assert(depth==1&&n<sizeof last);memcpy(last,p,n);last_length=n;++tx_count;
  unsigned sum=0;for(size_t k=2;k<n;++k)sum+=p[k];assert((sum&255U)==255U);
+ if(p[4]==2&&p[5]==0x21)mode_read_ids|=(uint16_t)(1U<<(p[2]-1U));
  if(p[4]==3&&p[5]==0x21){
+  mode_write_ids|=(uint16_t)(1U<<(p[2]-1U));
   ++mode_target_writes;
   if(apply_then_lose_ack){memcpy(memory[p[2]-1]+p[5],p+6,n-7);apply_then_lose_ack=false;return false;}
   if(p[2]==fail_write_id||transient_mode_failures){
@@ -63,7 +66,20 @@ int main(void){
  uint16_t verified,unknown;
  assert(motor_device_verify_modes(YPWM_POSITION,YPWM_ALL_MASK,&verified)&&verified==YPWM_ALL_MASK);
  memory[3][0x21]=2;assert(!motor_device_verify_modes(YPWM_POSITION,YPWM_ALL_MASK,&verified));
- assert(motor_device_verify_modes(YPWM_PID,1U<<3,&verified));
+ const uint16_t selected=1U<<3;
+ memory[7][0x21]=2;override_read_id=8;mode_read_ids=mode_write_ids=0;
+ assert(motor_device_verify_modes(YPWM_PID,selected,&verified)&&verified==selected&&mode_read_ids==selected);
+ motor_verify_report_t selected_report;
+ motor_mode_snapshot_t selected_snapshot;
+ mode_read_ids=0;
+ assert(motor_device_snapshot_modes(selected,&selected_snapshot,&selected_report));
+ assert(mode_read_ids==selected&&selected_snapshot.valid_mask==selected&&selected_snapshot.mode[3]==2);
+ memory[3][0x21]=0;
+ uint16_t selected_restored;uint8_t selected_failed;motor_register_write_report_t selected_write;
+ mode_read_ids=0;
+ assert(motor_device_restore_modes(&selected_snapshot,allowed,&selected_restored,&selected_failed,&selected_write));
+ assert(selected_restored==selected&&mode_read_ids==selected&&mode_write_ids==selected);
+ assert(memory[3][0x21]==2&&memory[7][0x21]==2);override_read_id=0;
  for(unsigned i=0;i<12;++i)memory[i][0x21]=2;
  assert(motor_device_verify_modes(YPWM_PID,YPWM_ALL_MASK,&verified)&&verified==YPWM_ALL_MASK);
  assert(motor_device_verify_torque_off(&unknown)&&unknown==0);
@@ -115,7 +131,7 @@ int main(void){
  motor_verify_report_t v;memory[4][0x21]=0;
  assert(!motor_device_verify_modes_detailed(YPWM_PID,YPWM_ALL_MASK,&verified,&v)&&v.motor_id==3&&v.address==0x21&&v.actual==0&&v.io_status==0);
  memory[4][0x28]=1;assert(!motor_device_verify_torque_off_detailed(&unknown,&v)&&v.motor_id==5&&v.address==0x28&&v.actual==1);memory[4][0x28]=0;
- motor_mode_snapshot_t original;assert(motor_device_snapshot_modes(&original,&v)&&original.valid_mask==0xfff);
+ motor_mode_snapshot_t original;assert(motor_device_snapshot_modes(YPWM_ALL_MASK,&original,&v)&&original.valid_mask==0xfff);
  for(unsigned i=0;i<12;++i)memory[i][0x21]=original.mode[i]==0?2:0;
  uint16_t restored;uint8_t failed_id;
  assert(motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&restored==0xfff&&!failed_id);
@@ -123,7 +139,7 @@ int main(void){
  memory[2][0x21]=original.mode[2]==0?2:0;fail_write_id=3;
  assert(!motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&failed_id==3&&restored==(0xfff&~4U));
  assert(r.status==MOTOR_WRITE_IO_ERROR&&r.lock_restore_verified);fail_write_id=0;
- override_read_id=4;assert(!motor_device_snapshot_modes(&original,&v)&&v.motor_id==4&&v.actual==1);override_read_id=0;
+ override_read_id=4;assert(!motor_device_snapshot_modes(YPWM_ALL_MASK,&original,&v)&&v.motor_id==4&&v.actual==1);override_read_id=0;
  /* The driver never retries. Five explicit caller requests are required. */
  memory[1][0x21]=0;transient_mode_failures=4;mode_target_writes=0;
  for(unsigned attempt=0;attempt<4;++attempt){r=motor_device_write_mode(2,2,allowed);

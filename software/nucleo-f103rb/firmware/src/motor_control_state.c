@@ -282,6 +282,13 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     taskEXIT_CRITICAL();return YPWM_OK;
 }
 uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_STAGED?s.epoch:0;}
+uint16_t pwm_control_staged_mask(void)
+{
+    taskENTER_CRITICAL();
+    const uint16_t mask = p.phase == MOTOR_CONTROL_STAGED ? p.mask : 0U;
+    taskEXIT_CRITICAL();
+    return mask;
+}
 bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_PREPARING||s.phase==MOTOR_CONTROL_STAGED;}
 static bool mode_write_window_open(uint32_t started_ms)
 {
@@ -300,11 +307,10 @@ bool pwm_control_mode_write_current(void)
 }
 
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
-    if(id<1U||id>YPWM_MOTOR_COUNT)return false;
     /* Only copy the fields needed to validate the requested motor and mode. */
     taskENTER_CRITICAL();
     const bool staged=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
-        mode==ypwm_expected_servo_mode(p.backend,p.mask,id);
+        ypwm_motor_selected(p.mask,id)&&mode==ypwm_expected_servo_mode(p.backend);
     const uint32_t started_ms=p.started_ms;
     taskEXIT_CRITICAL();
     return staged && mode_write_window_open(started_ms);
@@ -332,7 +338,7 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
         mode_detail[0]=YPWM_DIAG_EVENT;mode_detail[1]=YPWM_DIAG_VERSION;mode_detail[2]=p.backend;
         mode_detail[3]=YPWM_DIAG_MODE_TRANSACTION;mode_detail[6]=YPWM_MODE_FAILED;
         mode_detail[7]=p.mode_write_id;mode_detail[24]=0x21;
-        mode_detail[25]=ypwm_expected_servo_mode(p.backend,p.mask,p.mode_write_id);
+        mode_detail[25]=ypwm_expected_servo_mode(p.backend);
         mode_detail[26]=r->verified_value;mode_detail[27]=YPWM_DIAG_IO_REGISTER;
         mode_detail[28]=r->failure_stage==MOTOR_WRITE_STAGE_TARGET?r->last_write_status:r->last_read_status;
         mode_detail[29]=r->servo_error;diagnostic_register_report(mode_detail,r);
@@ -340,7 +346,7 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
         mode_detail_valid=mode_detail_pending=true;
         const bool host_may_retry=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
             (r->status==MOTOR_WRITE_IO_ERROR||r->status==MOTOR_WRITE_VERIFY_MISMATCH)&&
-            !r->servo_error&&!r->cleanup_servo_error&&!motor_device_register_lock_uncertain_mask()&&
+            !r->servo_error&&!r->cleanup_servo_error&&!(motor_device_register_lock_uncertain_mask()&p.mask)&&
             (!r->target_write_attempted||r->lock_restore_verified)&&
             host_protocol_get_state()==HOST_FSM_DISARMED&&!host_protocol_is_stop_requested()&&
             milliseconds()-p.started_ms<YPWM_PREPARATION_TIMEOUT_MS;
@@ -506,7 +512,7 @@ static void prepare_mode(const control_context *s){
                            : confirm_mode_torque_off(&unknown, detail);
     /* PREPARE only snapshots. Normal register 0x21 writes belong to PC 0x0D. */
     if (!error && !commit) {
-        if(!motor_device_snapshot_modes(&previous_modes,&vr)){
+        if(!motor_device_snapshot_modes(s->mask,&previous_modes,&vr)){
             error=YPWM_MODE_FAILED;diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);
         }else{
             taskENTER_CRITICAL();if(p.epoch==s->epoch)p.snapshot_valid=true;taskEXIT_CRITICAL();
@@ -562,9 +568,9 @@ static void rollback_mode(const control_context *s){
     const bool off=motor_device_set_torque(false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
     bool ok=off;
     if(off&&s->snapshot_valid)ok=motor_device_restore_modes(&previous_modes,rollback_allowed,&restored,&failed,&failure);
-    if(off&&!s->snapshot_valid)restored=YPWM_ALL_MASK;
+    if(off&&!s->snapshot_valid)restored=s->mask;
     const bool final_off=motor_device_torque_mask(YPWM_ALL_MASK,false)==MOTOR_DEVICE_OK&&motor_device_verify_torque_off(&unknown);
-    ok=ok&&final_off&&!motor_device_register_lock_uncertain_mask();
+    ok=ok&&final_off&&!(motor_device_register_lock_uncertain_mask()&s->mask);
     /* Undo the F103 preference as well as physical modes for pre-ARM CANCEL. */
     if(ok&&s->preference_touched)ok=mode_store_save(&previous_setting);
     taskENTER_CRITICAL();

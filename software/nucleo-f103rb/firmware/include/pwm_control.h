@@ -11,6 +11,7 @@ bool pwm_control_begin_mode_write(const motor_register_write_request_t *request)
 bool pwm_control_mode_write_current(void);
 void pwm_control_end_mode_write(const motor_register_write_report_t *report);
 uint32_t pwm_control_staged_epoch(void);
+uint16_t pwm_control_staged_mask(void);
 bool pwm_control_preparation_pending(void);
 /* Signed host duties, ID1..12. ACK is deferred until actuator TX completes.
  * Only all-zero diagnostics may run DISARMED; their ACK does not prove

@@ -12,7 +12,7 @@ enum ypwm_diag_stage { YPWM_DIAG_NONE, YPWM_DIAG_TORQUE_OFF_TX,
     YPWM_DIAG_COMPLETE, YPWM_DIAG_CANCELED, YPWM_DIAG_ROLLBACK };
 enum ypwm_diag_io { YPWM_DIAG_IO_NONE, YPWM_DIAG_IO_DEVICE, YPWM_DIAG_IO_REGISTER };
 /* 0 event,1 version,2 backend,3 stage,4 seq:u16,6 result,7 motor_id(0 unknown),
- * 8 epoch:u32,12 selected:u16,14 legacy transaction_ok:u16 (zero),16 verified:u16,
+ * 8 epoch:u32,12 selected:u16,14 staged transaction_ok:u16,16 verified:u16,
  * 18 torque_unknown_at_failure:u16,20 elapsed_ms:u32,24 address,25 expected,
  * 26 actual,27 IO domain,28 IO status,29 servo_error,30 has_register_report,
  * 31 write_status,32 primary_status,33 write_stage,34 initial_value,

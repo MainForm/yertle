@@ -659,30 +659,33 @@ static motor_register_write_report_t write_mode_once(uint8_t id,uint8_t mode,boo
 }
 motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
 { return write_mode_once(id,mode,allowed); }
-bool motor_device_snapshot_modes(motor_mode_snapshot_t *snapshot,motor_verify_report_t *report)
+bool motor_device_snapshot_modes(uint16_t mask,motor_mode_snapshot_t *snapshot,motor_verify_report_t *report)
 {
-    if(!snapshot||!report)return false;
+    if(!ypwm_mask(mask)||!snapshot||!report)return false;
     memset(snapshot,0,sizeof *snapshot);*report=motor_verify_initial_report();
-    for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
+    for(uint8_t id=1;id<=YPWM_MOTOR_COUNT;++id){
+        if(!ypwm_motor_selected(mask,id))continue;
+        motor_register_data_t d;
         const motor_register_status_t status=motor_device_read_register(id,0x21,1,&d);
         if(status==MOTOR_REGISTER_OK&&(d.data[0]==0||d.data[0]==2)){
             snapshot->mode[id-1]=d.data[0];snapshot->valid_mask|=(uint16_t)(1U<<(id-1));
         }else if(!report->motor_id){report->motor_id=id;report->address=0x21;report->io_status=(uint8_t)status;
             report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->servo_error=d.servo_error;}
     }
-    return snapshot->valid_mask==YPWM_ALL_MASK;
+    return snapshot->valid_mask==mask;
 }
 bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*allowed)(void),
     uint16_t *restored,uint8_t *failed_id,motor_register_write_report_t *failure)
 {
-    if(!snapshot||!restored||!failed_id||!failure||snapshot->valid_mask!=YPWM_ALL_MASK||!allowed)return false;
+    if(!snapshot||!restored||!failed_id||!failure||!ypwm_mask(snapshot->valid_mask)||!allowed)return false;
     *restored=0;*failed_id=0;*failure=motor_register_initial_report();
-    for(uint8_t id=1;id<=12;++id){
+    for(uint8_t id=1;id<=YPWM_MOTOR_COUNT;++id){
+        if(!ypwm_motor_selected(snapshot->valid_mask,id))continue;
         const motor_register_write_report_t r=write_mode_once(id,snapshot->mode[id-1],allowed);
         if(r.status==MOTOR_WRITE_OK)*restored|=(uint16_t)(1U<<(id-1));
         else if(!*failed_id){*failed_id=id;*failure=r;}
     }
-    return *restored==YPWM_ALL_MASK&&motor_device_register_lock_uncertain_mask()==0;
+    return *restored==snapshot->valid_mask&&!(motor_device_register_lock_uncertain_mask()&snapshot->valid_mask);
 }
 
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
@@ -690,17 +693,19 @@ bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *report)
 {
     if(report)*report=motor_verify_initial_report();
-    if(!verified || backend>YPWM_PID || !ypwm_mask(mask))return false;
+    if(!verified || backend>YPWM_PID || !ypwm_mask(mask) || (backend==YPWM_POSITION&&mask!=YPWM_ALL_MASK))return false;
     *verified=0;
-    for(uint8_t id=1;id<=12;++id){motor_register_data_t d;
-        const uint8_t expected=ypwm_expected_servo_mode(backend,mask,id);
+    const uint8_t expected=ypwm_expected_servo_mode(backend);
+    for(uint8_t id=1;id<=YPWM_MOTOR_COUNT;++id){
+        if(!ypwm_motor_selected(mask,id))continue;
+        motor_register_data_t d;
         const motor_register_status_t status=motor_device_read_register(id,0x21,1,&d);
         if(status==MOTOR_REGISTER_OK&&d.data[0]==expected)
             *verified|=(uint16_t)(1U<<(id-1U));
         else if(report&&!report->motor_id){report->motor_id=id;report->address=0x21;report->expected=expected;
             report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->io_status=(uint8_t)status;report->servo_error=d.servo_error;}
     }
-    return *verified==YPWM_ALL_MASK && motor_device_register_lock_uncertain_mask()==0;
+    return *verified==mask && !(motor_device_register_lock_uncertain_mask()&mask);
 }
 
 bool motor_device_verify_torque_off(uint16_t *unknown)

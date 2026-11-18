@@ -11,7 +11,7 @@ expected/observed values, I/O status domain, primary read/write statuses and
 addresses, last read value, verified mode mask, torque unknown mask at failure,
 EEPROM lock unknown mask,
 timings, transaction status/stage and lock-recovery summary. Bytes 14–15 retain
-the old transaction-completed field and are zero in current firmware.
+the mask of confirmed register write transactions during STAGED.
 
 Current stages are torque_off_tx, torque_off_verify, mode_transaction,
 mode_verify, final_torque_off_verify, complete, canceled and rollback.
