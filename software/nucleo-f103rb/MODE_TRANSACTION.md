@@ -18,8 +18,9 @@ submitting a partial PWM request.
 0x0E is exactly nine bytes: schema=3, operation (0 PREPARE / 1 COMMIT /
 2 CANCEL), backend (0 native / 1 F103 PID), selected mask u16LE, nonzero epoch u32LE.
 All operations are correlated by request sequence, backend, mask and epoch.
-EVENT4 remains 38 bytes with schema=3; phases 0..6 retain their numeric values,
-7=STAGED, 8=ROLLING_BACK, 9=CANCELED. Value 9 reports a confirmed rollback.
+EVENT4 remains 38 bytes with schema=3. Phase 2 is unused. Current phases use
+0/1/3/4/5/6/7/8 and confirmed rollback reports value 9.
+While an actuator mode job is pending EVENT4 is deferred until a state result.
 On COMMIT the verified mask describes the selected modes. After CANCEL the
 verified mask describes confirmed restoration of the original modes in that
 same selection.
@@ -43,11 +44,12 @@ same selection.
    Before ARM, CANCEL or a link reset can restore it even if COMMIT ACK was lost.
    After ARM, ordinary release never restores modes.
 
-PREPARE keepalive requires proof of matching PREPARING/STAGED. Writes/readbacks
-renew heartbeat only while STAGED. COMMIT/CANCEL wait does not send heartbeat:
-a stale PREPARING event must not arm a committed controller whose ACK was lost.
-Preparation now has a120000ms total deadline; DISARMED PREPARING/STAGED permits
-20000ms link silence, while ordinary/ARMED heartbeat expiry remains1000ms.
+During PREPARE and COMMIT the PC can poll GET_FSM_STATE for link liveness.
+These read-only requests cannot establish an ARM lease. The first transition
+heartbeat can be sent after matching PREPARE ACK and STAGED status. Once COMMIT
+is sent the PC waits for its matching ACK and READY before requesting ARM.
+The 120000ms total deadline and 20000ms DISARMED link-silence limit apply to
+queued mode work and STAGED; the normal heartbeat limit remains 1000ms.
 The PC owns up to5 explicit target requests per ID, capped by5000ms response,
 30000ms per-ID and120000ms global budgets; uncertain writes are reconciled
 before another request. F103 executes only one target transaction per request.

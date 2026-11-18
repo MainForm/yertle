@@ -82,7 +82,13 @@ static void receive(protocol_context_t *c,uint8_t type,const uint8_t *p,uint16_t
 static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
  uint8_t mode[9]={YPWM_SCHEMA,YPWM_PREPARE,backend};ypwm_put16(mode+3,YPWM_ALL_MASK);ypwm_put32(mode+5,epoch);
  receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
- receive(c,MESSAGE_HEARTBEAT,NULL,0);try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
+ const uint8_t write[5]={1,0x21,1,1,backend==YPWM_PID?2:0};
+ receive(c,MESSAGE_SET_MOTOR_REGISTER,write,5);assert(last_result==MESSAGE_NACK&&!c->register_job_active);
+ const uint8_t ordinary_write[5]={1,0x15,1,1,40};
+ receive(c,MESSAGE_SET_MOTOR_REGISTER,ordinary_write,5);assert(last_result==MESSAGE_NACK&&!c->register_job_active);
+ uint8_t pending[YPWM_STATUS_LENGTH];assert(!pwm_control_status(pending,true));
+ tick+=1100;receive(c,MESSAGE_GET_FSM_STATE,NULL,0);try_enter_control_ready(c);
+ assert(c->host_connected&&!c->lease_established&&c->state==HOST_FSM_DISARMED);
  motor_control_service();service_pwm(c);assert(!c->pwm_mode_pending&&!motor_control_can_arm());
  for(uint8_t id=1;id<=12;++id){
   const uint8_t q[5]={id,0x21,1,1,backend==YPWM_PID?2:0};
@@ -90,8 +96,12 @@ static void configure(protocol_context_t *c,uint8_t backend,uint32_t epoch){
   service_motor_register_write(c);assert(last_result==MESSAGE_ACK);
  }
  mode[1]=YPWM_COMMIT;receive(c,MESSAGE_SET_CONTROL_MODE,mode,9);assert(c->pwm_mode_pending);
- receive(c,MESSAGE_HEARTBEAT,NULL,0);assert(c->lease_established);
- motor_control_service();try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
+ receive(c,MESSAGE_SET_MOTOR_REGISTER,write,5);assert(last_result==MESSAGE_NACK&&!c->register_job_active);
+ assert(!pwm_control_status(pending,true));
+ tick+=1100;receive(c,MESSAGE_GET_FSM_STATE,NULL,0);
+ assert(c->host_connected&&!c->lease_established);
+ motor_control_service();expire_host_link(c);try_enter_control_ready(c);
+ assert(c->host_connected&&c->state==HOST_FSM_DISARMED);
  service_pwm(c);assert(!c->pwm_mode_pending&&!c->lease_established&&torque_mask==0);
  try_enter_control_ready(c);assert(c->state==HOST_FSM_DISARMED);
 }

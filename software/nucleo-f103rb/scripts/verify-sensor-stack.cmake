@@ -106,9 +106,9 @@ set(actuator_verify actuator_task motor_control_service)
 set(mode_read motor_device_read_register read_register_locked read_register_timed motor_uart_read_frame read_byte)
 check_path(actuator_boot_mode_verify ${actuator_verify} service_motor_boot verify_ready_mode
     motor_device_verify_modes_detailed ${mode_read})
-check_path(actuator_commit_mode_verify ${actuator_verify} prepare_mode verify_ready_mode
+check_path(actuator_commit_mode_verify ${actuator_verify} service_mode_job verify_ready_mode
     motor_device_verify_modes_detailed ${mode_read})
-check_path(actuator_commit_off_verify ${actuator_verify} prepare_mode verify_ready_mode
+check_path(actuator_commit_off_verify ${actuator_verify} service_mode_job verify_ready_mode
     recheck_mode_torque_off motor_device_verify_torque_off_detailed ${mode_read})
 set(actuator_stop actuator_task motor_control_service service_stop)
 set(stop_off_verify motor_safe_stop_service motor_device_verify_torque_off motor_device_verify_torque_off_detailed

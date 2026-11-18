@@ -54,8 +54,7 @@
 /* Wire phase 1 reports position READY/ACTIVE. Wire phase 9 reports rollback completion. */
 enum motor_control_phase {
     MOTOR_CONTROL_BOOT = 0,
-    MOTOR_CONTROL_PREPARING = 2,
-    MOTOR_CONTROL_READY,
+    MOTOR_CONTROL_READY = 3,
     MOTOR_CONTROL_ACTIVE,
     MOTOR_CONTROL_STOPPING,
     MOTOR_CONTROL_BLOCKED = YPWM_STATUS_PHASE_FAILED,

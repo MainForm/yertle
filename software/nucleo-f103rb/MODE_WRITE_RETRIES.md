@@ -11,7 +11,7 @@ For a safe transient IO14 or mismatch15 failure with no servo fault and verified
 lock cleanup, the transaction stays DISARMED/STAGED for an explicit PC retry or
 CANCEL. Unsafe failures roll back immediately. No ARM is allowed while STAGED.
 DISARMED preparation TTL is120000ms. Silent-link rollback remains active:
-20000ms only while DISARMED PREPARING/STAGED,1000ms elsewhere including ARMED.
+20000ms only while DISARMED mode work is pending or STAGED,1000ms elsewhere including ARMED.
 
 PC defaults: max5 requests per ID,5000ms response wait,200ms retry delay,
 30000ms per-ID budget,120000ms overall timeout; proof register reads2s/attempt.

@@ -21,8 +21,10 @@ enum mode_rollback_result {
     MODE_ROLLBACK_FAILED
 };
 
+enum mode_job { MODE_JOB_NONE, MODE_JOB_PREPARE, MODE_JOB_COMMIT };
+
 typedef struct {
-    uint8_t backend,phase,reason,result,operation,mode_write_id,rollback_result;
+    uint8_t backend,phase,reason,result,mode_job,mode_write_id,rollback_result;
     uint16_t mask,verified,unknown,torque,request,feedback_age;
     uint32_t epoch,retired_epoch,command_count,raw_accepted_ms,status_ms,started_ms;
     motor_position_target_t position_target;
@@ -153,7 +155,7 @@ void motor_control_init(void){
 void motor_control_on_armed(void)
 {
     taskENTER_CRITICAL();
-    if (p.phase == MOTOR_CONTROL_READY) {
+    if (p.phase == MOTOR_CONTROL_READY && p.mode_job == MODE_JOB_NONE) {
         p.ever_command = false;
         p.snapshot_valid = false;
     }
@@ -163,7 +165,7 @@ void motor_control_on_armed(void)
 bool motor_control_position_ready(void)
 {
     taskENTER_CRITICAL();
-    const bool ready = p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY;
+    const bool ready = p.backend == YPWM_POSITION && p.phase == MOTOR_CONTROL_READY && p.mode_job == MODE_JOB_NONE;
     taskEXIT_CRITICAL();
     return ready;
 }
@@ -171,7 +173,8 @@ bool motor_control_position_ready(void)
 /* Caller holds the critical section. */
 static bool accepts_targets(void)
 {
-    return p.arm_allowed && (p.phase == MOTOR_CONTROL_READY || p.phase == MOTOR_CONTROL_ACTIVE);
+    return p.mode_job == MODE_JOB_NONE && p.arm_allowed &&
+           (p.phase == MOTOR_CONTROL_READY || p.phase == MOTOR_CONTROL_ACTIVE);
 }
 
 bool motor_control_accepts_targets(void)
@@ -190,10 +193,19 @@ static bool calibration_ready(uint16_t mask){
 bool motor_control_can_arm(void)
 {
     const control_context s = snapshot();
-    return s.phase == MOTOR_CONTROL_READY && s.arm_allowed && !s.unknown &&
+    return s.phase == MOTOR_CONTROL_READY && s.mode_job == MODE_JOB_NONE && s.arm_allowed && !s.unknown &&
         (s.backend == YPWM_POSITION || calibration_ready(s.mask));
 }
-static bool transitioning(uint8_t phase){return phase==MOTOR_CONTROL_PREPARING||phase==MOTOR_CONTROL_STAGED||phase==MOTOR_CONTROL_ROLLING_BACK;}
+static bool mode_change_open(const control_context *s)
+{
+    return s->mode_job != MODE_JOB_NONE || s->phase == MOTOR_CONTROL_STAGED || s->phase == MOTOR_CONTROL_ROLLING_BACK;
+}
+
+/* Called with the critical section held. */
+static bool mode_job_current(const control_context *s)
+{
+    return p.mode_job == s->mode_job && p.epoch == s->epoch && p.request == s->request;
+}
 static void begin_stop(uint8_t reason)
 {
     taskENTER_CRITICAL();
@@ -205,7 +217,8 @@ static void begin_stop(uint8_t reason)
     p.arm_allowed = false;
     if (p.rollback_result == MODE_ROLLBACK_FAILED) {
         /* Retain the transaction and its snapshot for another CANCEL. */
-    } else if (transitioning(p.phase)) {
+    } else if (mode_change_open(&p)) {
+        p.mode_job = MODE_JOB_NONE;
         p.phase = MOTOR_CONTROL_ROLLING_BACK;
         p.reason = reason;
         p.result = YPWM_INVALID_STATE;
@@ -232,12 +245,12 @@ void motor_control_stop(uint8_t reason)
 void motor_control_connection_reset(void)
 {
     const control_context s = snapshot();
-    if (s.snapshot_valid && s.phase == MOTOR_CONTROL_READY && !host_protocol_is_armed()) {
+    if (s.mode_job == MODE_JOB_NONE && s.snapshot_valid && s.phase == MOTOR_CONTROL_READY && !host_protocol_is_armed()) {
         taskENTER_CRITICAL();
-        if (p.epoch == s.epoch && p.phase == s.phase) p.phase = MOTOR_CONTROL_ROLLING_BACK;
+        if (p.epoch == s.epoch && p.phase == s.phase && p.mode_job == MODE_JOB_NONE) p.phase = MOTOR_CONTROL_ROLLING_BACK;
         taskEXIT_CRITICAL();
         motor_control_stop(YPWM_REASON_LINK);
-    } else if (transitioning(s.phase) || s.phase == MOTOR_CONTROL_ACTIVE ||
+    } else if (mode_change_open(&s) || s.phase == MOTOR_CONTROL_ACTIVE ||
                (s.phase == MOTOR_CONTROL_READY && (host_protocol_is_armed() || s.unknown))) {
         motor_control_stop(YPWM_REASON_LINK);
     }
@@ -255,24 +268,27 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
             const bool confirmed = p.rollback_result == MODE_ROLLBACK_CONFIRMED;
             const bool retry = p.phase == MOTOR_CONTROL_BLOCKED &&
                                p.rollback_result == MODE_ROLLBACK_FAILED;
-            if(!transitioning(p.phase)&&!confirmed&&!retry&&
+            if(!mode_change_open(&p)&&!confirmed&&!retry&&
                !(p.snapshot_valid&&p.phase==MOTOR_CONTROL_READY)){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
-            p.request=sequence;p.operation=YPWM_CANCEL;p.result=YPWM_OK;p.arm_allowed=false;
+            p.request=sequence;p.mode_job=MODE_JOB_NONE;p.result=YPWM_OK;p.arm_allowed=false;
             p.transaction_pending = !confirmed;
             if (confirmed) p.result_pending = true;
             else p.phase = MOTOR_CONTROL_ROLLING_BACK;
         }else{
-            if(p.phase!=MOTOR_CONTROL_STAGED||p.mode_busy||host_protocol_is_stop_requested()){taskEXIT_CRITICAL();return YPWM_INVALID_STATE;}
-            p.request=sequence;p.operation=r.operation;p.phase=MOTOR_CONTROL_PREPARING;p.transaction_pending=true;
+            if(p.phase!=MOTOR_CONTROL_STAGED||p.mode_job!=MODE_JOB_NONE||p.mode_busy||
+               p.raw_pending||p.raw_result_pending||host_protocol_is_stop_requested()){
+                taskEXIT_CRITICAL();return YPWM_INVALID_STATE;
+            }
+            p.request=sequence;p.mode_job=MODE_JOB_COMMIT;p.transaction_pending=true;
         }
         p.dirty=true;taskEXIT_CRITICAL();return YPWM_OK;
     }
     if(p.flash_read_failed){taskEXIT_CRITICAL();return YPWM_FLASH_READ_FAILED;}
     if(p.rollback_result==MODE_ROLLBACK_FAILED){taskEXIT_CRITICAL();return YPWM_ROLLBACK_FAILED;}
-    if(host_protocol_is_stop_requested()||transitioning(p.phase)||p.phase==MOTOR_CONTROL_ACTIVE||p.phase==MOTOR_CONTROL_STOPPING||
+    if(host_protocol_is_stop_requested()||mode_change_open(&p)||p.phase==MOTOR_CONTROL_ACTIVE||p.phase==MOTOR_CONTROL_STOPPING||
        p.result_pending||p.mode_busy||p.raw_pending||p.raw_result_pending){taskEXIT_CRITICAL();return YPWM_BUSY;}
     if(r.epoch==p.epoch||r.epoch==p.retired_epoch){taskEXIT_CRITICAL();return YPWM_STALE_EPOCH;}
-    p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.phase=MOTOR_CONTROL_PREPARING;p.operation=YPWM_PREPARE;
+    p.backend=r.backend;p.mask=r.mask;p.epoch=r.epoch;p.request=sequence;p.mode_job=MODE_JOB_PREPARE;
     p.verified=0;p.reason=0;p.result=0;p.command_count=0;p.arm_allowed=false;p.ever_command=false;
     p.started_ms=milliseconds();p.snapshot_valid=false;p.transaction_pending=true;p.preference_touched=false;
     p.rollback_result = MODE_ROLLBACK_NONE;
@@ -281,15 +297,15 @@ uint8_t pwm_control_request_mode(const uint8_t *bytes,size_t n,uint16_t sequence
     mode_detail_valid=mode_detail_pending=rollback_detail_pending=false;
     taskEXIT_CRITICAL();return YPWM_OK;
 }
-uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_STAGED?s.epoch:0;}
+uint32_t pwm_control_staged_epoch(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_STAGED&&s.mode_job==MODE_JOB_NONE?s.epoch:0;}
 uint16_t pwm_control_staged_mask(void)
 {
     taskENTER_CRITICAL();
-    const uint16_t mask = p.phase == MOTOR_CONTROL_STAGED ? p.mask : 0U;
+    const uint16_t mask = p.phase == MOTOR_CONTROL_STAGED && p.mode_job == MODE_JOB_NONE ? p.mask : 0U;
     taskEXIT_CRITICAL();
     return mask;
 }
-bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.phase==MOTOR_CONTROL_PREPARING||s.phase==MOTOR_CONTROL_STAGED;}
+bool pwm_control_preparation_pending(void){const control_context s=snapshot();return s.mode_job!=MODE_JOB_NONE||s.phase==MOTOR_CONTROL_STAGED;}
 static bool mode_write_window_open(uint32_t started_ms)
 {
     return host_protocol_get_state() == HOST_FSM_DISARMED &&
@@ -300,7 +316,7 @@ static bool mode_write_window_open(uint32_t started_ms)
 bool pwm_control_mode_write_current(void)
 {
     taskENTER_CRITICAL();
-    const bool active = p.phase == MOTOR_CONTROL_STAGED && p.snapshot_valid && p.mode_busy;
+    const bool active = p.phase == MOTOR_CONTROL_STAGED && p.mode_job == MODE_JOB_NONE && p.snapshot_valid && p.mode_busy;
     const uint32_t started_ms = p.started_ms;
     taskEXIT_CRITICAL();
     return active && mode_write_window_open(started_ms);
@@ -309,7 +325,7 @@ bool pwm_control_mode_write_current(void)
 bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
     /* Only copy the fields needed to validate the requested motor and mode. */
     taskENTER_CRITICAL();
-    const bool staged=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
+    const bool staged=p.phase==MOTOR_CONTROL_STAGED&&p.mode_job==MODE_JOB_NONE&&p.snapshot_valid&&
         ypwm_motor_selected(p.mask,id)&&mode==ypwm_expected_servo_mode(p.backend);
     const uint32_t started_ms=p.started_ms;
     taskEXIT_CRITICAL();
@@ -317,7 +333,7 @@ bool pwm_control_mode_write_allowed(uint8_t id,uint8_t mode){
 }
 bool pwm_control_begin_mode_write(const motor_register_write_request_t *q){
     if(motor_register_validate_mode_write(q)!=MOTOR_WRITE_OK||!pwm_control_mode_write_allowed(q->motor_id,q->data[0]))return false;
-    taskENTER_CRITICAL();const bool ok=p.phase==MOTOR_CONTROL_STAGED&&!p.mode_busy;
+    taskENTER_CRITICAL();const bool ok=p.phase==MOTOR_CONTROL_STAGED&&p.mode_job==MODE_JOB_NONE&&!p.mode_busy;
     if(ok){p.mode_busy=true;p.mode_write_id=q->motor_id;}
     taskEXIT_CRITICAL();return ok;
 }
@@ -333,7 +349,7 @@ static void diagnostic_register_report(uint8_t *d,const motor_register_write_rep
 }
 void pwm_control_end_mode_write(const motor_register_write_report_t *r){
     taskENTER_CRITICAL();p.mode_busy=false;
-    if(r->status!=MOTOR_WRITE_OK&&transitioning(p.phase)){
+    if(r->status!=MOTOR_WRITE_OK&&mode_change_open(&p)){
         /* Preserve the failed external 0x0D, not the earlier successful PREPARE. */
         mode_detail[0]=YPWM_DIAG_EVENT;mode_detail[1]=YPWM_DIAG_VERSION;mode_detail[2]=p.backend;
         mode_detail[3]=YPWM_DIAG_MODE_TRANSACTION;mode_detail[6]=YPWM_MODE_FAILED;
@@ -344,7 +360,7 @@ void pwm_control_end_mode_write(const motor_register_write_report_t *r){
         mode_detail[29]=r->servo_error;diagnostic_register_report(mode_detail,r);
         ypwm_put32(mode_detail+20,milliseconds()-p.started_ms);ypwm_put32(mode_detail+56,milliseconds());
         mode_detail_valid=mode_detail_pending=true;
-        const bool host_may_retry=p.phase==MOTOR_CONTROL_STAGED&&p.snapshot_valid&&
+        const bool host_may_retry=p.phase==MOTOR_CONTROL_STAGED&&p.mode_job==MODE_JOB_NONE&&p.snapshot_valid&&
             (r->status==MOTOR_WRITE_IO_ERROR||r->status==MOTOR_WRITE_VERIFY_MISMATCH)&&
             !r->servo_error&&!r->cleanup_servo_error&&!(motor_device_register_lock_uncertain_mask()&p.mask)&&
             (!r->target_write_attempted||r->lock_restore_verified)&&
@@ -393,7 +409,7 @@ uint8_t pwm_control_submit_raw(const int16_t duty[12],uint16_t sequence){
             taskEXIT_CRITICAL();return YPWM_INVALID_PAYLOAD;}
         if(duty[i])zero=false;
     }
-    if(p.raw_pending||p.raw_result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
+    if(p.mode_job!=MODE_JOB_NONE||p.raw_pending||p.raw_result_pending||p.mode_busy){taskEXIT_CRITICAL();return YPWM_BUSY;}
     const bool preview=!armed&&zero&&host_protocol_get_state()==HOST_FSM_DISARMED&&
         (p.phase==MOTOR_CONTROL_READY||p.phase==MOTOR_CONTROL_STAGED);
     if(host_protocol_is_stop_requested()||(!preview&&(!armed||!p.arm_allowed||
@@ -416,7 +432,10 @@ bool pwm_control_take_mode_result(uint16_t *sequence,uint8_t *result){
 }
 bool pwm_control_status(uint8_t b[YPWM_STATUS_LENGTH],bool force){
     const uint32_t now=milliseconds();taskENTER_CRITICAL();
-    if(!force&&(!p.dirty||now-p.status_ms<YPWM_STATUS_PERIOD_MS)){taskEXIT_CRITICAL();return false;}
+    /* Retained READY/STAGED belongs to the prior completed step until the job finishes. */
+    if(p.mode_job!=MODE_JOB_NONE||(!force&&(!p.dirty||now-p.status_ms<YPWM_STATUS_PERIOD_MS))){
+        taskEXIT_CRITICAL();return false;
+    }
     const control_context s=p;p.dirty=false;p.status_ms=now;taskEXIT_CRITICAL();
     memset(b,0,YPWM_STATUS_LENGTH);b[0]=YPWM_EVENT_CODE;b[1]=YPWM_SCHEMA;b[2]=s.backend;
     b[3] = s.phase;
@@ -497,9 +516,9 @@ static uint8_t verify_ready_mode(const mode_setting_t *setting, uint16_t *verifi
     return recheck_mode_torque_off(unknown, detail, error);
 }
 
-static void prepare_mode(const control_context *s){
+static void service_mode_job(const control_context *s){
     uint16_t unknown=YPWM_ALL_MASK,verified=0;
-    const bool commit = s->operation == YPWM_COMMIT;
+    const bool commit = s->mode_job == MODE_JOB_COMMIT;
     const mode_setting_t setting = { s->backend, s->mask };
     const uint32_t started=milliseconds();uint8_t detail[YPWM_DIAG_LENGTH]={0};
     detail[0]=YPWM_DIAG_EVENT;detail[1]=YPWM_DIAG_VERSION;detail[2]=s->backend;
@@ -515,7 +534,7 @@ static void prepare_mode(const control_context *s){
         if(!motor_device_snapshot_modes(s->mask,&previous_modes,&vr)){
             error=YPWM_MODE_FAILED;diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);
         }else{
-            taskENTER_CRITICAL();if(p.epoch==s->epoch)p.snapshot_valid=true;taskEXIT_CRITICAL();
+            taskENTER_CRITICAL();if(mode_job_current(s))p.snapshot_valid=true;taskEXIT_CRITICAL();
             previous_setting=(mode_setting_t){YPWM_POSITION,YPWM_ALL_MASK};
             if(mode_store_read(&previous_setting)==MODE_STORE_READ_ERROR){
                 error=YPWM_FLASH_READ_FAILED;vr=motor_verify_initial_report();
@@ -525,10 +544,12 @@ static void prepare_mode(const control_context *s){
     }
     if (!commit) error = recheck_mode_torque_off(&unknown, detail, error);
     if (!error && commit) {
-        const control_context current=snapshot();
-        if(current.phase!=MOTOR_CONTROL_PREPARING||current.epoch!=s->epoch)error=YPWM_INVALID_STATE;
+        taskENTER_CRITICAL();
+        const bool current=mode_job_current(s);
+        if(current)p.preference_touched=true;
+        taskEXIT_CRITICAL();
+        if(!current)error=YPWM_INVALID_STATE;
         else{
-            taskENTER_CRITICAL();p.preference_touched=true;taskEXIT_CRITICAL();
             if(!mode_store_save(&setting)){
                 error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();
                 diagnostic_failure(detail,YPWM_DIAG_MODE_TRANSACTION,&vr,YPWM_DIAG_IO_NONE,255);
@@ -541,7 +562,8 @@ static void prepare_mode(const control_context *s){
     memset(axes,0,sizeof axes);last_sample=last_feedback_ms=0;tx_failures=0U;
     thermal_sequence=0;memset(hot_samples,0,sizeof hot_samples);
     taskENTER_CRITICAL();
-    if(p.phase==MOTOR_CONTROL_PREPARING&&p.epoch==s->epoch){
+    if(mode_job_current(s)){
+        p.mode_job=MODE_JOB_NONE;
         p.result=error;p.verified=verified;p.unknown=unknown;p.torque=0;p.dirty=true;
         if (error) {
             if (error == YPWM_FLASH_READ_FAILED) p.flash_read_failed = true;
@@ -550,7 +572,7 @@ static void prepare_mode(const control_context *s){
             p.arm_allowed = false;
         } else {
             p.result_pending=true;p.transaction_pending=false;
-            p.phase=s->operation==YPWM_PREPARE?MOTOR_CONTROL_STAGED:MOTOR_CONTROL_READY;
+            p.phase=commit?MOTOR_CONTROL_READY:MOTOR_CONTROL_STAGED;
         }
     }
     else {detail[6]=YPWM_INVALID_STATE;if(!error)detail[3]=YPWM_DIAG_CANCELED;}
@@ -1006,7 +1028,7 @@ void motor_control_service(void)
         service_motor_boot(&s);
         return;
     }
-    if (transitioning(s.phase) && s.phase != MOTOR_CONTROL_ROLLING_BACK &&
+    if (mode_change_open(&s) && s.phase != MOTOR_CONTROL_ROLLING_BACK &&
         now - s.started_ms >= YPWM_PREPARATION_TIMEOUT_MS) {
         motor_control_stop(YPWM_REASON_TTL);
         s = snapshot();
@@ -1015,12 +1037,12 @@ void motor_control_service(void)
         rollback_mode(&s);
         return;
     }
-    if (s.raw_pending && s.raw_preview) {
-        service_raw(&s);
+    if (s.mode_job != MODE_JOB_NONE) {
+        service_mode_job(&s);
         return;
     }
-    if (s.phase == MOTOR_CONTROL_PREPARING) {
-        prepare_mode(&s);
+    if (s.raw_pending && s.raw_preview) {
+        service_raw(&s);
         return;
     }
     if (s.phase == MOTOR_CONTROL_READY || s.phase == MOTOR_CONTROL_ACTIVE) {

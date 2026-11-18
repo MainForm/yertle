@@ -17,7 +17,7 @@ static uint32_t tick;static unsigned critical,on_count,off_count,write_count,com
 static bool pwm_auto_enable;static uint16_t servo_torque_on;
 static bool stop_requested,armed,off_ok,mode_ok,feedback_ok,write_ok,cancel_mode,cancel_on;
 static uint16_t on_mask;static int16_t sent[12];static motor_feedback_set_t feedback;
-static uint8_t mode_fail_id;static unsigned verify_off_calls,fail_off_call;static bool verify_modes_ok;
+static uint8_t mode_fail_id;static unsigned verify_off_calls,fail_off_call;static bool verify_modes_ok,cancel_commit;
 uint16_t motor_device_register_lock_uncertain_mask(void){return mode_fail_id?(uint16_t)(1U<<(mode_fail_id-1U)):0U;}
 void pwm_test_enter(void){++critical;}void pwm_test_exit(void){assert(critical);--critical;}
 uint32_t xTaskGetTickCount(void){return tick;}
@@ -42,6 +42,7 @@ bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_repo
 }
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *r){
  bool ok=motor_device_verify_modes(backend,mask,verified)&&verify_modes_ok;*r=motor_verify_initial_report();
+ if(cancel_commit)motor_control_connection_reset();
  if(!ok){*verified=(uint16_t)(mask&(mask-1U));r->motor_id=ypwm_motor_selected(mask,3U)?3U:4U;r->address=0x21;r->expected=2;r->actual=0;r->io_status=0;}return ok;
 }
 bool motor_device_snapshot_modes(uint16_t mask,motor_mode_snapshot_t *m,motor_verify_report_t *r){
@@ -61,7 +62,7 @@ static void reset(void){
  seed_calibration();mode_memory_reset();pwm_auto_enable=false;servo_torque_on=0;
  tick=100;critical=on_count=off_count=write_count=completed=0;on_mask=0;stop_requested=armed=false;
  off_ok=mode_ok=feedback_ok=write_ok=true;cancel_mode=cancel_on=false;memset(sent,0,sizeof sent);
- mode_fail_id=0;verify_off_calls=fail_off_call=0;verify_modes_ok=true;
+ mode_fail_id=0;verify_off_calls=fail_off_call=0;verify_modes_ok=true;cancel_commit=false;
  memset(&feedback,0,sizeof feedback);feedback.valid_mask=YPWM_ALL_MASK;feedback.uptime_ms=tick;feedback.sequence=1;
  for(unsigned i=0;i<12;++i){feedback.motor[i].position=2048;feedback.motor[i].valid=true;feedback.motor[i].voltage=60;}
  motor_control_init();assert(!motor_control_can_arm());motor_control_service();assert(motor_control_position_ready());motor_control_service();
@@ -134,7 +135,9 @@ static void transaction_tests(void){
  assert(pwm_control_take_mode_result(&seq,&result)&&result==0);
  assert(phase()==YPWM_STATUS_PHASE_CANCELED&&off_count==rollback_off_count&&!motor_control_can_arm());
  assert(!pwm_control_mode_write_allowed(4,2));
- assert(request(YPWM_PREPARE,322,8)==0&&phase()==MOTOR_CONTROL_PREPARING);
+ assert(request(YPWM_PREPARE,322,8)==0);
+ uint8_t pending_status[YPWM_STATUS_LENGTH];
+ assert(!pwm_control_status(pending_status,true)&&pwm_control_preparation_pending());
  assert(request(YPWM_CANCEL,321,8)==YPWM_STALE_EPOCH);
  reset();stage(321,8);assert(pwm_control_begin_mode_write(&q));r.status=MOTOR_WRITE_IO_ERROR;pwm_control_end_mode_write(&r);
  motor_control_service(); assert(phase()==MOTOR_CONTROL_STAGED&&!motor_control_can_arm());assert(!pwm_control_take_mode_result(&seq,&result));
@@ -265,12 +268,16 @@ static void boot_and_commit_verification_tests(void)
 
   reset();
   assert(request_backend(backend, YPWM_PREPARE, 901, YPWM_ALL_MASK) == YPWM_OK);
+  assert(!pwm_control_status(status,true)&&!motor_control_can_arm()&&!motor_control_accepts_targets());
+  assert(!pwm_control_mode_write_allowed(1U,ypwm_expected_servo_mode(backend)));
   motor_control_service();
   assert(pwm_control_take_mode_result(&seq, &result) && result == YPWM_OK);
   pwm_auto_enable = true;
   before_off = off_count;
   before_read = verify_off_calls;
   assert(request_backend(backend, YPWM_COMMIT, 901, YPWM_ALL_MASK) == YPWM_OK);
+  assert(!pwm_control_status(status,true)&&!motor_control_can_arm()&&!pwm_control_staged_mask());
+  assert(!pwm_control_mode_write_allowed(1U,ypwm_expected_servo_mode(backend)));
   motor_control_service();
   assert(phase() == ready_phase && !armed && !motor_control_can_arm());
   assert(off_count == before_off + 1U && verify_off_calls == before_read + 2U);
@@ -287,6 +294,26 @@ static void boot_and_commit_verification_tests(void)
   assert(status[6] == YPWM_MODE_FAILED && status[7] == YPWM_REASON_MODE);
   assert(!motor_control_can_arm() && write_count == 0U);
  }
+
+ /* Canceling queued PREPARE keeps BOOT's verified selection unarmed and avoids Flash writes. */
+ reset();assert(request(YPWM_PREPARE,902,8)==YPWM_OK);
+ assert(request(YPWM_CANCEL,902,8)==YPWM_OK);
+ motor_control_service();
+ assert(phase()==YPWM_STATUS_PHASE_CANCELED&&!motor_control_can_arm()&&mode_memory_programs==0U);
+ assert(pwm_control_take_mode_result(&seq,&result)&&result==YPWM_OK);
+
+ /* The same transaction limit applies before any mode job has run. */
+ reset();assert(request(YPWM_PREPARE,903,8)==YPWM_OK);tick+=YPWM_PREPARATION_TIMEOUT_MS;
+ motor_control_service();
+ assert(phase()==YPWM_STATUS_PHASE_CANCELED&&reason()==YPWM_REASON_TTL&&mode_memory_programs==0U);
+
+ /* Losing the link inside verification must never publish READY or save the selection. */
+ reset();stage(904,8);
+ assert(request(YPWM_COMMIT,904,8)==YPWM_OK);cancel_commit=true;
+ motor_control_service();
+ assert(phase()==MOTOR_CONTROL_ROLLING_BACK&&!motor_control_can_arm()&&mode_memory_programs==0U);
+ motor_control_service();
+ assert(phase()==YPWM_STATUS_PHASE_CANCELED&&!motor_control_can_arm()&&mode_memory_programs==0U);
 
  /* A final recheck cannot override an initial OFF transmission failure. */
  reset();stage(803,YPWM_ALL_MASK);off_ok=false;

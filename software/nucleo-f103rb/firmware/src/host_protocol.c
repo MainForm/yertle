@@ -528,7 +528,8 @@ static void handle_motor_register_write(protocol_context_t *context, uint16_t se
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_REGISTER);
         return;
     }
-    if((payload[1]==0x21 && (length!=5U || !pwm_control_mode_write_allowed(payload[0],payload[4]))) ||
+    if(context->pwm_mode_pending ||
+       (payload[1]==0x21 && (length!=5U || !pwm_control_mode_write_allowed(payload[0],payload[4]))) ||
        (payload[1]!=0x21 && pwm_control_staged_epoch())){
         send_result(context,MESSAGE_NACK,MESSAGE_SET_MOTOR_REGISTER,sequence,ERROR_INVALID_STATE);return;
     }
@@ -863,6 +864,7 @@ static void handle_frame(protocol_context_t *context, const uint8_t *raw, size_t
             error=pwm_control_request_mode(raw+7,(size_t)raw[5]|((size_t)raw[6]<<8),sequence);
         if(error)send_result(context,MESSAGE_NACK,type,sequence,error);
         else {context->pwm_mode_pending=true;context->lease_established=false;
+            context->last_idle_monitor_tick=xTaskGetTickCount();context->idle_monitor_seen=true;
             /* A mode-write replay is valid only within this transition. No old
                epoch may acknowledge a write that has not happened here. */
             if(raw[8]==YPWM_PREPARE)memset(context->write_cache,0,sizeof context->write_cache);}

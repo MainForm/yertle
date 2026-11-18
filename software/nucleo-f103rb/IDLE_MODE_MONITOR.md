@@ -14,7 +14,7 @@ They do not modify `last_host_heartbeat_tick`, establish a lease or enable torqu
 Once a real heartbeat establishes a lease, only real heartbeat RX renews it;
 continuous diagnostics/sensor polling cannot mask a heartbeat timeout.
 
-Outside DISARMED PREPARING/STAGED, no polling for1000ms still disconnects the link.
+Outside DISARMED mode work and STAGED, no polling for1000ms still disconnects the link.
 Preparation alone permits20000ms silence, while its total120000ms deadline stays
 bounded. ARMED heartbeat and target watchdogs are unchanged. The pre-first-ARM
 snapshot/Flash rollback runs, while post-ARM normal release retains the saved
