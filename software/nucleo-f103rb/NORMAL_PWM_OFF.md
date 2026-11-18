@@ -1,5 +1,8 @@
 # Explicit torque OFF after PWM0 (2026-10-26)
 
+This records the October implementation. Current BOOT and COMMIT use the
+common OFF and mode verification in [Persistent F103 control selection](PERSISTENT_CONTROL_MODE.md).
+
 ## Evidence
 Real logs robot_20261026_000013_14644.jsonl and robot_20261026_000845_13376.jsonl:
 all torque switches0 before PWM0, ID1=0 and IDs2-12=1 after PWM0, all0 after explicit torque OFF. PWM0 is a zero-output command, not verified torque release.

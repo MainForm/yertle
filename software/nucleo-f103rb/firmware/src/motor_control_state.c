@@ -440,27 +440,65 @@ bool pwm_control_mode_diagnostics(uint8_t detail[YPWM_DIAG_LENGTH],uint8_t write
 }
 static void diagnostic_failure(uint8_t d[YPWM_DIAG_LENGTH],uint8_t stage,const motor_verify_report_t *r,
     uint8_t domain,uint8_t status){
-    if(d[3])return; /* Preserve the first failure even if final OFF verification fails. */
+    if (!d || d[3]) return; /* Retain the first reported failure. */
     d[3]=stage;d[24]=r->address;d[25]=r->expected;d[26]=r->actual;
     d[7]=r->motor_id;d[27]=domain;d[28]=status;d[29]=r->servo_error;
 }
+static uint8_t confirm_mode_torque_off(uint16_t *unknown, uint8_t *detail)
+{
+    motor_verify_report_t report = motor_verify_initial_report();
+    report.address = 0x28U;
+    report.expected = 0U;
+    const motor_device_status_t status = motor_device_set_torque(false);
+    uint8_t error = YPWM_OK;
+    if (status != MOTOR_DEVICE_OK) {
+        diagnostic_failure(detail, YPWM_DIAG_TORQUE_OFF_TX, &report, YPWM_DIAG_IO_DEVICE, (uint8_t)status);
+        error = YPWM_MODE_FAILED;
+    } else if (!motor_device_verify_torque_off_detailed(unknown, &report)) {
+        diagnostic_failure(detail, YPWM_DIAG_TORQUE_OFF_VERIFY, &report, YPWM_DIAG_IO_REGISTER, report.io_status);
+        error = YPWM_MODE_FAILED;
+    }
+    if (detail) ypwm_put16(detail + 18, *unknown);
+    return error;
+}
+
+static uint8_t recheck_mode_torque_off(uint16_t *unknown, uint8_t *detail, uint8_t error)
+{
+    motor_verify_report_t report;
+    if (motor_device_verify_torque_off_detailed(unknown, &report) || error != YPWM_OK) return error;
+    diagnostic_failure(detail, YPWM_DIAG_FINAL_OFF_VERIFY, &report, YPWM_DIAG_IO_REGISTER, report.io_status);
+    if (detail) ypwm_put16(detail + 18, *unknown);
+    return YPWM_MODE_FAILED;
+}
+
+static uint8_t verify_ready_mode(const mode_setting_t *setting, uint16_t *verified,
+                                 uint16_t *unknown, uint8_t *detail)
+{
+    uint8_t error = confirm_mode_torque_off(unknown, detail);
+    motor_verify_report_t report;
+    if (error == YPWM_OK &&
+        !motor_device_verify_modes_detailed(setting->backend, setting->mask, verified, &report)) {
+        diagnostic_failure(detail, YPWM_DIAG_MODE_VERIFY, &report, YPWM_DIAG_IO_REGISTER, report.io_status);
+        error = YPWM_MODE_FAILED;
+    }
+    return recheck_mode_torque_off(unknown, detail, error);
+}
+
 static void prepare_mode(const control_context *s){
-    uint16_t unknown=YPWM_ALL_MASK,verified=0;uint8_t error=YPWM_OK;
+    uint16_t unknown=YPWM_ALL_MASK,verified=0;
+    const bool commit = s->operation == YPWM_COMMIT;
+    const mode_setting_t setting = { s->backend, s->mask };
     const uint32_t started=milliseconds();uint8_t detail[YPWM_DIAG_LENGTH]={0},write_detail[64]={0};
     detail[0]=YPWM_DIAG_EVENT;detail[1]=YPWM_DIAG_VERSION;detail[2]=s->backend;
     ypwm_put16(detail+4,s->request);ypwm_put32(detail+8,s->epoch);ypwm_put16(detail+12,s->mask);
     memset(detail+24,255,6);detail[27]=YPWM_DIAG_IO_NONE;detail[29]=0;
     memset(detail+31,255,9);memset(detail+42,255,4);
     detail[60]=255;
-    motor_verify_report_t vr=motor_verify_initial_report();vr.address=0x28;vr.expected=0;
-    const motor_device_status_t off_tx=motor_device_set_torque(false);
-    if(off_tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;
-        diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)off_tx);}
-    else if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){error=YPWM_MODE_FAILED;
-        diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);}
-    ypwm_put16(detail+18,unknown);
+    motor_verify_report_t vr=motor_verify_initial_report();
+    uint8_t error = commit ? verify_ready_mode(&setting, &verified, &unknown, detail)
+                           : confirm_mode_torque_off(&unknown, detail);
     /* PREPARE only snapshots. Normal register 0x21 writes belong to PC 0x0D. */
-    if(!error&&s->operation==YPWM_PREPARE){
+    if (!error && !commit) {
         if(!motor_device_snapshot_modes(&previous_modes,&vr)){
             error=YPWM_MODE_FAILED;diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);
         }else{
@@ -472,28 +510,11 @@ static void prepare_mode(const control_context *s){
             }
         }
     }
-    if(!error&&s->operation==YPWM_COMMIT&&!motor_device_verify_modes_detailed(s->backend,s->mask,&verified,&vr)){error=YPWM_MODE_FAILED;
-        diagnostic_failure(detail,YPWM_DIAG_MODE_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);}
-    if(!error&&s->operation==YPWM_COMMIT&&s->backend==YPWM_PID){const int16_t zero[12]={0};
-        const motor_device_status_t tx=motor_device_write_pwm(s->mask,zero);
-        if(tx!=MOTOR_DEVICE_OK){error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();vr.address=0x2c;vr.expected=0;
-            diagnostic_failure(detail,YPWM_DIAG_ZERO_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)tx);}
-        /* PWM0 can enable torque. Always explicitly switch OFF after attempting
-         * it, including a possibly partial PWM TX, then independently read OFF. */
-        const motor_device_status_t final_tx=motor_device_torque_mask(YPWM_ALL_MASK,false);
-        if(final_tx!=MOTOR_DEVICE_OK&&!error){error=YPWM_MODE_FAILED;
-            vr=motor_verify_initial_report();vr.address=0x28;vr.expected=0;
-            diagnostic_failure(detail,YPWM_DIAG_TORQUE_OFF_TX,&vr,YPWM_DIAG_IO_DEVICE,(uint8_t)final_tx);}
-    }
-    if(!motor_device_verify_torque_off_detailed(&unknown,&vr)){
-        if(!error){diagnostic_failure(detail,YPWM_DIAG_FINAL_OFF_VERIFY,&vr,YPWM_DIAG_IO_REGISTER,vr.io_status);ypwm_put16(detail+18,unknown);}
-        if(!error)error=YPWM_MODE_FAILED;
-    }
-    if(!error&&s->operation==YPWM_COMMIT){
+    if (!commit) error = recheck_mode_torque_off(&unknown, detail, error);
+    if (!error && commit) {
         const control_context current=snapshot();
         if(current.phase!=MOTOR_CONTROL_PREPARING||current.epoch!=s->epoch)error=YPWM_INVALID_STATE;
         else{
-            const mode_setting_t setting={s->backend,s->mask};
             taskENTER_CRITICAL();p.preference_touched=true;taskEXIT_CRITICAL();
             if(!mode_store_save(&setting)){
                 error=YPWM_MODE_FAILED;vr=motor_verify_initial_report();
@@ -943,17 +964,7 @@ static void service_motor_boot(const control_context *s)
     }
 
     uint16_t verified = 0U;
-    const bool off = motor_device_set_torque(false) == MOTOR_DEVICE_OK &&
-                     motor_device_verify_torque_off(&unknown);
-    bool ready = off && motor_device_verify_modes(setting.backend, setting.mask, &verified);
-    if (ready && setting.backend == YPWM_PID) {
-        const int16_t zero[YERTLE_MOTOR_COUNT] = { 0 };
-        const motor_device_status_t zero_tx = motor_device_write_pwm(setting.mask, zero);
-        /* Attempt OFF even if the preceding PWM transmission failed. */
-        const motor_device_status_t final_tx = motor_device_torque_mask(YPWM_ALL_MASK, false);
-        const bool final_off = motor_device_verify_torque_off(&unknown);
-        ready = zero_tx == MOTOR_DEVICE_OK && final_tx == MOTOR_DEVICE_OK && final_off;
-    }
+    const bool ready = verify_ready_mode(&setting, &verified, &unknown, NULL) == YPWM_OK;
 
     taskENTER_CRITICAL();
     p.unknown = unknown;

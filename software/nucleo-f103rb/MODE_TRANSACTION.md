@@ -29,8 +29,9 @@ The verified mask describes the restored original modes.
    torqueOFF, existing mode and EEPROM lock, writes only a changed value, reads
    it back and restores/verifies the original lock. PC independently GETs readback.
    Public/general register-write permissions remain unchanged.
-3. COMMIT verifies all requested modes, locks, zero PWM on verified mode2 axes,
-   and final torqueOFF. PC requires both matching ACK and READY/OFF status.
+3. COMMIT commands torque OFF, verifies OFF and all requested modes and locks,
+   then rechecks OFF before saving the Flash preference. PC requires a matching
+   ACK and READY/OFF status.
 4. Only then does PC send the ordinary fresh heartbeat and require ARMED.
    The original snapshot is retained until the first actual ARMED transition.
    Before ARM, CANCEL or a link reset can restore it even if COMMIT ACK was lost.

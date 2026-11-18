@@ -25,9 +25,10 @@ An empty journal or one with no
 supported valid record uses position mode for all 12 motors. A Flash read error
 enters BLOCKED and reports FAILED to the PC.
 
-After completing the host startup torque OFF request, the actuator confirms
-torque OFF and verifies the actual motor modes against the selection. For a matching saved PID selection it sends zero PWM to the verified
-PWM motors, commands torque OFF, and reads it back again. Success enters READY.
+After completing the host startup torque OFF request, the actuator commands
+torque OFF, reads it back, verifies the actual motor modes against the selection,
+and rechecks OFF. COMMIT uses the same checks before saving the setting.
+Success enters READY.
 A mode mismatch or I/O failure also enters BLOCKED. Mode change requests wait until
 BOOT finishes.
 
