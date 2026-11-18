@@ -17,8 +17,8 @@ HELLO capability is bit 0x00000008; incompatible older firmware fails closed.
 2 CANCEL), backend (0 native / 1 F103 PID), selected mask u16LE, nonzero epoch u32LE.
 All operations are correlated by request sequence, backend, mask and epoch.
 EVENT4 remains 38 bytes with schema=3; phases 0..6 retain their numeric values,
-7=STAGED, 8=ROLLING_BACK, 9=CANCELED. In CANCELED, verified mask describes the
-restored original modes, not the canceled requested backend.
+7=STAGED, 8=ROLLING_BACK, 9=CANCELED. Value 9 reports a confirmed rollback.
+The verified mask describes the restored original modes.
 
 ## Transaction
 
@@ -51,8 +51,10 @@ A mode-write failure, preparation timeout or pre-ARM link loss invalidates the
 session. F103 waits for any queued/in-flight mode write to retire, verifies OFF,
 restores the exact snapshot via driver transactions and verifies OFF/locks again.
 Explicit CANCEL also confirms a completed automatic rollback for the same epoch.
-Unverified rollback latches FAULT/rearm-blocked; PC reports UNCONFIRMED and sends
-no targets. ACK/NACK and 0x90 retain per-register diagnostic details; EVENT4 exposes
+After rollback, the motor controller stays BLOCKED and records whether recovery
+was confirmed. The host sees CANCELED for a confirmed rollback and FAILED
+(value 6) when confirmation fails. The PC reports an unconfirmed rollback as
+UNCONFIRMED. ACK/NACK and 0x90 retain per-register diagnostic details; EVENT4 exposes
 rollback completion and restored/unknown masks. Old successful write-cache entries
 are invalidated at a new PREPARE; the four-entry recent mode replay window is bounded.
 

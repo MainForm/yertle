@@ -12,6 +12,7 @@ static void seed_calibration(void){calibration_memory_reset();calibration_cache_
 static TickType_t tick=100;static unsigned critical,on_count,native_writes;
 static int16_t duty[12];static motor_target_set_t native_target;static uint16_t torque_mask;static uint8_t last_result,last_error;
 static unsigned detail_frames,stats_frames;static bool boot_off_ok=true;
+static uint8_t last_mode_status[YPWM_STATUS_LENGTH];
 static uint8_t imu_tx_valid, imu_tx_status;
 static bool imu_ready, imu_valid;
 static unsigned tx_order,diag_order,write_diag_order,result_order;static uint8_t mode_fail_id,last_diag[64],servo_modes[12];
@@ -24,6 +25,7 @@ bool host_uart_write_bytes(const uint8_t *data,size_t n){uint8_t raw[YERTLE_PROT
  ++tx_order;
  if(type==MESSAGE_EVENT&&raw[7]==7){assert(raw[5]==64);++detail_frames;}
  if(type==MESSAGE_EVENT&&raw[7]==8){assert(raw[5]==28);++stats_frames;}
+ if(type==MESSAGE_EVENT&&raw[7]==YPWM_EVENT_CODE){assert(raw[5]==YPWM_STATUS_LENGTH);memcpy(last_mode_status,raw+7,sizeof last_mode_status);}
  if(type==MESSAGE_EVENT&&raw[7]==YPWM_DIAG_EVENT){assert(raw[5]==64);diag_order=tx_order;memcpy(last_diag,raw+7,64);}
  if(type==REGISTER_WRITE_DIAGNOSTICS_TYPE){write_diag_order=tx_order;assert(raw[5]==64);}
  if(type==MESSAGE_IMU_FEEDBACK){assert(raw[5]==24);imu_tx_valid=raw[15];imu_tx_status=raw[16];}
@@ -204,8 +206,12 @@ int main(void){
  motor_control_service();service_pwm(&c);assert(!motor_control_can_arm());
  assert(last_diag[3]==YPWM_DIAG_ROLLBACK&&last_diag[6]==0&&ypwm_u16(last_diag+16)==YPWM_ALL_MASK);
  /* Same-epoch CANCEL confirms already completed requested rollback. */
- mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);service_pwm(&c);
- assert(last_result==MESSAGE_ACK);for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
+ mode[1]=YPWM_CANCEL;receive(&c,MESSAGE_SET_CONTROL_MODE,mode,9);
+ tick+=YPWM_STATUS_PERIOD_MS;service_pwm(&c);
+ assert(last_result==MESSAGE_ACK&&last_mode_status[3]==9U);
+ assert(last_mode_status[6]==0&&ypwm_u32(last_mode_status+8)==ypwm_u32(mode+5));
+ assert(ypwm_u16(last_mode_status+14)==YPWM_ALL_MASK&&ypwm_u16(last_mode_status+18)==0);
+ for(unsigned i=0;i<12;++i)assert(servo_modes[i]==0);
  /* Reboot with a stored PID preference: HELLO cannot ARM; fresh heartbeat can
     start a verified new session without a fresh mode/EEPROM transaction. */
  const mode_setting_t saved={YPWM_PID,YPWM_ALL_MASK};assert(mode_store_save(&saved));

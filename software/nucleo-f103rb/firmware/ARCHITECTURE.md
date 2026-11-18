@@ -168,7 +168,7 @@ actuator request.
   issues an explicit torque-ON command during a stop.
 - After verified OFF and physical motor-mode revalidation, both modes return
   to `MOTOR_CONTROL_READY`. Failed mode verification leaves the backend in
-  `MOTOR_CONTROL_FAILED` with torque OFF. The host requires a fresh heartbeat
+  `MOTOR_CONTROL_BLOCKED` with torque OFF. The host requires a fresh heartbeat
   and a fresh target before any new motion.
 
 ## Feedback behavior

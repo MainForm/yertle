@@ -48,12 +48,19 @@
 /* Status field: zero indicates that following-error shutdown is disabled. */
 #define YPWM_FOLLOWING_ERROR_LIMIT 0U
 #define YPWM_STATUS_PERIOD_MS 100U
-/* FAILED (wire value 6): backend unavailable after failure/protective stop;
- * distinct from the global host FSM FAULT. Naming only; wire values unchanged. */
-/* Phase 1 is reserved for encoding position READY in the v3 status packet. */
-/* Phase 0 is the boot check, reported as UNVERIFIED by existing PC clients. */
-enum motor_control_phase { MOTOR_CONTROL_BOOT = 0, MOTOR_CONTROL_PREPARING = 2, MOTOR_CONTROL_READY,
-    MOTOR_CONTROL_ACTIVE, MOTOR_CONTROL_STOPPING, MOTOR_CONTROL_FAILED, MOTOR_CONTROL_STAGED, MOTOR_CONTROL_ROLLING_BACK, MOTOR_CONTROL_CANCELED };
+#define YPWM_STATUS_PHASE_FAILED 6U
+#define YPWM_STATUS_PHASE_CANCELED 9U
+/* Wire phase 1 reports position READY/ACTIVE. Wire phase 9 reports rollback completion. */
+enum motor_control_phase {
+    MOTOR_CONTROL_BOOT = 0,
+    MOTOR_CONTROL_PREPARING = 2,
+    MOTOR_CONTROL_READY,
+    MOTOR_CONTROL_ACTIVE,
+    MOTOR_CONTROL_STOPPING,
+    MOTOR_CONTROL_BLOCKED = YPWM_STATUS_PHASE_FAILED,
+    MOTOR_CONTROL_STAGED,
+    MOTOR_CONTROL_ROLLING_BACK
+};
 enum ypwm_reason { YPWM_REASON_NONE,YPWM_REASON_RELEASE,YPWM_REASON_TTL,
     YPWM_REASON_SENSOR,YPWM_REASON_CURRENT,YPWM_REASON_TRAVEL,YPWM_REASON_SPEED,
     YPWM_REASON_DRIVER,YPWM_REASON_LINK,YPWM_REASON_SESSION,YPWM_REASON_MODE,

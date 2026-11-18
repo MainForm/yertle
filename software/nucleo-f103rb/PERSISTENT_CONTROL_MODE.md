@@ -23,12 +23,12 @@ Before the scheduler starts, the motor controller enters BOOT. On its first
 pass in BOOT, the actuator reads the newest valid committed Flash record.
 An empty journal or one with no
 supported valid record uses position mode for all 12 motors. A Flash read error
-latches FAILED and blocks ARM.
+enters BLOCKED and reports FAILED to the PC.
 
 After completing the host startup torque OFF request, the actuator confirms
 torque OFF and verifies the actual motor modes against the selection. For a matching saved PID selection it sends zero PWM to the verified
 PWM motors, commands torque OFF, and reads it back again. Success enters READY.
-A mode mismatch or I/O failure enters FAILED. Mode change requests wait until
+A mode mismatch or I/O failure also enters BLOCKED. Mode change requests wait until
 BOOT finishes.
 
 After successful boot verification, a new HELLO/fresh heartbeat/ARMED handshake and
