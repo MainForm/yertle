@@ -14,9 +14,7 @@ int main(void){
  assert(!service_optical_failure(&context)&&attempts==0); /* ACK first */
  context.result_count=0;context.register_job_active=true;
  assert(!service_optical_failure(&context)&&attempts==0);
- context.register_job_active=false;context.pwm_mode_pending=true;
- assert(!service_optical_failure(&context)&&attempts==0);
- context.pwm_mode_pending=false;
+ context.register_job_active=false;
  assert(service_optical_failure(&context)&&attempts==1&&halves==1);
  tick+=19;assert(!service_optical_failure(&context));
  ++tick;tx_success=false;assert(service_optical_failure(&context)&&attempts==2&&halves==1);

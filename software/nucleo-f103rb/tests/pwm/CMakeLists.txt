@@ -38,18 +38,8 @@ add_test(NAME position_pid_wire_contract COMMAND pwm_contract_test)
 
 foreach(target pwm_control_test pwm_host_integration_test)
  target_sources(${target} PRIVATE ../../firmware/src/motor_safe_stop.c
-    ../../firmware/src/mode_store.c mode_memory.c
     ../../firmware/src/calibration_store.c calibration_memory.c)
 endforeach()
-add_executable(mode_store_test mode_store_test.c mode_memory.c ../../firmware/src/mode_store.c)
-target_include_directories(mode_store_test PRIVATE . ../../firmware/include)
-if(MSVC)
- target_compile_options(mode_store_test PRIVATE /W4 /WX /UNDEBUG /utf-8)
-else()
- target_compile_options(mode_store_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
-endif()
-add_test(NAME persistent_mode_journal COMMAND mode_store_test)
-
 add_executable(calibration_store_test calibration_store_test.c calibration_memory.c ../../firmware/src/calibration_store.c)
 target_include_directories(calibration_store_test PRIVATE ../../firmware/include)
 if(MSVC)

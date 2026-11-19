@@ -22,9 +22,8 @@ add_executable(yertle_f103rb
     src/motor_safe_stop.c
     src/motor_control_state.c
     src/position_pid.c
+    src/calibration_flash.c
     src/calibration_store.c
-    src/mode_store.c
-    src/mode_flash.c
     src/sensor_task.c
     ${STS3215_DIR}/src/sts3215_protocol.c
     ${STM32F1_DEVICE_DIR}/Source/Templates/system_stm32f1xx.c

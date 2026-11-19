@@ -1,4 +1,4 @@
-/* Project-owned STM32F103RB layout: reserve independent calibration and mode Flash journals (2KiB each).
+/* Project-owned STM32F103RB layout: reserve the calibration journal and the old mode-storage address range.
    Settings have no loadable section; normal application BIN never includes them. */
 ENTRY(Reset_Handler)
 MEMORY
@@ -13,8 +13,6 @@ _Min_Heap_Size = 0x200;
 _Min_Stack_Size = 0x400;
 __calibration_store_start__ = ORIGIN(CALIBRATION);
 __calibration_store_end__ = ORIGIN(CALIBRATION) + LENGTH(CALIBRATION);
-__mode_store_start__ = ORIGIN(SETTINGS);
-__mode_store_end__ = ORIGIN(SETTINGS) + LENGTH(SETTINGS);
 SECTIONS
 {
   .isr_vector : { . = ALIGN(4); KEEP(*(.isr_vector)) . = ALIGN(4); } > FLASH

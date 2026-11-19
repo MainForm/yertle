@@ -1,87 +1,19 @@
-# Two-phase backend transition (schema 3)
+# Motor mode register control
 
-Position goals use message 0x06 (60 bytes) in both backends. The backend and
-servo register settings are changed through the transaction below.
+HELLO capability 0x2000 advertises register-based mode selection. While
+DISARMED, the PC sends one SET_MOTOR_REGISTER (0x0D) per servo. Register
+0x21 takes one byte, 0 for position or 2 for PWM, with the EEPROM option.
+GET_MOTOR_REGISTER (0x0C) reads the same register. Writes share readback,
+lock restoration and ACK/NACK with the 0x90 diagnostic. An already matching
+write confirms the mode cache without programming EEPROM.
 
-## Wire contract
+At boot the F103 confirms torque OFF and reads all twelve mode registers.
+All twelve must be readable and equal before the controller permits ARM
+or motor output. Mixed or unverified modes block motion but allow correcting
+the mode registers while disarmed. Earlier successful changes survive
+disconnect, restart and later write failures. Calibration retains its separate
+F103 Flash storage.
 
-| Request | Reply | Purpose |
-| --- | --- | --- |
-| 0x0C GET_MOTOR_REGISTER | 0x8F / NACK | Read a servo register |
-| 0x0D SET_MOTOR_REGISTER | ACK/NACK + existing 0x90 detail | Write/readback/relock |
-| 0x0E SET_CONTROL_MODE | ACK/NACK + EVENT4 | PREPARE, COMMIT or CANCEL |
-| 0x0F SET_MOTOR_PWM | ACK/NACK | Direct duty in PWM mode, with a zero-only disarmed check for the selected PWM candidate |
-
-HELLO capability 0x00000008 advertises schema 3. Capability 0x00001000
-advertises selected-only partial PWM transitions. PC clients require it before
-submitting a partial PWM request.
-0x0E is exactly nine bytes: schema=3, operation (0 PREPARE / 1 COMMIT /
-2 CANCEL), backend (0 native / 1 F103 PID), selected mask u16LE, nonzero epoch u32LE.
-All operations are correlated by request sequence, backend, mask and epoch.
-EVENT4 remains 38 bytes with schema=3. Phase 2 is unused. Current phases use
-0/1/3/4/5/6/7/8 and confirmed rollback reports value 9.
-While an actuator mode job is pending EVENT4 is deferred until a state result.
-On COMMIT the verified mask describes the selected modes. After CANCEL the
-verified mask describes confirmed restoration of the original modes in that
-same selection.
-
-## Transaction
-
-1. PREPARE while DISARMED blocks ARM/targets, verifies all torques OFF and
-   snapshots the selected per-ID mode registers.
-2. In STAGED only, PC sends 0x0D writes [ID,0x21,1,EEPROM-option1,value] for
-   the selected IDs. Position selects all 12 servos and expects 0. PWM expects 2
-   on selected servos and leaves the other servos' 0x21 values untouched. Each driver transaction verifies
-   torqueOFF, existing mode and EEPROM lock, writes only a changed value, reads
-   it back and restores/verifies the original lock. PC independently GETs readback.
-   Public/general register-write permissions remain unchanged.
-3. COMMIT commands torque OFF and reads back OFF for all motors. It reads back
-   selected modes, checks for unresolved EEPROM locks on those IDs, and rechecks
-   OFF for all motors before saving the Flash preference. PC requires a matching
-   ACK and READY/OFF status.
-4. Only then does PC send the ordinary fresh heartbeat and require ARMED.
-   The original snapshot is retained until the first actual ARMED transition.
-   Before ARM, CANCEL or a link reset can restore it even if COMMIT ACK was lost.
-   After ARM, ordinary release never restores modes.
-
-During PREPARE and COMMIT the PC can poll GET_FSM_STATE for link liveness.
-These read-only requests cannot establish an ARM lease. The first transition
-heartbeat can be sent after matching PREPARE ACK and STAGED status. Once COMMIT
-is sent the PC waits for its matching ACK and READY before requesting ARM.
-The 120000ms total deadline and 20000ms DISARMED link-silence limit apply to
-queued mode work and STAGED; the normal heartbeat limit remains 1000ms.
-The PC owns up to5 explicit target requests per ID, capped by5000ms response,
-30000ms per-ID and120000ms global budgets; uncertain writes are reconciled
-before another request. F103 executes only one target transaction per request.
-Read-only GET may retry once on timeout. PC cleanup has a separate3000ms budget.
-See MODE_WRITE_RETRIES.md for current defaults and capability requirements.
-
-A mode-write failure, preparation timeout or pre-ARM link loss invalidates the
-session. F103 waits for any queued/in-flight mode write to retire, verifies OFF,
-restores the selected modes from the snapshot and verifies all torques OFF
-and selected EEPROM locks again.
-Explicit CANCEL also confirms a completed automatic rollback for the same epoch.
-After rollback, the motor controller stays BLOCKED and records whether recovery
-was confirmed. The host sees CANCELED for a confirmed rollback and FAILED
-(value 6) when confirmation fails. The PC reports an unconfirmed rollback as
-UNCONFIRMED. ACK/NACK and 0x90 retain per-register diagnostic details; EVENT4 exposes
-rollback completion and restored/unknown masks. Old successful write-cache entries
-are invalidated at a new PREPARE; the four-entry recent mode replay window is bounded.
-
-## Normal stop and limitations
-
-No extra release packet: PC stops targets/heartbeat, then waits for fresh DISARMED
-and completed safety action. The F103 target (500 ms) and link (1000 ms) watchdogs
-trigger the same stop sequence in either backend. When eligible, the controller
-first returns toward raw 2048. The PWM path sends zero duty before both backends
-explicitly turn torque OFF and verify the result.
-This is not an instantaneous hardware emergency stop/current clamp. PC current
-guards and the remaining F103 thermal/voltage/sensor/following-error guards remain.
-
-Rollback snapshots are RAM-only. Power loss/reboot cannot guarantee transaction rollback.
-The selected backend/mask are now persisted separately in internal Flash and
-loaded at boot; see PERSISTENT_CONTROL_MODE.md. Boot verifies the selected
-physical modes and all torques OFF and never restores ARMED or silently reprograms a mismatch.
-Software rollback cannot undo mechanical movement, an interrupted EEPROM write or
-an unreachable servo. Support the robot and verify unloaded after matching firmware
-and PC builds are installed. No real COM operation or flashing is part of offline tests.
+EVENT4 keeps its layout. The former epoch word holds a configuration generation.
+BLOCKED reason 16 identifies mixed modes and 17 indicates an unverified mode.
+SET_CONTROL_MODE (0x0E) is no longer supported.

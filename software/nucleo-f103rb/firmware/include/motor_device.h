@@ -63,6 +63,10 @@ static inline motor_register_write_status_t motor_register_validate_write(
         if (request->length != 1U || request->data[0] != MOTOR_REGISTER_CALIBRATION_VALUE)
             return MOTOR_WRITE_INVALID_REGISTER;
         return request->options == MOTOR_REGISTER_ALLOW_EEPROM ? MOTOR_WRITE_OK : MOTOR_WRITE_FORBIDDEN;
+    case 0x21U:
+        if (request->length != 1U || (request->data[0] != 0U && request->data[0] != 2U))
+            return MOTOR_WRITE_INVALID_REGISTER;
+        return request->options == MOTOR_REGISTER_ALLOW_EEPROM ? MOTOR_WRITE_OK : MOTOR_WRITE_FORBIDDEN;
     case 0x10U: case 0x30U: width=2U; maximum=1000U; break;
     case 0x15U: case 0x16U: case 0x17U: case 0x18U: case 0x19U: width=1U; maximum=254U; break;
     default: return MOTOR_WRITE_FORBIDDEN;
@@ -184,9 +188,8 @@ motor_register_write_report_t motor_device_write_register(const motor_register_w
                                                         bool (*allowed)(void));
 uint16_t motor_device_register_lock_uncertain_mask(void);
 
-/* Dedicated mode transaction. Generic register SET never permits 0x21/0x2c.
- * All motors must remain torqueOFF; callback is rechecked before each write. */
-motor_register_write_report_t motor_device_write_mode(uint8_t id, uint8_t mode, bool (*allowed)(void));
+/* Read each of the 12 servo modes. Missing/unsupported modes set neither bit. */
+void motor_device_read_modes(uint16_t *position, uint16_t *pwm);
 bool motor_device_verify_modes(uint8_t backend, uint16_t mask, uint16_t *verified);
 bool motor_device_verify_torque_off(uint16_t *unknown);
 typedef struct {
@@ -197,16 +200,6 @@ static inline motor_verify_report_t motor_verify_initial_report(void) {
 }
 bool motor_device_verify_modes_detailed(uint8_t backend,uint16_t mask,uint16_t *verified,motor_verify_report_t *report);
 bool motor_device_verify_torque_off_detailed(uint16_t *unknown,motor_verify_report_t *report);
-/* Transaction primitives: no arming, no task/global control-state changes.
- * Only selected axes with existing native0/PWM2 modes may be captured/restored. */
-typedef struct { uint8_t mode[12];uint16_t valid_mask; } motor_mode_snapshot_t;
-bool motor_device_snapshot_modes(uint16_t mask, motor_mode_snapshot_t *snapshot, motor_verify_report_t *report);
-bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*allowed)(void),
-    uint16_t *restored,uint8_t *failed_id,motor_register_write_report_t *failure);
-static inline motor_register_write_status_t motor_register_validate_mode_write(const motor_register_write_request_t *q){
-    return q&&q->motor_id>=1&&q->motor_id<=12&&q->address==0x21&&q->length==1&&
-        q->options==MOTOR_REGISTER_ALLOW_EEPROM&&(q->data[0]==0||q->data[0]==2)?MOTOR_WRITE_OK:MOTOR_WRITE_FORBIDDEN;
-}
 motor_device_status_t motor_device_write_pwm(uint16_t mask, const int16_t pwm[12]);
 motor_device_status_t motor_device_torque_mask(uint16_t mask, bool enabled);
 

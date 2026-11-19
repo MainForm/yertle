@@ -61,6 +61,11 @@ bool motor_uart_write(motor_bus_id_t bus, const uint8_t *p,size_t n,uint32_t tim
 bool motor_uart_read_frame(motor_bus_id_t bus, uint8_t *p,size_t cap,size_t *n,uint32_t timeout){
     (void)bus;
  (void)timeout;assert(depth==1&&cap>=reply_length);memcpy(p,reply,reply_length);*n=reply_length;return true;}
+static motor_register_write_report_t write_mode(uint8_t id, uint8_t mode)
+{
+ const motor_register_write_request_t request={.motor_id=id,.address=0x21,.length=1,.options=1,.data={mode}};
+ return motor_device_write_register(&request,allowed);
+}
 int main(void){
  assert(motor_device_init());for(unsigned i=0;i<12;++i){memory[i][8]=1;memory[i][55]=1;}
  uint16_t verified,unknown;
@@ -69,17 +74,12 @@ int main(void){
  const uint16_t selected=1U<<3;
  memory[7][0x21]=2;override_read_id=8;mode_read_ids=mode_write_ids=0;
  assert(motor_device_verify_modes(YPWM_PID,selected,&verified)&&verified==selected&&mode_read_ids==selected);
- motor_verify_report_t selected_report;
- motor_mode_snapshot_t selected_snapshot;
  mode_read_ids=0;
- assert(motor_device_snapshot_modes(selected,&selected_snapshot,&selected_report));
- assert(mode_read_ids==selected&&selected_snapshot.valid_mask==selected&&selected_snapshot.mode[3]==2);
- memory[3][0x21]=0;
- uint16_t selected_restored;uint8_t selected_failed;motor_register_write_report_t selected_write;
- mode_read_ids=0;
- assert(motor_device_restore_modes(&selected_snapshot,allowed,&selected_restored,&selected_failed,&selected_write));
- assert(selected_restored==selected&&mode_read_ids==selected&&mode_write_ids==selected);
- assert(memory[3][0x21]==2&&memory[7][0x21]==2);override_read_id=0;
+ uint16_t position_modes,pwm_modes;
+ motor_device_read_modes(&position_modes,&pwm_modes);
+ assert(mode_read_ids==YPWM_ALL_MASK&&pwm_modes==selected);
+ assert(position_modes==(YPWM_ALL_MASK & ~(selected | (1U<<7))));
+ override_read_id=0;
  for(unsigned i=0;i<12;++i)memory[i][0x21]=2;
  assert(motor_device_verify_modes(YPWM_PID,YPWM_ALL_MASK,&verified)&&verified==YPWM_ALL_MASK);
  assert(motor_device_verify_torque_off(&unknown)&&unknown==0);
@@ -116,49 +116,40 @@ int main(void){
   for(unsigned i=0;i<12;++i)assert(memory[i][0x2a]==(uint8_t)(2048+i));}
  assert(motor_device_verify_torque_off(&unknown));
  memory[1][0x21]=0;
- motor_register_write_report_t r=motor_device_write_mode(2,2,allowed);
+ motor_register_write_report_t r=write_mode(2,2);
  assert(r.status==MOTOR_WRITE_OK&&r.initial_value==0&&r.verified_value==2&&r.last_read_value==2);
  assert(r.last_read_status==MOTOR_REGISTER_OK&&r.last_read_address==0x21&&r.last_write_status==MOTOR_REGISTER_OK);
  assert(r.lock_restore_verified&&memory[1][55]==1);
- memory[2][0x21]=0;fail_write_id=3;mode_target_writes=0;r=motor_device_write_mode(3,2,allowed);fail_write_id=0;
+ memory[2][0x21]=0;fail_write_id=3;mode_target_writes=0;r=write_mode(3,2);fail_write_id=0;
  assert(r.mode_attempts==1&&r.mode_attempt_limit==1&&mode_target_writes==1&&r.io_detail==MOTOR_IO_TX);
  assert(r.status==MOTOR_WRITE_IO_ERROR&&r.primary_status==MOTOR_WRITE_IO_ERROR&&r.failure_stage==MOTOR_WRITE_STAGE_TARGET);
  assert(r.target_write_attempted&&r.last_write_status==MOTOR_REGISTER_COMMUNICATION_ERROR&&r.last_write_address==0x21);
  assert(r.initial_value==0&&r.verified_value==255&&r.lock_restore_verified&&memory[2][55]==1);
- memory[3][0x21]=0;override_read_id=4;r=motor_device_write_mode(4,2,allowed);override_read_id=0;
+ memory[3][0x21]=0;override_read_id=4;r=write_mode(4,2);override_read_id=0;
  assert(r.status==MOTOR_WRITE_VERIFY_MISMATCH&&r.failure_stage==MOTOR_WRITE_STAGE_VERIFY&&r.verified_value==1&&r.last_read_value==1);
  assert(r.lock_restore_verified&&memory[3][55]==1);
  motor_verify_report_t v;memory[4][0x21]=0;
  assert(!motor_device_verify_modes_detailed(YPWM_PID,YPWM_ALL_MASK,&verified,&v)&&v.motor_id==3&&v.address==0x21&&v.actual==0&&v.io_status==0);
  memory[4][0x28]=1;assert(!motor_device_verify_torque_off_detailed(&unknown,&v)&&v.motor_id==5&&v.address==0x28&&v.actual==1);memory[4][0x28]=0;
- motor_mode_snapshot_t original;assert(motor_device_snapshot_modes(YPWM_ALL_MASK,&original,&v)&&original.valid_mask==0xfff);
- for(unsigned i=0;i<12;++i)memory[i][0x21]=original.mode[i]==0?2:0;
- uint16_t restored;uint8_t failed_id;
- assert(motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&restored==0xfff&&!failed_id);
- for(unsigned i=0;i<12;++i)assert(memory[i][0x21]==original.mode[i]&&memory[i][55]==1);
- memory[2][0x21]=original.mode[2]==0?2:0;fail_write_id=3;
- assert(!motor_device_restore_modes(&original,allowed,&restored,&failed_id,&r)&&failed_id==3&&restored==(0xfff&~4U));
- assert(r.status==MOTOR_WRITE_IO_ERROR&&r.lock_restore_verified);fail_write_id=0;
- override_read_id=4;assert(!motor_device_snapshot_modes(YPWM_ALL_MASK,&original,&v)&&v.motor_id==4&&v.actual==1);override_read_id=0;
  /* The driver never retries. Five explicit caller requests are required. */
  memory[1][0x21]=0;transient_mode_failures=4;mode_target_writes=0;
- for(unsigned attempt=0;attempt<4;++attempt){r=motor_device_write_mode(2,2,allowed);
+ for(unsigned attempt=0;attempt<4;++attempt){r=write_mode(2,2);
   assert(r.status==MOTOR_WRITE_IO_ERROR&&r.mode_attempts==1&&mode_target_writes==attempt+1);}
- r=motor_device_write_mode(2,2,allowed);
+ r=write_mode(2,2);
  assert(r.status==MOTOR_WRITE_OK&&r.mode_attempts==1&&mode_target_writes==5);
  assert(r.initial_value==0&&r.verified_value==2&&memory[1][55]==1);
  /* A lost ACK AFTER application must not consume EEPROM endurance again. */
- memory[1][0x21]=0;mode_target_writes=0;apply_then_lose_ack=true;r=motor_device_write_mode(2,2,allowed);
+ memory[1][0x21]=0;mode_target_writes=0;apply_then_lose_ack=true;r=write_mode(2,2);
  assert(r.status==MOTOR_WRITE_IO_ERROR&&r.mode_attempts==1&&mode_target_writes==1);
- r=motor_device_write_mode(2,2,allowed);
+ r=write_mode(2,2);
  assert(r.status==MOTOR_WRITE_OK&&r.mode_attempts==1&&mode_target_writes==1&&memory[1][55]==1);
  /* Safety cancellation/servo faults/uncertain locks terminate before retry2. */
- memory[1][0x21]=0;mode_target_writes=0;fail_write_id=2;cancel_on_error=true;r=motor_device_write_mode(2,2,allowed);
+ memory[1][0x21]=0;mode_target_writes=0;fail_write_id=2;cancel_on_error=true;r=write_mode(2,2);
  assert(r.mode_attempts==1&&mode_target_writes==1&&r.lock_restore_verified);
  permission=true;cancel_on_error=false;fail_write_id=0;
- memory[1][0x21]=0;servo_fault_id=2;r=motor_device_write_mode(2,2,allowed);servo_fault_id=0;
+ memory[1][0x21]=0;servo_fault_id=2;r=write_mode(2,2);servo_fault_id=0;
  assert(r.status==MOTOR_WRITE_SERVO_ERROR&&r.mode_attempts==1&&r.io_detail==MOTOR_IO_SERVO);
- memory[1][0x21]=0;ignore_relock=true;r=motor_device_write_mode(2,2,allowed);ignore_relock=false;
+ memory[1][0x21]=0;ignore_relock=true;r=write_mode(2,2);ignore_relock=false;
  assert(r.status==MOTOR_WRITE_LOCK_RESTORE_FAILED&&r.mode_attempts==1&&(motor_device_register_lock_uncertain_mask()&2));
  memory[1][55]=1;motor_register_data_t lock;assert(motor_device_read_register(2,55,1,&lock)==MOTOR_REGISTER_OK);
  assert(motor_device_register_lock_uncertain_mask()==0);

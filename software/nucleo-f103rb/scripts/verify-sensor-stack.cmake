@@ -66,9 +66,8 @@ if(NOT config_source MATCHES "#define configMINIMAL_STACK_SIZE[ \t]+([0-9]+)")
 endif()
 math(EXPR stack_bytes "${host_multiplier} * ${CMAKE_MATCH_1} * 4")
 set(host_stack_bytes ${stack_bytes})
-set(common host_protocol_task service_motor_register_write motor_device_write_mode
-    write_mode_once write_register_transaction)
-check_path(permission ${common} pwm_control_mode_write_current)
+set(common host_protocol_task service_motor_register_write motor_device_write_register write_register_transaction)
+check_path(permission ${common} register_access_allowed)
 check_path(lock_read ${common} restore_register_lock_locked read_register_timed
     motor_uart_read_frame read_byte)
 check_path(lock_write ${common} restore_register_lock_locked write_register_timed
@@ -78,7 +77,7 @@ check_path(target_read ${common} read_for_report read_register_timed
 check_path(target_write ${common} write_for_report write_register_timed motor_uart_write)
 # Catch a full control_context snapshot returning to this hot callback, even
 # when a larger task allocation would otherwise conceal the regression.
-if(frame_pwm_control_mode_write_current GREATER 64)
+if(frame_register_access_allowed GREATER 64)
     message(FATAL_ERROR "Mode-write permission frame exceeds 64bytes; avoid full context copies")
 endif()
 
@@ -104,12 +103,9 @@ check_path(host_pid_telemetry host_protocol_task report_host_state service_pid_d
 math(EXPR stack_bytes "${actuator_multiplier} * ${CMAKE_MATCH_1} * 4")
 set(actuator_verify actuator_task motor_control_service)
 set(mode_read motor_device_read_register read_register_locked read_register_timed motor_uart_read_frame read_byte)
-check_path(actuator_boot_mode_verify ${actuator_verify} service_motor_boot verify_ready_mode
-    motor_device_verify_modes_detailed ${mode_read})
-check_path(actuator_commit_mode_verify ${actuator_verify} service_mode_job verify_ready_mode
-    motor_device_verify_modes_detailed ${mode_read})
-check_path(actuator_commit_off_verify ${actuator_verify} service_mode_job verify_ready_mode
-    recheck_mode_torque_off motor_device_verify_torque_off_detailed ${mode_read})
+check_path(actuator_boot_mode_verify ${actuator_verify} service_motor_boot motor_device_read_modes ${mode_read})
+check_path(actuator_boot_off_verify ${actuator_verify} service_motor_boot
+    motor_device_verify_torque_off motor_device_verify_torque_off_detailed ${mode_read})
 set(actuator_stop actuator_task motor_control_service service_stop)
 set(stop_off_verify motor_safe_stop_service motor_device_verify_torque_off motor_device_verify_torque_off_detailed
     motor_device_read_register read_register_locked read_register_timed motor_uart_read_frame read_byte)
@@ -121,8 +117,7 @@ check_path(actuator_pwm_return_tx ${actuator_stop} motor_safe_stop_service servi
 check_path(actuator_position_return_tx ${actuator_stop} motor_safe_stop_service service_return send_position_return
     motor_device_write_targets STS3215_BuildSyncWrite prv_pack_frame prv_checksum)
 check_path(actuator_stop_off_verify ${actuator_stop} ${stop_off_verify})
-check_path(actuator_stop_mode_verify ${actuator_stop} motor_device_verify_modes motor_device_verify_modes_detailed
-    motor_device_read_register read_register_timed motor_uart_read_frame read_byte)
+check_path(actuator_stop_mode_verify ${actuator_stop} motor_device_read_modes ${mode_read})
 check_path(actuator_return_telemetry ${actuator_stop} publish_stop)
 
 set(stack_bytes ${sensor_stack_bytes})

@@ -488,15 +488,11 @@ static bool restore_register_lock_locked(uint8_t id,uint8_t response_level,
 }
 
 static motor_register_write_report_t write_register_transaction(const motor_register_write_request_t *request,
-                                                        bool (*allowed)(void), bool dedicated_mode)
+                                                        bool (*allowed)(void))
 {
     const TickType_t started=xTaskGetTickCount();
     motor_register_write_report_t report=motor_register_initial_report();
-    report.status=dedicated_mode ?
-        (request && request->motor_id>=1U && request->motor_id<=12U &&
-         request->address==0x21U && request->length==1U && request->options==1U &&
-         (request->data[0]==0U || request->data[0]==2U) ? MOTOR_WRITE_OK : MOTOR_WRITE_FORBIDDEN) :
-        motor_register_validate_write(request);
+    report.status=motor_register_validate_write(request);
     if (report.status!=MOTOR_WRITE_OK) { report.primary_status=report.status;return report; }
     if (bus_mutex==NULL) { report.status=report.primary_status=MOTOR_WRITE_IO_ERROR;return report; }
     if (!take_bus()) { report.status=report.primary_status=MOTOR_WRITE_BUSY;report.elapsed_ms=elapsed_ms(started);return report; }
@@ -645,47 +641,26 @@ done:
 
 motor_register_write_report_t motor_device_write_register(const motor_register_write_request_t *request,
                                                         bool (*allowed)(void))
-{ return write_register_transaction(request,allowed,false); }
+{
+    motor_register_write_report_t report = write_register_transaction(request,allowed);
+    if (request && request->address == 0x21U) {
+        report.mode_attempts = report.mode_attempt_limit = 1U;
+        report.first_mode_status = (uint8_t)report.status;
+    }
+    return report;
+}
 
-static motor_register_write_report_t write_mode_once(uint8_t id,uint8_t mode,bool (*allowed)(void))
+void motor_device_read_modes(uint16_t *position, uint16_t *pwm)
 {
-    motor_register_write_request_t r={0};r.motor_id=id;r.address=0x21U;r.length=1U;r.options=1U;r.data[0]=mode;
-    /* One target transaction per PC request. Only mandatory bounded LOCK
-       recovery remains local; the PC owns mode retry count/delay/deadline. */
-    motor_register_write_report_t result=write_register_transaction(&r,allowed,true);
-    result.mode_attempts=result.mode_attempt_limit=1;
-    result.first_mode_status=(uint8_t)result.status;
-    return result;
-}
-motor_register_write_report_t motor_device_write_mode(uint8_t id,uint8_t mode,bool (*allowed)(void))
-{ return write_mode_once(id,mode,allowed); }
-bool motor_device_snapshot_modes(uint16_t mask,motor_mode_snapshot_t *snapshot,motor_verify_report_t *report)
-{
-    if(!ypwm_mask(mask)||!snapshot||!report)return false;
-    memset(snapshot,0,sizeof *snapshot);*report=motor_verify_initial_report();
-    for(uint8_t id=1;id<=YPWM_MOTOR_COUNT;++id){
-        if(!ypwm_motor_selected(mask,id))continue;
-        motor_register_data_t d;
-        const motor_register_status_t status=motor_device_read_register(id,0x21,1,&d);
-        if(status==MOTOR_REGISTER_OK&&(d.data[0]==0||d.data[0]==2)){
-            snapshot->mode[id-1]=d.data[0];snapshot->valid_mask|=(uint16_t)(1U<<(id-1));
-        }else if(!report->motor_id){report->motor_id=id;report->address=0x21;report->io_status=(uint8_t)status;
-            report->actual=status==MOTOR_REGISTER_OK?d.data[0]:255;report->servo_error=d.servo_error;}
+    *position = *pwm = 0U;
+    for (uint8_t id = 1U; id <= YPWM_MOTOR_COUNT; ++id) {
+        motor_register_data_t mode;
+        const uint16_t bit = (uint16_t)(1U << (id - 1U));
+        if (motor_device_read_register(id, 0x21U, 1U, &mode) != MOTOR_REGISTER_OK ||
+            (motor_device_register_lock_uncertain_mask() & bit)) continue;
+        if (mode.data[0] == STS3215_MODE_POSITION) *position |= bit;
+        if (mode.data[0] == STS3215_MODE_PWM) *pwm |= bit;
     }
-    return snapshot->valid_mask==mask;
-}
-bool motor_device_restore_modes(const motor_mode_snapshot_t *snapshot,bool (*allowed)(void),
-    uint16_t *restored,uint8_t *failed_id,motor_register_write_report_t *failure)
-{
-    if(!snapshot||!restored||!failed_id||!failure||!ypwm_mask(snapshot->valid_mask)||!allowed)return false;
-    *restored=0;*failed_id=0;*failure=motor_register_initial_report();
-    for(uint8_t id=1;id<=YPWM_MOTOR_COUNT;++id){
-        if(!ypwm_motor_selected(snapshot->valid_mask,id))continue;
-        const motor_register_write_report_t r=write_mode_once(id,snapshot->mode[id-1],allowed);
-        if(r.status==MOTOR_WRITE_OK)*restored|=(uint16_t)(1U<<(id-1));
-        else if(!*failed_id){*failed_id=id;*failure=r;}
-    }
-    return *restored==snapshot->valid_mask&&!(motor_device_register_lock_uncertain_mask()&snapshot->valid_mask);
 }
 
 bool motor_device_verify_modes(uint8_t backend,uint16_t mask,uint16_t *verified)
